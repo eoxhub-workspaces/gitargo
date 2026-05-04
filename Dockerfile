@@ -1,0 +1,19 @@
+# --- Stage 1: Build Frontend ---
+FROM node:lts-bookworm-slim AS build-frontend
+WORKDIR /app/ui
+COPY services/ui/package*.json ./
+RUN npm install
+COPY services/ui/ ./
+RUN npm run build
+
+# --- Stage 2: Setup Backend ---
+FROM node:lts-bookworm-slim AS production
+WORKDIR /app
+COPY services/api/package*.json ./
+RUN npm install --production
+COPY services/api/ ./
+# Copy built frontend assets to the backend's public directory
+COPY --from=build-frontend /app/ui/build ./public
+
+EXPOSE 3000
+CMD ["node", "server.js"]
