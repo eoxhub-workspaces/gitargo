@@ -60,6 +60,9 @@ app.get('/api/workflows', async (req, res, next) => {
 
     res.json(workflows);
   } catch (error) {
+    if (error.response && error.response.status === 404) {
+      return res.json([]);
+    }
     next(error);
   }
 });

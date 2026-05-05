@@ -71,21 +71,24 @@ export const validationSchema = yup
     })
   })
   .when((values, schema) => {
-    if (values.data.type === "resource") {
-      return schema.concat(resourceValidationSchema);
-    }
+    if (values[0] && values[0].data) {
+      if (values[0].data.type === "resource") {
+        return schema.concat(resourceValidationSchema);
+      }
 
-    if (values.data.type === "container") {
-      return schema.concat(containerValidationSchema);
-    }
+      if (values[0].data.type === "container") {
+        return schema.concat(containerValidationSchema);
+      }
 
-    if (values.data.type === "script") {
-      return schema.concat(scriptValidationSchema);
-    }
+      if (values[0].data.type === "script") {
+        return schema.concat(scriptValidationSchema);
+      }
 
-    if (values.data.type === "suspend") {
-      return schema.concat(suspendValidationSchema);
+      if (values[0].data.type === "suspend") {
+        return schema.concat(suspendValidationSchema);
+      }
     }
+    return schema;
   });
 
 const initialValues: IEditTemplateForm = {
@@ -137,54 +140,64 @@ export const getInitialValues = (node?: ITemplateNode) => {
         name: data.template.name ?? initialValues.data.template.name,
         container: {
           name: data.template.container
-            ? data.template.container.name ?? ""
+            ? (data.template.container.name ?? "")
             : "",
           image: data.template.container
-            ? data.template.container.image ?? ""
+            ? (data.template.container.image ?? "")
             : "",
           command: data.template.container
             ? data.template.container.command
-              ? data.template.container.command.join(",")
+              ? Array.isArray(data.template.container.command)
+                ? data.template.container.command.join(",")
+                : data.template.container.command
               : ""
             : "",
           args: data.template.container
             ? data.template.container.args
-              ? data.template.container.args.join(",")
+              ? Array.isArray(data.template.container.args)
+                ? data.template.container.args.join(",")
+                : data.template.container.args
               : ""
             : "",
           imagePullPolicy: data.template.container
-            ? data.template.container.imagePullPolicy ?? ""
+            ? (data.template.container.imagePullPolicy ?? "")
             : ""
         },
         script: {
-          name: data.template.script ? data.template.script.name ?? "" : "",
-          image: data.template.script ? data.template.script.image ?? "" : "",
+          name: data.template.script ? (data.template.script.name ?? "") : "",
+          image: data.template.script ? (data.template.script.image ?? "") : "",
           command: data.template.script
             ? data.template.script.command
-              ? data.template.script.command.join(",")
+              ? Array.isArray(data.template.script.command)
+                ? data.template.script.command.join(",")
+                : data.template.script.command
               : ""
             : "",
           args: data.template.script
             ? data.template.script.args
-              ? data.template.script.args.join(",")
+              ? Array.isArray(data.template.script.args)
+                ? data.template.script.args.join(",")
+                : data.template.script.args
               : ""
             : "",
           imagePullPolicy: data.template.script
-            ? data.template.script.imagePullPolicy ?? ""
+            ? (data.template.script.imagePullPolicy ?? "")
             : "",
-          source: data.template.script ? data.template.script.source ?? "" : ""
+          source: data.template.script
+            ? (data.template.script.source ?? "")
+            : ""
         },
         resource: {
           action: data.template.resource
-            ? data.template.resource.action ?? ""
+            ? (data.template.resource.action ?? "")
             : "",
           manifest: data.template.resource
-            ? data.template.resource.manifest ?? ""
+            ? (data.template.resource.manifest ?? "")
             : ""
         },
         suspend: {
           duration: data.template.suspend
-            ? data.template.suspend.duration ?? ""
+            ? (data.template.suspend.duration ?? "")
             : ""
         }
       }

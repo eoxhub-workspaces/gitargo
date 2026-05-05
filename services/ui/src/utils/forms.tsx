@@ -1,14 +1,15 @@
 import { styled } from "@mui/material";
 import lodash from "lodash";
 import { toaster } from ".";
+import { FormikProps } from "formik";
 
-export const checkArray = <T,>(array: any, name: string): T => {
+export const checkArray = <T,>(array: unknown, name: string): T[] => {
   if (!Array.isArray(array)) {
     throw new Error(
       `Looks like we encountered a bug. The current implementation expects "${name}" to be an array.`
     );
   }
-  return array as unknown as T;
+  return array as T[];
 };
 
 export const pruneArray = <T,>(array: (T | undefined)[]): T[] | undefined => {
@@ -69,13 +70,14 @@ export type TTransformFunction = (
   item: string,
   index: number
 ) => Record<string, any>;
+type KeyValue = { [key: string]: string };
 
 export const extractObjectOrArray = (
   seperator: string,
   keyName: string,
   valueName: string,
-  object: any
-): any => {
+  object: KeyValue | string[] | undefined
+): { [key: string]: string }[] | undefined => {
   if (!object) {
     return undefined;
   }
@@ -102,8 +104,8 @@ export const extractArray = (
   seperator: string,
   keyName: string,
   valueName: string,
-  array: any
-): any => {
+  array: string[] | undefined
+): { [key: string]: string }[] | undefined => {
   if (!array) {
     return undefined;
   }
@@ -139,11 +141,12 @@ export const extractArray = (
  * }
  * ```
  */
+type ArrayOfObjects = { [key: string]: any }[];
 export const packArrayAsObject = (
-  array: any[],
+  array: ArrayOfObjects,
   keyName: string,
   valueName: string
-) => {
+): Record<string, any> | undefined => {
   return pruneObject(
     Object.fromEntries(array.map((item) => [item[keyName], item[valueName]]))
   );
@@ -185,11 +188,11 @@ export const packArrayAsObject = (
  * ```
  */
 export const packArrayAsStrings = (
-  objects: any[],
+  objects: ArrayOfObjects,
   keyName: string,
   valueName: string,
   seperator: string
-) => {
+): string[] | undefined => {
   return pruneArray(
     objects.map((object) =>
       [object[keyName], object[valueName]].join(seperator)
@@ -214,7 +217,10 @@ const renderToast = (path: string, message: string) => (
   </p>
 );
 
-const reportError = (prefix: string, error: any[] | string) => {
+const reportError = (
+  prefix: string,
+  error: string | Record<string, any> | any[]
+) => {
   if (lodash.isString(error) && /\s/.test(error)) {
     toaster(renderToast(prefix, error as string), "error");
     return;
@@ -246,12 +252,14 @@ const reportError = (prefix: string, error: any[] | string) => {
  * are present. Therefore, a work around was to call `formik.submitForm`
  * after showing errors to the user. The `reportErrorsAndSubmit` utility
  * function basically implements this.
+ * @template T The type of the form values.
  */
-export const reportErrorsAndSubmit = (formik: any) => () => {
-  const errors: [string, any][] = Object.entries(formik.errors);
-  if (errors.length > 0) {
-    reportError("", formik.errors);
-  } else {
-    formik.submitForm();
-  }
-};
+export const reportErrorsAndSubmit =
+  <T,>(formik: FormikProps<T>) =>
+  () => {
+    if (!formik.isValid) {
+      reportError("", formik.errors);
+    } else {
+      formik.submitForm();
+    }
+  };

@@ -63,6 +63,7 @@ To maintain the visual layout without requiring a separate database, this tool u
 ## Development
 
 If you want to run the components separately for development:
+## Development
 
 ### Backend
 ```bash
@@ -79,5 +80,23 @@ npm install
 npm start
 ```
 
+### Linting & Formatting
+
+The project has strict linting and formatting rules enforced during the Docker build. You can run these commands locally to fix issues:
+
+```bash
+# Navigate to UI directory
+cd services/ui
+
+# Run Prettier to fix formatting
+npm run prettier-format
+
+# Run ESLint to find issues
+npm run lint
+
+# Run ESLint and automatically fix fixable issues
+npm run lint:fix
+```
+
 ## License
-MIT
+

@@ -73,8 +73,11 @@ export default function Project() {
   const handleSave = async () => {
     let name = currentFilename;
     if (!name) {
-      name = window.prompt("Enter filename (e.g. my-workflow.yaml)");
-      if (!name) return;
+      const promptResult = window.prompt(
+        "Enter filename (e.g. my-workflow.yaml)"
+      );
+      if (!promptResult) return;
+      name = promptResult;
       if (!name.endsWith(".yaml") && !name.endsWith(".yml")) {
         name += ".yaml";
       }
@@ -88,8 +91,13 @@ export default function Project() {
         canvasPosition
       };
 
+      const flatConnections = connections.map((conn) => ({
+        source: conn[0],
+        target: conn[1]
+      }));
+
       const manifest = generateSteppedManifest(
-        { nodes, connections },
+        { nodes, connections: flatConnections },
         visualState
       );
       const yamlContent = YAML.stringify(manifest);
@@ -367,7 +375,8 @@ export default function Project() {
           if (visualStateBase64) {
             const visualState = JSON.parse(atob(visualStateBase64));
             if (visualState.nodes) setNodes(visualState.nodes);
-            if (visualState.connections) setConnections(visualState.connections);
+            if (visualState.connections)
+              setConnections(visualState.connections);
             if (visualState.canvasPosition)
               setCanvasPosition(visualState.canvasPosition);
           }
@@ -391,6 +400,34 @@ export default function Project() {
       onNodeSelect(data.detail);
     });
 
+    eventBus.on("APPLY_YAML_CHANGES", (data: any) => {
+      const parsedYaml = data.detail.message;
+      if (!parsedYaml || !parsedYaml.spec || !parsedYaml.spec.templates) return;
+
+      if (stateNodesRef.current) {
+        const newNodes = { ...stateNodesRef.current };
+        let updated = false;
+
+        Object.keys(newNodes).forEach((nodeKey) => {
+          const node = newNodes[nodeKey];
+          if (node.type === "TEMPLATE" && node.data && node.data.template) {
+            const yamlTemplate = parsedYaml.spec.templates.find(
+              (t: any) => t.name === node.data.template.name
+            );
+            if (yamlTemplate) {
+              node.data.template = yamlTemplate;
+              updated = true;
+            }
+          }
+        });
+
+        if (updated) {
+          setNodes(newNodes);
+          toast.success("Visual nodes updated from YAML");
+        }
+      }
+    });
+
     eventBus.on("EVENT_GROUP_MEMBER_ADDED", (data: any) => {
       onGroupMemberAdded(data.detail);
     });
@@ -412,6 +449,7 @@ export default function Project() {
     });
 
     return () => {
+      eventBus.remove("APPLY_YAML_CHANGES", () => undefined);
       eventBus.remove("GROUP_REMOVED", () => undefined);
       eventBus.remove("EVENT_ELEMENT_CLICK", () => undefined);
       eventBus.remove("EVENT_GROUP_MEMBER_ADDED", () => undefined);

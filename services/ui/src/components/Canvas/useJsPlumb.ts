@@ -1,20 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { AnchorId, AnchorLocations } from "@jsplumb/common";
 import {
-  BeforeDropParams,
   Connection,
-  ConnectionDetachedParams,
-  ConnectionEstablishedParams,
   ConnectionSelection,
+  UIGroup,
+  INTERCEPT_BEFORE_DROP,
+  BeforeDropParams,
   EVENT_CONNECTION,
+  ConnectionEstablishedParams,
   EVENT_CONNECTION_DETACHED,
+  ConnectionDetachedParams,
   EVENT_GROUP_MEMBER_ADDED,
   EVENT_GROUP_MEMBER_REMOVED,
   EVENT_GROUP_REMOVED,
   EVENT_NESTED_GROUP_ADDED,
-  EVENT_NESTED_GROUP_REMOVED,
-  INTERCEPT_BEFORE_DROP,
-  UIGroup
+  EVENT_NESTED_GROUP_REMOVED
 } from "@jsplumb/core";
 import {
   BrowserJsPlumbInstance,
@@ -304,12 +304,10 @@ export const useJsPlumb = (
   };
 
   const reset = () => {
-    if (!instance) {
-      return;
+    if (instance) {
+      instance.reset();
+      instance.destroy();
     }
-
-    instance.reset();
-    instance.destroy();
   };
 
   const getOrCreateUIGroup = (key: string): UIGroup | void => {
@@ -422,14 +420,20 @@ export const useJsPlumb = (
     });
 
     jsPlumbInstance.bind(EVENT_DRAG_START, function (params: DragStartPayload) {
-      eventBus.dispatch("EVENT_DRAG_START", { message: { id: params.el.id } });
+      eventBus.dispatch("EVENT_DRAG_START", {
+        message: { id: params.el.id }
+      });
       params.el.setAttribute("dragging", "true");
     });
 
     jsPlumbInstance.bind(EVENT_DRAG_STOP, (params: DragStopPayload) => {
-      eventBus.dispatch("EVENT_DRAG_STOP", { message: { id: params.el.id } });
+      eventBus.dispatch("EVENT_DRAG_STOP", {
+        message: { id: params.el.id }
+      });
+      params.el.removeAttribute("dragging");
+
       setTimeout(() => {
-        params.el.removeAttribute("dragging");
+        jsPlumbInstance.setSuspendDrawing(false, true);
       }, 100);
     });
 
@@ -504,7 +508,7 @@ export const useJsPlumb = (
     jsPlumbInstance.bind(EVENT_DRAG_STOP, (params: DragStopPayload) => {
       params.elements.forEach((el) => {
         onNodeUpdate({
-          key: el.id,
+          key: el.el.id,
           position: {
             top: el.pos.y,
             left: el.pos.x

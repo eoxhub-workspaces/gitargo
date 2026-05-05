@@ -1,7 +1,10 @@
-import axios from 'axios';
+import axios from "axios";
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL:
+    process.env.NODE_ENV === "development"
+      ? "http://localhost:3000/api"
+      : "/api"
 });
 
 export interface WorkflowFile {
@@ -26,7 +29,7 @@ export interface CommitHistory {
 }
 
 export const getWorkflows = async (): Promise<WorkflowFile[]> => {
-  const response = await api.get<WorkflowFile[]>('/workflows');
+  const response = await api.get<WorkflowFile[]>("/workflows");
   return response.data;
 };
 
@@ -35,23 +38,35 @@ export const getWorkflow = async (path: string): Promise<string> => {
   return response.data;
 };
 
-export const getWorkflowHistory = async (path: string): Promise<CommitHistory[]> => {
-  const response = await api.get<CommitHistory[]>(`/workflows/${encodeURIComponent(path)}/history`);
+export const getWorkflowHistory = async (
+  path: string
+): Promise<CommitHistory[]> => {
+  const response = await api.get<CommitHistory[]>(
+    `/workflows/${encodeURIComponent(path)}/history`
+  );
   return response.data;
 };
 
-export const createWorkflow = async (path: string, content: string, commitMessage?: string) => {
+export const createWorkflow = async (
+  path: string,
+  content: string,
+  commitMessage?: string
+) => {
   const response = await api.post(`/workflows/${encodeURIComponent(path)}`, {
     content,
-    commit_message: commitMessage,
+    commit_message: commitMessage
   });
   return response.data;
 };
 
-export const updateWorkflow = async (path: string, content: string, commitMessage?: string) => {
+export const updateWorkflow = async (
+  path: string,
+  content: string,
+  commitMessage?: string
+) => {
   const response = await api.put(`/workflows/${encodeURIComponent(path)}`, {
     content,
-    commit_message: commitMessage,
+    commit_message: commitMessage
   });
   return response.data;
 };

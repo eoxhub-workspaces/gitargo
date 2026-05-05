@@ -2,7 +2,7 @@
 FROM node:lts-bookworm-slim AS build-frontend
 WORKDIR /app/ui
 COPY services/ui/package*.json ./
-RUN npm install
+RUN npm install --legacy-peer-deps
 COPY services/ui/ ./
 RUN npm run build
 
@@ -10,7 +10,7 @@ RUN npm run build
 FROM node:lts-bookworm-slim AS production
 WORKDIR /app
 COPY services/api/package*.json ./
-RUN npm install --production
+RUN npm install --production --legacy-peer-deps
 COPY services/api/ ./
 # Copy built frontend assets to the backend's public directory
 COPY --from=build-frontend /app/ui/build ./public

@@ -259,7 +259,10 @@ const getEntryPointName = (node: INodeItem): string => {
   return ret;
 };
 
-const generateSteppedManifest = (graphData: any, visualState?: any): IWorkflow => {
+const generateSteppedManifest = (
+  graphData: any,
+  visualState?: any
+): IWorkflow => {
   const nodes = graphData["nodes"] as Record<string, INodeItem>;
   const connections = graphData["connections"];
   const entryPoint = getEntryPointNode(nodes, connections);

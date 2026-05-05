@@ -1,0 +1,14 @@
+{
+  "name": "argo-manager-root",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "concurrently \"npm run start:api\" \"npm run start:ui\"",
+    "start:api": "cd services/api && npm install && node server.js",
+    "start:ui": "cd services/ui && PORT=3001 npm start",
+    "install:all": "cd services/api && npm install && cd ../ui && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

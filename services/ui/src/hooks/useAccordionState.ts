@@ -9,42 +9,28 @@ export const useAccordionState = (
   id: string,
   defaultOpen: boolean
 ): IAccordionState => {
-  const [open, setOpen] = useState(() => {
-    let configuration: Record<string, boolean> = {};
+  const getInitialState = () => {
     const item = localStorage.getItem("accordions");
-    if (item) {
-      configuration = JSON.parse(item);
-    }
-
-    if (configuration[id] === undefined) {
-      configuration[id] = defaultOpen;
-      localStorage.setItem(
-        "accordions",
-        JSON.stringify(configuration, null, 4)
-      );
-    }
-
-    return configuration[id];
-  });
+    const configuration: Record<string, boolean> = item ? JSON.parse(item) : {};
+    return configuration[id] ?? defaultOpen;
+  };
+  const [open, setOpen] = useState(getInitialState);
 
   const handleToggle = useCallback(() => {
-    const item = localStorage.getItem("accordions");
-    if (!item) {
-      throw new Error(
-        "Cannot find 'accordions' in local storage, which should exist at this point. Refreshing should fix the issue, but something/somebody deleted 'accordions' from local storage."
-      );
-    }
-    const configuration = JSON.parse(item);
-    setOpen((open) => {
-      const result = !open;
-      configuration[id] = result;
+    setOpen((prevOpen) => {
+      const newOpen = !prevOpen;
+      const item = localStorage.getItem("accordions");
+      const configuration: Record<string, boolean> = item
+        ? JSON.parse(item)
+        : {};
+      configuration[id] = newOpen;
       localStorage.setItem(
         "accordions",
         JSON.stringify(configuration, null, 4)
       );
-      return result;
+      return newOpen;
     });
-  }, []);
+  }, [id]);
 
   return {
     toggle: handleToggle,

@@ -5,6 +5,7 @@ import generateSteppedManifest from "../../utils/generators/step";
 import eventBus from "../../events/eventBus";
 import CodeEditor from "../CodeEditor";
 import useWindowDimensions from "../../hooks/useWindowDimensions";
+import toast from "react-hot-toast";
 
 const CodeBox = () => {
   const [language, setLanguage] = useState("yaml");
@@ -28,6 +29,22 @@ const CodeBox = () => {
     setTimeout(() => {
       setCopyText("Copy");
     }, 300);
+  };
+
+  const applyChanges = () => {
+    try {
+      let parsed;
+      if (language === "json") {
+        parsed = JSON.parse(formattedCode);
+      } else {
+        parsed = YAML.parse(formattedCode);
+      }
+
+      eventBus.dispatch("APPLY_YAML_CHANGES", { message: parsed });
+      toast.success("Changes applied to canvas!");
+    } catch (e: any) {
+      toast.error(`Invalid ${language.toUpperCase()}: ${e.message}`);
+    }
   };
 
   useEffect(() => {
@@ -61,6 +78,13 @@ const CodeBox = () => {
         className={`absolute top-0 left-0 right-0 z-10 flex justify-end p-1 space-x-2 group-hover:visible invisible`}
       >
         <button
+          className="btn-util bg-blue-500 text-white border-blue-600 hover:bg-blue-600"
+          type="button"
+          onClick={applyChanges}
+        >
+          Apply Changes
+        </button>
+        <button
           className={`btn-util ${
             language === "json" ? `btn-util-selected` : ``
           }`}
@@ -84,10 +108,10 @@ const CodeBox = () => {
       <CodeEditor
         data={formattedCode}
         language={language}
-        onChange={() => {
-          return;
+        onChange={(value) => {
+          setFormattedCode(value);
         }}
-        disabled={true}
+        disabled={false}
         lineWrapping={false}
         height={height - 64}
       />
