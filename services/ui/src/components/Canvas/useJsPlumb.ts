@@ -431,10 +431,7 @@ export const useJsPlumb = (
         message: { id: params.el.id }
       });
       params.el.removeAttribute("dragging");
-
-      setTimeout(() => {
-        jsPlumbInstance.setSuspendDrawing(false, true);
-      }, 100);
+      jsPlumbInstance.revalidate(params.el);
     });
 
     jsPlumbInstance.bind(

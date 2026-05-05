@@ -33,8 +33,13 @@ export const getWorkflows = async (): Promise<WorkflowFile[]> => {
   return response.data;
 };
 
-export const getWorkflow = async (path: string): Promise<string> => {
-  const response = await api.get(`/workflows/${encodeURIComponent(path)}`);
+export const getWorkflow = async (
+  path: string,
+  ref?: string
+): Promise<string> => {
+  const response = await api.get(`/workflows/${encodeURIComponent(path)}`, {
+    params: ref ? { ref } : undefined
+  });
   return response.data;
 };
 

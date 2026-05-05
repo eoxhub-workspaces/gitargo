@@ -74,11 +74,13 @@ app.get('/api/workflows', async (req, res, next) => {
 app.get('/api/workflows/:path', async (req, res, next) => {
   try {
     const filePath = req.params.path;
+    const ref = req.query.ref || GITLAB_BRANCH;
+    
     const response = await gitlabApi.get(
       `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
       {
         params: {
-          ref: GITLAB_BRANCH,
+          ref: ref,
         },
       }
     );

@@ -1,3 +1,6 @@
+import { ChevronLeftIcon } from "@heroicons/react/24/outline";
+import { Link } from "react-router-dom";
+
 interface HeaderProps {
   name?: string;
 }
@@ -5,9 +8,16 @@ interface HeaderProps {
 const Header = ({ name }: HeaderProps) => {
   return (
     <>
-      <div className="px-4 py-3 border-b border-gray-200">
+      <div className="px-4 py-3 border-b border-gray-200 flex items-center">
+        <Link
+          to="/"
+          className="mr-4 p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+          title="Back to Workflows"
+        >
+          <ChevronLeftIcon className="h-6 w-6 text-gray-600 dark:text-gray-300" />
+        </Link>
         <form
-          className="flex flex-col space-y-2 md:space-y-0 md:flex-row md:justify-between items-center"
+          className="flex flex-col space-y-2 md:space-y-0 md:flex-row md:justify-between items-center w-full"
           autoComplete="off"
         >
           <input

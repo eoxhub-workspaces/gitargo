@@ -1,26 +1,23 @@
 import React, { useEffect } from "react";
-import Editor, { useMonaco, loader } from "@monaco-editor/react";
+import Editor, { useMonaco } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 
-// Force @monaco-editor/react to use our local monaco-editor package
-loader.config({ monaco });
-
+// IMPORTANT: For Create React App, you need to manually copy these worker files
+// from node_modules into your public/static/js directory. Without ejecting CRA
+// or using a custom webpack setup, this is the most reliable way to load workers.
+// Copy these files:
+// - node_modules/monaco-editor/esm/vs/editor/editor.worker.js
+// - node_modules/monaco-editor/esm/vs/language/json/json.worker.js
+// - node_modules/monaco-yaml/yaml.worker.js
 window.MonacoEnvironment = {
-  getWorker(moduleId, label) {
+  getWorkerUrl: (moduleId, label) => {
     if (label === "yaml") {
-      return new Worker(new URL("monaco-yaml/yaml.worker", import.meta.url));
+      return "./static/js/yaml.worker.js";
     }
     if (label === "json") {
-      return new Worker(
-        new URL(
-          "monaco-editor/esm/vs/language/json/json.worker",
-          import.meta.url
-        )
-      );
+      return "./static/js/json.worker.js";
     }
-    return new Worker(
-      new URL("monaco-editor/esm/vs/editor/editor.worker", import.meta.url)
-    );
+    return "./static/js/editor.worker.js";
   }
 };
 
