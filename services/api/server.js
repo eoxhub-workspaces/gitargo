@@ -30,16 +30,11 @@ const gitlabApi = axios.create({
 app.use(cors());
 app.use(express.json());
 
-// Serve static files from the public directory
+// 1. Serve static files from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Catch-all route to serve index.html for React Router
-app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/api')) {
-    return next();
-  }
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+
+// --- 2. API ROUTES GO FIRST ---
 
 /**
  * GET /api/workflows
@@ -159,6 +154,18 @@ app.put('/api/workflows/:path', async (req, res, next) => {
   }
 });
 
+
+// --- 3. CATCH-ALL ROUTE GOES LAST ---
+
+// Catch-all route to serve index.html for React Router
+// If a request makes it past the API routes, hand it over to the frontend
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+
+// --- 4. ERROR HANDLING ---
+
 // Basic error handler
 app.use((err, req, res, next) => {
   console.error(err.stack);
@@ -167,6 +174,18 @@ app.use((err, req, res, next) => {
   res.status(status).json(message);
 });
 
-app.listen(PORT, () => {
+
+// --- 5. SERVER START ---
+
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server is running on port ${PORT}`);
+});
+
+// Handle graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM signal received: closing HTTP server');
+  server.close(() => {
+    console.log('HTTP server closed');
+    process.exit(0);
+  });
 });
