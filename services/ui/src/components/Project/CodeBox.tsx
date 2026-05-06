@@ -18,7 +18,7 @@ const CodeBox = () => {
     () =>
       debounce((payload) => {
         setGeneratedCode(payload);
-      }, 600),
+      }, 300),
     []
   );
 

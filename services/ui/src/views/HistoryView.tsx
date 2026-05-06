@@ -58,27 +58,27 @@ const HistoryView: React.FC = () => {
   };
 
   return (
-    <div className="md:pl-16 flex flex-col flex-1 min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 px-8 py-4 flex items-center sticky top-0 z-10">
+    <div className="flex flex-col flex-1 min-h-screen bg-gray-50">
+      <header className="bg-white border-b border-gray-200 px-8 py-4 flex items-center sticky top-0 z-10 shadow-sm">
         <Link
           to="/"
           className="mr-4 p-2 rounded-full hover:bg-gray-100 transition-colors"
         >
-          <ChevronLeftIcon className="h-6 w-6 text-gray-600" />
+          <ChevronLeftIcon className="h-6 w-6 text-[#004170]" />
         </Link>
         <div>
-          <h1 className="text-2xl font-bold text-gray-800">History</h1>
+          <h1 className="text-2xl font-bold text-[#004170]">History</h1>
           <p className="text-sm text-gray-500 truncate max-w-2xl">
             {filename ? decodeURIComponent(filename) : ""}
           </p>
         </div>
       </header>
 
-      <main className="p-8 flex flex-col xl:flex-row gap-8">
+      <main className="p-8 flex flex-col xl:flex-row gap-8 max-w-screen-2xl mx-auto w-full">
         <div className="flex-1">
           {loading ? (
             <div className="flex justify-center items-center h-64">
-              <Spinner className="text-blue-500" />
+              <Spinner className="text-[#004170]" />
             </div>
           ) : error ? (
             <div className="bg-red-50 border-l-4 border-red-400 p-4">

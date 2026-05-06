@@ -1,16 +1,10 @@
 import React, { useEffect } from "react";
 import Editor, { useMonaco } from "@monaco-editor/react";
-import * as monaco from "monaco-editor";
 
-// IMPORTANT: For Create React App, you need to manually copy these worker files
-// from node_modules into your public/static/js directory. Without ejecting CRA
-// or using a custom webpack setup, this is the most reliable way to load workers.
-// Copy these files:
-// - node_modules/monaco-editor/esm/vs/editor/editor.worker.js
-// - node_modules/monaco-editor/esm/vs/language/json/json.worker.js
-// - node_modules/monaco-yaml/yaml.worker.js
+// The window.MonacoEnvironment needs to be set up to tell Monaco where to find the workers.
+// The workers must be served from the public directory (static/js).
 window.MonacoEnvironment = {
-  getWorkerUrl: (moduleId, label) => {
+  getWorkerUrl: function (_moduleId: any, label: string) {
     if (label === "yaml") {
       return "./static/js/yaml.worker.js";
     }
@@ -35,13 +29,18 @@ const CodeEditor = (props: ICodeEditorProps) => {
   const monaco = useMonaco();
 
   useEffect(() => {
-    if (monaco) {
+    if (monaco && language === "yaml") {
       import("monaco-yaml")
         .then(({ configureMonacoYaml }) => {
           configureMonacoYaml(monaco, {
-            enableSchemaRequest: true,
+            enableSchemaRequest: false, // Set to false to avoid resetSchema errors on some builds
+            hover: true,
+            completion: true,
+            validate: true,
+            format: true,
             schemas: [
               {
+                // Argo Workflow JSON Schema
                 uri: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json",
                 fileMatch: ["*"]
               }
@@ -50,7 +49,7 @@ const CodeEditor = (props: ICodeEditorProps) => {
         })
         .catch(console.error);
     }
-  }, [monaco]);
+  }, [monaco, language]);
 
   const handleEditorChange = (value: string | undefined) => {
     if (value !== undefined) {
@@ -71,7 +70,17 @@ const CodeEditor = (props: ICodeEditorProps) => {
           wordWrap: lineWrapping ? "on" : "off",
           minimap: { enabled: false },
           formatOnPaste: true,
-          formatOnType: true
+          formatOnType: true,
+          automaticLayout: true,
+          scrollBeyondLastLine: false,
+          fontSize: 14,
+          tabSize: 2,
+          suggestOnTriggerCharacters: true,
+          quickSuggestions: {
+            other: true,
+            comments: false,
+            strings: true
+          }
         }}
       />
     </div>

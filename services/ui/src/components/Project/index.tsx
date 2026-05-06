@@ -56,9 +56,12 @@ export default function Project() {
     {}
   );
 
-  const { filename } = useParams<{ filename?: string }>();
+  const { filename, mode } = useParams<{ filename?: string; mode?: string }>();
   const navigate = useNavigate();
   const [currentFilename, setCurrentFilename] = useState(filename);
+  const [viewMode, setViewMode] = useState<"split" | "canvas" | "code">(
+    (mode as "split" | "canvas" | "code") || "split"
+  );
 
   //console.log(JSON.stringify(nodes));
   //console.log(JSON.stringify(connections));
@@ -404,6 +407,23 @@ export default function Project() {
       const parsedYaml = data.detail.message;
       if (!parsedYaml || !parsedYaml.spec || !parsedYaml.spec.templates) return;
 
+      // Try to restore visual state from annotations in the NEWLY applied YAML
+      const visualStateBase64 =
+        parsedYaml.metadata?.annotations?.["visual-argo-workflows/state"];
+      if (visualStateBase64) {
+        try {
+          const visualState = JSON.parse(atob(visualStateBase64));
+          if (visualState.nodes) setNodes(visualState.nodes);
+          if (visualState.connections) setConnections(visualState.connections);
+          if (visualState.canvasPosition)
+            setCanvasPosition(visualState.canvasPosition);
+          toast.success("Visual state synchronized from YAML");
+          return;
+        } catch (e) {
+          console.error("Failed to parse visual state from YAML", e);
+        }
+      }
+
       if (stateNodesRef.current) {
         const newNodes = { ...stateNodesRef.current };
         let updated = false;
@@ -486,17 +506,56 @@ export default function Project() {
         />
       ) : null}
 
-      <div className="md:pl-16 flex flex-col flex-1">
+      <div className="flex flex-col flex-1">
         <Header name={currentFilename} />
 
         <div className="flex flex-grow relative">
           <div
-            className="w-full overflow-hidden md:w-2/3 z-40"
+            className={`overflow-hidden z-40 transition-all duration-300 ${
+              viewMode === "split"
+                ? "w-full md:w-2/3"
+                : viewMode === "canvas"
+                  ? "w-full"
+                  : "w-0 invisible"
+            }`}
             style={{ height: height - 64 }}
           >
             <div className="relative h-full">
               <div className="absolute top-0 right-0 z-40">
                 <div className="flex space-x-2 p-2">
+                  <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-md mr-4 shadow-sm border border-gray-200 dark:border-gray-700">
+                    <button
+                      className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                        viewMode === "canvas"
+                          ? "bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-indigo-400"
+                          : "text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                      }`}
+                      onClick={() => setViewMode("canvas")}
+                    >
+                      Canvas
+                    </button>
+                    <button
+                      className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                        viewMode === "split"
+                          ? "bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-indigo-400"
+                          : "text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                      }`}
+                      onClick={() => setViewMode("split")}
+                    >
+                      Split
+                    </button>
+                    <button
+                      className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                        viewMode === "code"
+                          ? "bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-indigo-400"
+                          : "text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                      }`}
+                      onClick={() => setViewMode("code")}
+                    >
+                      Code
+                    </button>
+                  </div>
+
                   {Object.keys(selectedNodes).length >= 2 && (
                     <button
                       className="flex space-x-1 btn-util"
@@ -541,7 +600,39 @@ export default function Project() {
             </div>
           </div>
 
-          <div className="group code-column w-1/2 md:w-1/3 absolute top-0 right-0 sm:relative z-40 md:z-30">
+          <div
+            className={`group code-column transition-all duration-300 ${
+              viewMode === "split"
+                ? "w-1/2 md:w-1/3 absolute top-0 right-0 sm:relative z-40 md:z-30"
+                : viewMode === "code"
+                  ? "w-full relative z-40"
+                  : "w-0 invisible"
+            }`}
+          >
+            {viewMode === "code" && (
+              <div className="absolute top-2 left-2 z-50">
+                <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-md shadow-sm border border-gray-200 dark:border-gray-700">
+                  <button
+                    className="px-3 py-1 text-xs font-medium rounded-md transition-colors text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                    onClick={() => setViewMode("canvas")}
+                  >
+                    Canvas
+                  </button>
+                  <button
+                    className="px-3 py-1 text-xs font-medium rounded-md transition-colors text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                    onClick={() => setViewMode("split")}
+                  >
+                    Split
+                  </button>
+                  <button
+                    className="px-3 py-1 text-xs font-medium rounded-md transition-colors bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-indigo-400"
+                    onClick={() => setViewMode("code")}
+                  >
+                    Code
+                  </button>
+                </div>
+              </div>
+            )}
             <CodeBox />
           </div>
         </div>
