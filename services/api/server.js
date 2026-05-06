@@ -53,10 +53,13 @@ const serveIndex = (req, res) => {
 };
 
 // 1. Serve static files from the public directory
-app.use(
-  `${BASE_PATH}/static`,
-  express.static(path.join(__dirname, "public", "static"))
-);
+if (BASE_PATH !== "") {
+  app.use(
+    `${BASE_PATH}/static`,
+    express.static(path.join(__dirname, "public", "static"))
+  );
+}
+app.use("/static", express.static(path.join(__dirname, "public", "static")));
 app.use(express.static(path.join(__dirname, "public")));
 
 // --- Validation Middleware ---
@@ -235,14 +238,22 @@ apiRouter.put(
   }
 );
 
-// Use the router prefixed with BASE_PATH/api
-app.use(`${BASE_PATH}/api`, apiRouter);
+// Resilient API mounting
+if (BASE_PATH !== "") {
+  app.use(`${BASE_PATH}/api`, apiRouter);
+}
+app.use("/api", apiRouter);
 
 // --- 3. CATCH-ALL ROUTE ---
 
 // Catch-all route to serve index.html for React Router
-// Prefix it with BASE_PATH if present
-app.get(`${BASE_PATH}/*`, (req, res) => {
+if (BASE_PATH !== "") {
+  app.get(`${BASE_PATH}/*`, (req, res) => {
+    serveIndex(req, res);
+  });
+}
+
+app.get("*", (req, res) => {
   serveIndex(req, res);
 });
 
@@ -250,10 +261,6 @@ app.get(`${BASE_PATH}/*`, (req, res) => {
 if (BASE_PATH !== "") {
   app.get("/", (req, res) => {
     res.redirect(BASE_PATH);
-  });
-} else {
-  app.get("/", (req, res) => {
-    serveIndex(req, res);
   });
 }
 
