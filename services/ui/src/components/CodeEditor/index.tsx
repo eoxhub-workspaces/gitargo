@@ -33,16 +33,31 @@ const CodeEditor = (props: ICodeEditorProps) => {
       import("monaco-yaml")
         .then(({ configureMonacoYaml }) => {
           configureMonacoYaml(monaco, {
-            enableSchemaRequest: false, // Set to false to avoid resetSchema errors on some builds
+            enableSchemaRequest: true,
             hover: true,
             completion: true,
             validate: true,
             format: true,
             schemas: [
               {
-                // Argo Workflow JSON Schema
-                uri: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json",
-                fileMatch: ["*"]
+                uri: "https://argo-schema/workflow.json",
+                fileMatch: ["*"],
+                schema: {
+                  oneOf: [
+                    {
+                      $ref: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json#/definitions/io.argoproj.workflow.v1alpha1.Workflow"
+                    },
+                    {
+                      $ref: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json#/definitions/io.argoproj.workflow.v1alpha1.CronWorkflow"
+                    },
+                    {
+                      $ref: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json#/definitions/io.argoproj.workflow.v1alpha1.WorkflowTemplate"
+                    },
+                    {
+                      $ref: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json#/definitions/io.argoproj.workflow.v1alpha1.ClusterWorkflowTemplate"
+                    }
+                  ]
+                }
               }
             ]
           });
@@ -72,9 +87,11 @@ const CodeEditor = (props: ICodeEditorProps) => {
           formatOnPaste: true,
           formatOnType: true,
           automaticLayout: true,
-          scrollBeyondLastLine: false,
+          scrollBeyondLastLine: true,
           fontSize: 14,
           tabSize: 2,
+          wordBasedSuggestions: "off",
+          acceptSuggestionOnEnter: "off",
           suggestOnTriggerCharacters: true,
           quickSuggestions: {
             other: true,

@@ -201,6 +201,14 @@ const getTemplate = (nodes: Dictionary<ITemplateNode>): ITemplate[] | [] => {
       name: node.data.template.name || "Untitled"
     };
 
+    if (node.data.template.inputs) {
+      template.inputs = node.data.template.inputs;
+    }
+
+    if (node.data.template.outputs) {
+      template.outputs = node.data.template.outputs;
+    }
+
     if (node.data.type === "container" && node.data.template.container) {
       template.container = {
         ...node.data.template.container
@@ -261,29 +269,50 @@ const getEntryPointName = (node: INodeItem): string => {
 
 const generateSteppedManifest = (
   graphData: any,
-  visualState?: any
-): IWorkflow => {
+  visualState?: any,
+  baseYaml?: any
+): any => {
   const nodes = graphData["nodes"] as Record<string, INodeItem>;
   const connections = graphData["connections"];
   const entryPoint = getEntryPointNode(nodes, connections);
-  const base = getBaseWorkflowTemplate();
+
+  // Use the provided baseYaml or default to a new Workflow template
+  const base = baseYaml
+    ? JSON.parse(JSON.stringify(baseYaml))
+    : getBaseWorkflowTemplate();
   const templates = getTemplate(getTemplateNodes(nodes));
 
-  if (visualState && base.metadata.annotations) {
+  if (visualState) {
+    if (!base.metadata) base.metadata = {};
+    if (!base.metadata.annotations) base.metadata.annotations = {};
     base.metadata.annotations["visual-argo-workflows/state"] = btoa(
       JSON.stringify(visualState)
     );
   }
 
+  // Determine where to inject templates/entrypoint based on kind
+  const isCron = base.kind === "CronWorkflow";
+
+  if (isCron) {
+    if (!base.spec) base.spec = {};
+    if (!base.spec.workflowSpec) base.spec.workflowSpec = {};
+    base.spec.workflowSpec.templates = [];
+  } else {
+    if (!base.spec) base.spec = {};
+    base.spec.templates = [];
+  }
+
+  const targetSpec = isCron ? base.spec.workflowSpec : base.spec;
+
   templates.forEach((x) => {
-    base["spec"]["templates"].push(x);
+    targetSpec.templates.push(x);
   });
 
   if (entryPoint) {
     const totalSteps = getTotalSteps(entryPoint.key, connections);
     const entryPointName = getEntryPointName(entryPoint);
 
-    base.spec.entrypoint = entryPointName;
+    targetSpec.entrypoint = entryPointName;
 
     if (entryPoint.type === "GROUP") {
       const steps: any = getGroupedSteps(entryPoint as any, nodes);
@@ -292,7 +321,7 @@ const generateSteppedManifest = (
         steps: steps
       };
 
-      base.spec.templates.push(stepsTemplate);
+      targetSpec.templates.push(stepsTemplate);
     }
 
     if (totalSteps >= 2) {
@@ -302,7 +331,7 @@ const generateSteppedManifest = (
         steps: steps
       };
 
-      base.spec.templates.push(stepsTemplate);
+      targetSpec.templates.push(stepsTemplate);
     }
   }
 

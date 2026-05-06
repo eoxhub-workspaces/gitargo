@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getWorkflows, WorkflowFile } from "../utils/api";
+import YAML from "yaml";
+import { getWorkflows, getWorkflow, WorkflowFile } from "../utils/api";
 import {
   PlusIcon,
   DocumentIcon,
@@ -10,8 +11,18 @@ import {
 } from "@heroicons/react/24/outline";
 import Spinner from "../components/global/Spinner";
 
+interface WorkflowMetadata {
+  kind?: string;
+  schedule?: string;
+  entrypoint?: string;
+  isParsing?: boolean;
+}
+
 const ListView: React.FC = () => {
   const [workflows, setWorkflows] = useState<WorkflowFile[]>([]);
+  const [metadata, setMetadata] = useState<Record<string, WorkflowMetadata>>(
+    {}
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,6 +31,45 @@ const ListView: React.FC = () => {
       try {
         const data = await getWorkflows();
         setWorkflows(data);
+
+        // Fetch details in the background to not block the list rendering
+        data.forEach(async (wf) => {
+          setMetadata((prev) => ({ ...prev, [wf.id]: { isParsing: true } }));
+          try {
+            const content = await getWorkflow(wf.path);
+            const parsed = YAML.parse(content);
+            const kind: string = parsed?.kind || "Unknown";
+            let schedule: string | null = null;
+            let entrypoint: string | null = null;
+
+            if (kind === "CronWorkflow") {
+              schedule = parsed?.spec?.schedule;
+              entrypoint = parsed?.spec?.workflowSpec?.entrypoint;
+            } else if (
+              kind === "WorkflowTemplate" ||
+              kind === "ClusterWorkflowTemplate"
+            ) {
+              entrypoint = parsed?.spec?.templates?.[0]?.name;
+            } else {
+              entrypoint = parsed?.spec?.entrypoint;
+            }
+
+            setMetadata((prev) => ({
+              ...prev,
+              [wf.id]: {
+                kind,
+                schedule: schedule || undefined,
+                entrypoint: entrypoint || undefined,
+                isParsing: false
+              }
+            }));
+          } catch (e) {
+            setMetadata((prev) => ({
+              ...prev,
+              [wf.id]: { kind: "Error", isParsing: false }
+            }));
+          }
+        });
       } catch (err: any) {
         setError(err.message || "Failed to fetch workflows");
       } finally {
@@ -127,11 +177,44 @@ const ListView: React.FC = () => {
                         <DocumentIcon className="h-8 w-8 text-[#004170]" />
                       </div>
                       <div className="ml-4 flex-1">
-                        <p className="text-sm font-medium text-[#004170] truncate">
-                          {workflow.name}
-                        </p>
-                        <p className="text-xs text-gray-500 truncate">
+                        <div className="flex items-center space-x-2">
+                          <p className="text-sm font-medium text-[#004170] truncate">
+                            {workflow.name}
+                          </p>
+                          {metadata[workflow.id]?.isParsing && (
+                            <Spinner className="w-3 h-3 text-gray-400" />
+                          )}
+                          {!metadata[workflow.id]?.isParsing &&
+                            metadata[workflow.id]?.kind && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800 border border-blue-200">
+                                {metadata[workflow.id].kind}
+                              </span>
+                            )}
+                          {!metadata[workflow.id]?.isParsing &&
+                            metadata[workflow.id]?.schedule && (
+                              <span
+                                className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800 border border-green-200"
+                                title="Cron Schedule"
+                              >
+                                <ClockIcon className="w-3 h-3 mr-1" />
+                                {metadata[workflow.id].schedule}
+                              </span>
+                            )}
+                        </div>
+                        <p className="text-xs text-gray-500 truncate mt-1">
                           {workflow.path}
+                          {!metadata[workflow.id]?.isParsing &&
+                            metadata[workflow.id]?.entrypoint && (
+                              <>
+                                <span className="mx-2 text-gray-300">|</span>
+                                <span title="Entrypoint">
+                                  Entrypoint:{" "}
+                                  <span className="font-mono text-[10px] bg-gray-100 px-1 py-0.5 rounded border border-gray-200">
+                                    {metadata[workflow.id].entrypoint}
+                                  </span>
+                                </span>
+                              </>
+                            )}
                         </p>
                       </div>
                     </div>

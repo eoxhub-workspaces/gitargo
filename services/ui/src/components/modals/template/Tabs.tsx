@@ -14,6 +14,7 @@ const Tabs = (props: ITabsProps) => {
 
   const tabs = [
     { name: "General", href: "#", current: true, hidden: false },
+    { name: "I/O", href: "#", current: false, hidden: false },
     {
       name: "Container",
       href: "#",

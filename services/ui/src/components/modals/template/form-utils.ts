@@ -4,6 +4,7 @@ import type {
   ITemplateNode
 } from "../../../types";
 import * as yup from "yup";
+import YAML from "yaml";
 import { pruneArray, pruneObject, pruneString } from "../../../utils/forms";
 
 export const resourceValidationSchema = yup.object({
@@ -97,6 +98,8 @@ const initialValues: IEditTemplateForm = {
     when: "",
     template: {
       name: "Untitled",
+      inputs: "",
+      outputs: "",
       container: {
         name: "",
         image: "",
@@ -138,6 +141,12 @@ export const getInitialValues = (node?: ITemplateNode) => {
       when: data.when ?? "",
       template: {
         name: data.template.name ?? initialValues.data.template.name,
+        inputs: data.template.inputs
+          ? YAML.stringify(data.template.inputs)
+          : "",
+        outputs: data.template.outputs
+          ? YAML.stringify(data.template.outputs)
+          : "",
         container: {
           name: data.template.container
             ? (data.template.container.name ?? "")
@@ -232,6 +241,32 @@ export const getTemplateNodeFinalValues = (
 ): ITemplateNode => {
   const { data } = values;
 
+  let parsedInputs = undefined;
+  if (
+    data.template.inputs &&
+    typeof data.template.inputs === "string" &&
+    data.template.inputs.trim() !== ""
+  ) {
+    try {
+      parsedInputs = YAML.parse(data.template.inputs);
+    } catch (e) {
+      console.warn("Failed to parse inputs YAML", e);
+    }
+  }
+
+  let parsedOutputs = undefined;
+  if (
+    data.template.outputs &&
+    typeof data.template.outputs === "string" &&
+    data.template.outputs.trim() !== ""
+  ) {
+    try {
+      parsedOutputs = YAML.parse(data.template.outputs);
+    } catch (e) {
+      console.warn("Failed to parse outputs YAML", e);
+    }
+  }
+
   const base: ITemplateNode = {
     key: previous?.key ?? "template",
     position: previous?.position ?? { left: 0, top: 0 },
@@ -245,7 +280,9 @@ export const getTemplateNodeFinalValues = (
       type: data.type,
       when: data.when,
       template: {
-        name: data.template.name
+        name: data.template.name,
+        inputs: parsedInputs,
+        outputs: parsedOutputs
       }
     }
   };

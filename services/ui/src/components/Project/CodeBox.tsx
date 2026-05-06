@@ -17,7 +17,9 @@ const CodeBox = () => {
   const debouncedOnGraphUpdate = useMemo(
     () =>
       debounce((payload) => {
-        setGeneratedCode(payload);
+        // Extract baseYaml and pass to generateSteppedManifest
+        const { baseYaml, ...graphData } = payload;
+        setGeneratedCode(generateSteppedManifest(graphData, null, baseYaml));
       }, 300),
     []
   );
@@ -64,7 +66,7 @@ const CodeBox = () => {
   useEffect(() => {
     eventBus.on("FETCH_CODE", (data) => {
       const graphData = data.detail.message;
-      debouncedOnGraphUpdate(generateSteppedManifest(graphData));
+      debouncedOnGraphUpdate(graphData);
     });
 
     return () => {

@@ -44,6 +44,7 @@ export default function Project() {
   const stateNodesRef = useRef<Dictionary<INodeItem>>();
   const stateSelectedNodesRef = useRef<Record<string, any>>();
   const stateConnectionsRef = useRef<[[string, string]] | []>();
+  const baseYamlRef = useRef<any>(null);
   const [showModalCreateTemplate, setShowModalCreateTemplate] = useState(false);
   const [templateToEdit, setTemplateToEdit] = useState<ITemplateNode | null>(
     null
@@ -62,10 +63,6 @@ export default function Project() {
   const [viewMode, setViewMode] = useState<"split" | "canvas" | "code">(
     (mode as "split" | "canvas" | "code") || "split"
   );
-
-  //console.log(JSON.stringify(nodes));
-  //console.log(JSON.stringify(connections));
-  //console.log(JSON.stringify(canvasPosition));
 
   useTitle([currentFilename || "New workflow", ""].join(" | "));
 
@@ -101,7 +98,8 @@ export default function Project() {
 
       const manifest = generateSteppedManifest(
         { nodes, connections: flatConnections },
-        visualState
+        visualState,
+        baseYamlRef.current
       );
       const yamlContent = YAML.stringify(manifest);
 
@@ -114,7 +112,7 @@ export default function Project() {
       } else {
         await api.createWorkflow(name, yamlContent, `Create ${name}`);
         setCurrentFilename(name);
-        navigate(`/edit/${encodeURIComponent(name)}`, { replace: true });
+        navigate(`/edit/canvas/${encodeURIComponent(name)}`, { replace: true });
       }
 
       toast.success("Workflow saved successfully!", { id: saveToast });
@@ -132,7 +130,6 @@ export default function Project() {
         const node = stateNodesRef.current[nodeId];
         node.position = getGroupPosition(offsets);
 
-        console.log(node);
         setNodes({
           ...stateNodesRef.current,
           [nodeId]: node
@@ -163,7 +160,11 @@ export default function Project() {
   };
 
   const onGraphUpdate = (graphData: any) => {
-    const data = { ...graphData, canvasPosition };
+    const data = {
+      ...graphData,
+      canvasPosition,
+      baseYaml: baseYamlRef.current
+    };
     eventBus.dispatch("FETCH_CODE", {
       message: data
     });
@@ -372,6 +373,7 @@ export default function Project() {
         try {
           const yamlContent = await api.getWorkflow(filename);
           const parsed = YAML.parse(yamlContent);
+          baseYamlRef.current = parsed;
           const visualStateBase64 =
             parsed.metadata?.annotations?.["visual-argo-workflows/state"];
 
@@ -382,6 +384,67 @@ export default function Project() {
               setConnections(visualState.connections);
             if (visualState.canvasPosition)
               setCanvasPosition(visualState.canvasPosition);
+          } else {
+            // Build pseudo visual state from yaml so it doesn't get cleared
+            const newNodes: any = {};
+            let top = 50;
+            let left = 50;
+
+            const templates =
+              parsed?.kind === "CronWorkflow"
+                ? parsed?.spec?.workflowSpec?.templates
+                : parsed?.spec?.templates;
+
+            const entrypoint =
+              parsed?.kind === "CronWorkflow"
+                ? parsed?.spec?.workflowSpec?.entrypoint
+                : parsed?.spec?.entrypoint;
+
+            if (templates) {
+              if (entrypoint) {
+                const entryId = attachUUID("entrypoint");
+                newNodes[entryId] = {
+                  key: entryId,
+                  position: { top, left },
+                  type: "ENTRYPOINT",
+                  inputs: [],
+                  outputs: ["op_source"],
+                  data: {
+                    template: { name: entrypoint }
+                  }
+                };
+                top += 120;
+              }
+
+              templates.forEach((t: any) => {
+                const nodeId = attachUUID("template");
+                let type = "container";
+                if (t.script) type = "script";
+                if (t.resource) type = "resource";
+                if (t.suspend) type = "suspend";
+
+                newNodes[nodeId] = {
+                  key: nodeId,
+                  position: { top, left },
+                  type: "TEMPLATE",
+                  inputs: ["ip_source"],
+                  outputs: ["op_source"],
+                  data: {
+                    type,
+                    template: t
+                  }
+                };
+                left += 220;
+                if (left > 800) {
+                  left = 50;
+                  top += 120;
+                }
+              });
+            }
+
+            setNodes(newNodes);
+            setConnections([]);
+            setCanvasPosition({ top: 0, left: 0 });
           }
           setCurrentFilename(filename);
         } catch (error) {
@@ -395,6 +458,7 @@ export default function Project() {
       setConnections(defaultConnections as any);
       setCanvasPosition(defaultCanvasPosition as any);
       setCurrentFilename(undefined);
+      baseYamlRef.current = null;
     }
   }, [filename]);
 
@@ -405,7 +469,16 @@ export default function Project() {
 
     eventBus.on("APPLY_YAML_CHANGES", (data: any) => {
       const parsedYaml = data.detail.message;
-      if (!parsedYaml || !parsedYaml.spec || !parsedYaml.spec.templates) return;
+      if (!parsedYaml || !parsedYaml.spec) return;
+
+      const templates =
+        parsedYaml.kind === "CronWorkflow"
+          ? parsedYaml.spec.workflowSpec?.templates
+          : parsedYaml.spec.templates;
+
+      if (!templates) return;
+
+      baseYamlRef.current = parsedYaml;
 
       // Try to restore visual state from annotations in the NEWLY applied YAML
       const visualStateBase64 =
@@ -431,7 +504,7 @@ export default function Project() {
         Object.keys(newNodes).forEach((nodeKey) => {
           const node = newNodes[nodeKey];
           if (node.type === "TEMPLATE" && node.data && node.data.template) {
-            const yamlTemplate = parsedYaml.spec.templates.find(
+            const yamlTemplate = templates.find(
               (t: any) => t.name === node.data.template.name
             );
             if (yamlTemplate) {

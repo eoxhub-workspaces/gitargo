@@ -2,6 +2,7 @@ import React, { useCallback, useMemo } from "react";
 import { Formik } from "formik";
 import { XMarkIcon } from "@heroicons/react/24/outline";
 import General from "./General";
+import IO from "./IO";
 import Container from "./Container";
 import Script from "./Script";
 import Resource from "./Resource";
@@ -75,6 +76,7 @@ const ModalEdit = (props: IModalProps) => {
 
                       <div className="relative px-4 py-3 flex-auto">
                         {openTab === "General" && <General />}
+                        {openTab === "I/O" && <IO />}
                         {openTab === "Container" && <Container />}
                         {openTab === "Script" && <Script />}
                         {openTab === "Resource" && <Resource />}

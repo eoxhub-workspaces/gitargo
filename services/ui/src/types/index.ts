@@ -109,6 +109,8 @@ export interface IEditTemplateForm {
     when?: string;
     template: {
       name: string;
+      inputs?: any;
+      outputs?: any;
       container?: {
         name: string;
         image: string;
@@ -191,6 +193,8 @@ export interface ISuspendTemplate {
 // https://argoproj.github.io/argo-workflows/fields/#template
 export interface ITemplate {
   name: string;
+  inputs?: any;
+  outputs?: any;
   resource?: IResourceTemplate;
   container?: IContainer;
   script?: IScriptTemplate;

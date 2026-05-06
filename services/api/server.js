@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
+const YAML = require('yaml');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -32,6 +33,43 @@ app.use(express.json());
 
 // 1. Serve static files from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
+
+
+// --- Validation Middleware ---
+const allowedArgoKinds = [
+  'Workflow',
+  'CronWorkflow',
+  'WorkflowTemplate',
+  'ClusterWorkflowTemplate'
+];
+
+const validateArgoWorkflow = (req, res, next) => {
+  const { content } = req.body;
+  if (!content) {
+    return res.status(400).json({ message: "Content is required." });
+  }
+
+  try {
+    const parsed = YAML.parse(content);
+    if (!parsed || typeof parsed !== 'object') {
+      return res.status(400).json({ message: "Invalid YAML format." });
+    }
+
+    if (!parsed.kind) {
+      return res.status(400).json({ message: "Missing 'kind' field in YAML." });
+    }
+
+    if (!allowedArgoKinds.includes(parsed.kind)) {
+      return res.status(400).json({ 
+        message: `Invalid 'kind'. Only Argo Workflow definitions are allowed. Received: '${parsed.kind}'. Allowed kinds: ${allowedArgoKinds.join(', ')}.` 
+      });
+    }
+
+    next();
+  } catch (error) {
+    return res.status(400).json({ message: `YAML Parsing Error: ${error.message}` });
+  }
+};
 
 
 // --- 2. API ROUTES GO FIRST ---
@@ -110,7 +148,7 @@ app.get('/api/workflows/:path/history', async (req, res, next) => {
  * POST /api/workflows/:path
  * Create a new file.
  */
-app.post('/api/workflows/:path', async (req, res, next) => {
+app.post('/api/workflows/:path', validateArgoWorkflow, async (req, res, next) => {
   try {
     const filePath = req.params.path;
     const { content, commit_message } = req.body;
@@ -134,7 +172,7 @@ app.post('/api/workflows/:path', async (req, res, next) => {
  * PUT /api/workflows/:path
  * Update an existing file.
  */
-app.put('/api/workflows/:path', async (req, res, next) => {
+app.put('/api/workflows/:path', validateArgoWorkflow, async (req, res, next) => {
   try {
     const filePath = req.params.path;
     const { content, commit_message } = req.body;
