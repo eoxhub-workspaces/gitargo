@@ -5,11 +5,17 @@ import { BrowserRouter as Router } from "react-router-dom";
 import App from "./App";
 import reportWebVitals from "./reportWebVitals";
 
+declare global {
+  interface Window {
+    BASE_PATH?: string;
+  }
+}
+
 const container = document.getElementById("root");
 const root = createRoot(container!);
 root.render(
   <React.StrictMode>
-    <Router>
+    <Router basename={window.BASE_PATH || "/"}>
       <App />
     </Router>
   </React.StrictMode>

@@ -2,6 +2,7 @@
   "name": "wf-frontend",
   "version": "0.1.0",
   "private": true,
+  "homepage": ".",
   "dependencies": {
     "@codemirror/lang-json": "^6.0.1",
     "@codemirror/lang-yaml": "^6.1.1",
