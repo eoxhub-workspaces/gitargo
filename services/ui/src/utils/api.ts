@@ -1,10 +1,16 @@
 import axios from "axios";
 
-const api = axios.create({
-  baseURL:
-    process.env.NODE_ENV === "development"
-      ? "http://localhost:3000/api"
-      : (window.BASE_PATH || "") + "/api"
+const api = axios.create();
+
+// Use an interceptor to set the baseURL dynamically at request time.
+// This ensures that window.BASE_PATH (which is calculated and set in index.tsx)
+// is available when the request is actually made, overcoming module load order issues.
+api.interceptors.request.use((config) => {
+  const isDev = process.env.NODE_ENV === "development";
+  const basePath = window.BASE_PATH || "";
+
+  config.baseURL = isDev ? "http://localhost:3000/api" : `${basePath}/api`;
+  return config;
 });
 
 export interface WorkflowFile {
