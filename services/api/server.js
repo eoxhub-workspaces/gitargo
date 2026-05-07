@@ -170,7 +170,7 @@ apiRouter.get("/workflows/*/history", async (req, res, next) => {
       {
         params: {
           path: filePath,
-          ref: GITLAB_BRANCH
+          ref_name: GITLAB_BRANCH
         }
       }
     );
@@ -284,7 +284,7 @@ apiRouter.post(
       const { content, commit_message } = req.body;
 
       // Inject defaults if configured
-      const injectedContent = injectDefaults(content);
+      const injectedContent = injectDefaults(content, virtualPath);
 
       const response = await gitlabApi.post(
         `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(
@@ -318,20 +318,44 @@ apiRouter.put(
       const { content, commit_message } = req.body;
 
       // Inject defaults if configured
-      const injectedContent = injectDefaults(content);
+      const injectedContent = injectDefaults(content, virtualPath);
 
-      const response = await gitlabApi.put(
-        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(
-          filePath
-        )}`,
-        {
-          branch: GITLAB_BRANCH,
-          content: injectedContent,
-          commit_message: commit_message || `Update ${filePath}`
+      try {
+        const response = await gitlabApi.put(
+          `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(
+            filePath
+          )}`,
+          {
+            branch: GITLAB_BRANCH,
+            content: injectedContent,
+            commit_message: commit_message || `Update ${filePath}`
+          }
+        );
+        res.json(response.data);
+      } catch (putError) {
+        // If the file doesn't exist yet, GitLab PUT returns 400. 
+        // We gracefully fallback to POST to create it.
+        if (
+          putError.response &&
+          putError.response.status === 400 &&
+          putError.response.data &&
+          putError.response.data.message === "A file with this name doesn't exist"
+        ) {
+          const postResponse = await gitlabApi.post(
+            `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(
+              filePath
+            )}`,
+            {
+              branch: GITLAB_BRANCH,
+              content: injectedContent,
+              commit_message: commit_message || `Create ${filePath}`
+            }
+          );
+          return res.status(201).json(postResponse.data);
         }
-      );
-
-      res.json(response.data);
+        // Otherwise re-throw the original PUT error
+        throw putError;
+      }
     } catch (error) {
       next(error);
     }
@@ -339,7 +363,7 @@ apiRouter.put(
 );
 
 // --- Helper for injecting defaults ---
-function injectDefaults(content) {
+function injectDefaults(content, virtualPath) {
   const ARGO_NAMESPACE = process.env.ARGO_NAMESPACE;
   const ARGO_SERVICE_ACCOUNT = process.env.ARGO_SERVICE_ACCOUNT;
   const ARGO_TOLERATIONS = process.env.ARGO_TOLERATIONS;
@@ -352,9 +376,21 @@ function injectDefaults(content) {
 
     if (!parsed.metadata) parsed.metadata = {};
     
+    // Extract logical name from the path (e.g. workspaces/paquito.yaml -> paquito)
+    let logicalName = "workflow-default";
+    if (virtualPath) {
+      const parts = virtualPath.split('/');
+      const filename = parts[parts.length - 1];
+      logicalName = filename.replace(/\.ya?ml$/i, "");
+    }
+
     // Ensure metadata.name or generateName is present
     if (!parsed.metadata.name && !parsed.metadata.generateName) {
-      parsed.metadata.name = "workflow-default";
+      parsed.metadata.name = logicalName;
+      parsed.metadata.generateName = `${logicalName}-`;
+    } else if (parsed.metadata.name && !parsed.metadata.generateName) {
+      // If name is present but generateName is not, add generateName
+      parsed.metadata.generateName = `${parsed.metadata.name}-`;
     }
 
     if (ARGO_NAMESPACE && !parsed.metadata.namespace) {
