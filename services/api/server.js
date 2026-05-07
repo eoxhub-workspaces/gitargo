@@ -160,12 +160,12 @@ apiRouter.get("/workflows/:path", async (req, res, next) => {
 });
 
 /**
- * GET /api/workflows/:path/history
+ * GET /api/workflows/<path>/history
  * Get the commit history for a file.
  */
-apiRouter.get("/workflows/:path/history", async (req, res, next) => {
+apiRouter.get("/workflows/*/history", async (req, res, next) => {
   try {
-    const filePath = req.params.path;
+    const filePath = req.params[0];
     const response = await gitlabApi.get(
       `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
       {
@@ -183,12 +183,12 @@ apiRouter.get("/workflows/:path/history", async (req, res, next) => {
 });
 
 /**
- * DELETE /api/workflows/:path
+ * DELETE /api/workflows/*
  * Soft-delete a workflow by renaming it with a .deleted extension.
  */
-apiRouter.delete("/workflows/:path", async (req, res, next) => {
+apiRouter.delete("/workflows/*", async (req, res, next) => {
   try {
-    const filePath = req.params.path;
+    const filePath = req.params[0];
     
     const response = await gitlabApi.post(
       `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
@@ -212,12 +212,12 @@ apiRouter.delete("/workflows/:path", async (req, res, next) => {
 });
 
 /**
- * POST /api/workflows/:path/restore
+ * POST /api/workflows/<path>/restore
  * Restore a soft-deleted workflow.
  */
-apiRouter.post("/workflows/:path/restore", async (req, res, next) => {
+apiRouter.post("/workflows/*/restore", async (req, res, next) => {
   try {
-    const filePath = req.params.path;
+    const filePath = req.params[0];
     const originalPath = filePath.replace(/\.deleted$/, "");
 
     const response = await gitlabApi.post(
@@ -242,15 +242,15 @@ apiRouter.post("/workflows/:path/restore", async (req, res, next) => {
 });
 
 /**
- * POST /api/workflows/:path
+ * POST /api/workflows/*
  * Create a new file.
  */
 apiRouter.post(
-  "/workflows/:path",
+  "/workflows/*",
   validateArgoWorkflow,
   async (req, res, next) => {
     try {
-      let filePath = req.params.path;
+      let filePath = req.params[0];
       const { content, commit_message } = req.body;
 
       // Prepend GITLAB_WORKFLOWS_PATH if it's not already in the path and it's not the root
@@ -283,15 +283,15 @@ apiRouter.post(
 );
 
 /**
- * PUT /api/workflows/:path
+ * PUT /api/workflows/*
  * Update an existing file.
  */
 apiRouter.put(
-  "/workflows/:path",
+  "/workflows/*",
   validateArgoWorkflow,
   async (req, res, next) => {
     try {
-      const filePath = req.params.path;
+      const filePath = req.params[0];
       const { content, commit_message } = req.body;
 
       // Inject defaults if configured

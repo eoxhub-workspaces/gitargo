@@ -36,7 +36,7 @@ export default function CodeProject() {
       loadWorkflow();
     } else {
       setYamlContent(
-        'apiVersion: argoproj.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: workflow-name\n  generateName: workflow-name-\nspec:\n  entrypoint: main\n  templates:\n    - name: main\n      container:\n        image: alpine:latest\n        command: [sh, -c]\n        args: ["echo Hello World"]\n'
+        'apiVersion: argoproj.io/v1alpha1\nkind: WorkflowTemplate\nmetadata:\n  name: workflow-name\n  generateName: workflow-name-\nspec:\n  entrypoint: main\n  templates:\n    - name: main\n      container:\n        image: alpine:latest\n        command: [sh, -c]\n        args: ["echo Hello World"]\n'
       );
       setLoading(false);
       setCurrentFilename(undefined);

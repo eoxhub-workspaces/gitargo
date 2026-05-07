@@ -243,7 +243,7 @@ const getTemplate = (nodes: Dictionary<ITemplateNode>): ITemplate[] | [] => {
 const getBaseWorkflowTemplate = (): IWorkflow => {
   return {
     apiVersion: "argoproj.io/v1alpha1",
-    kind: "Workflow",
+    kind: "WorkflowTemplate",
     metadata: {
       name: "workflow-name",
       generateName: "workflow-name-",
