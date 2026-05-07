@@ -106,11 +106,11 @@ const apiRouter = express.Router();
 
 // Helper to convert a frontend virtual path to a physical GitLab path
 function getGitLabPath(virtualPath) {
-  if (!GITLAB_WORKFLOWS_PATH || GITLAB_WORKFLOWS_PATH === ".") {
-    return virtualPath;
-  }
-  const basePath = GITLAB_WORKFLOWS_PATH.replace(/\/$/, "");
   const cleanVirtualPath = virtualPath.replace(/^\//, "");
+  if (!GITLAB_WORKFLOWS_PATH || GITLAB_WORKFLOWS_PATH === ".") {
+    return cleanVirtualPath;
+  }
+  const basePath = GITLAB_WORKFLOWS_PATH.replace(/\/$/, "").replace(/^\//, "");
   return `${basePath}/${cleanVirtualPath}`;
 }
 
@@ -124,8 +124,9 @@ apiRouter.get("/workflows", async (req, res, next) => {
       `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
       {
         params: {
-          path: GITLAB_WORKFLOWS_PATH,
-          ref: GITLAB_BRANCH
+          path: GITLAB_WORKFLOWS_PATH === "." ? "" : GITLAB_WORKFLOWS_PATH,
+          ref: GITLAB_BRANCH,
+          recursive: true
         }
       }
     );
