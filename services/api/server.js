@@ -288,13 +288,17 @@ apiRouter.post(
       const injectedContent = injectDefaults(content, virtualPath);
 
       const response = await gitlabApi.post(
-        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(
-          filePath
-        )}`,
+        `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
         {
           branch: GITLAB_BRANCH,
-          content: injectedContent,
-          commit_message: commit_message || `Create ${filePath}`
+          commit_message: commit_message || `Create ${filePath}`,
+          actions: [
+            {
+              action: "create",
+              file_path: filePath,
+              content: injectedContent
+            }
+          ]
         }
       );
 
@@ -322,39 +326,48 @@ apiRouter.put(
       const injectedContent = injectDefaults(content, virtualPath);
 
       try {
-        const response = await gitlabApi.put(
-          `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(
-            filePath
-          )}`,
+        const response = await gitlabApi.post(
+          `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
           {
             branch: GITLAB_BRANCH,
-            content: injectedContent,
-            commit_message: commit_message || `Update ${filePath}`
+            commit_message: commit_message || `Update ${filePath}`,
+            actions: [
+              {
+                action: "update",
+                file_path: filePath,
+                content: injectedContent
+              }
+            ]
           }
         );
         res.json(response.data);
       } catch (putError) {
         // If the file doesn't exist yet, GitLab PUT returns 400. 
-        // We gracefully fallback to POST to create it.
+        // We gracefully fallback to POST (create) action.
         if (
           putError.response &&
           putError.response.status === 400 &&
           putError.response.data &&
-          putError.response.data.message === "A file with this name doesn't exist"
+          putError.response.data.message &&
+          putError.response.data.message.includes("A file with this name doesn't exist")
         ) {
           const postResponse = await gitlabApi.post(
-            `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(
-              filePath
-            )}`,
+            `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
             {
               branch: GITLAB_BRANCH,
-              content: injectedContent,
-              commit_message: commit_message || `Create ${filePath}`
+              commit_message: commit_message || `Create ${filePath}`,
+              actions: [
+                {
+                  action: "create",
+                  file_path: filePath,
+                  content: injectedContent
+                }
+              ]
             }
           );
           return res.status(201).json(postResponse.data);
         }
-        // Otherwise re-throw the original PUT error
+        // Otherwise re-throw the original error
         throw putError;
       }
     } catch (error) {
