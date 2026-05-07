@@ -104,6 +104,16 @@ const validateArgoWorkflow = (req, res, next) => {
 
 const apiRouter = express.Router();
 
+// Helper to convert a frontend virtual path to a physical GitLab path
+function getGitLabPath(virtualPath) {
+  if (!GITLAB_WORKFLOWS_PATH || GITLAB_WORKFLOWS_PATH === ".") {
+    return virtualPath;
+  }
+  const basePath = GITLAB_WORKFLOWS_PATH.replace(/\/$/, "");
+  const cleanVirtualPath = virtualPath.replace(/^\//, "");
+  return `${basePath}/${cleanVirtualPath}`;
+}
+
 /**
  * GET /api/workflows
  * List files ending in .yaml, .yml, or .deleted in the GITLAB_WORKFLOWS_PATH.
@@ -120,11 +130,23 @@ apiRouter.get("/workflows", async (req, res, next) => {
       }
     );
 
-    const workflows = response.data.filter(
-      (file) =>
-        file.type === "blob" &&
-        (file.name.endsWith(".yaml") || file.name.endsWith(".yml") || file.name.endsWith(".deleted"))
-    );
+    const prefix = GITLAB_WORKFLOWS_PATH && GITLAB_WORKFLOWS_PATH !== "." 
+      ? `${GITLAB_WORKFLOWS_PATH.replace(/\/$/, "")}/` 
+      : "";
+
+    const workflows = response.data
+      .filter(
+        (file) =>
+          file.type === "blob" &&
+          (file.name.endsWith(".yaml") || file.name.endsWith(".yml") || file.name.endsWith(".deleted"))
+      )
+      .map((file) => {
+        let relativePath = file.path;
+        if (prefix && relativePath.startsWith(prefix)) {
+          relativePath = relativePath.slice(prefix.length);
+        }
+        return { ...file, path: relativePath };
+      });
 
     res.json(workflows);
   } catch (error) {
@@ -136,12 +158,16 @@ apiRouter.get("/workflows", async (req, res, next) => {
 });
 
 /**
- * GET /api/workflows/:path
+ * GET /api/workflows/<path>
  * Get the raw content of a file.
  */
-apiRouter.get("/workflows/:path", async (req, res, next) => {
+apiRouter.get("/workflows/*", async (req, res, next) => {
+  // If the wildcard matches nothing, req.params[0] might be undefined.
+  if (req.path === '/workflows/' || req.path === '/workflows') return next();
+
   try {
-    const filePath = req.params.path;
+    const virtualPath = req.params[0];
+    const filePath = getGitLabPath(virtualPath);
     const ref = req.query.ref || GITLAB_BRANCH;
 
     const response = await gitlabApi.get(
@@ -165,7 +191,8 @@ apiRouter.get("/workflows/:path", async (req, res, next) => {
  */
 apiRouter.get("/workflows/*/history", async (req, res, next) => {
   try {
-    const filePath = req.params[0];
+    const virtualPath = req.params[0];
+    const filePath = getGitLabPath(virtualPath);
     const response = await gitlabApi.get(
       `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
       {
@@ -188,7 +215,8 @@ apiRouter.get("/workflows/*/history", async (req, res, next) => {
  */
 apiRouter.delete("/workflows/*", async (req, res, next) => {
   try {
-    const filePath = req.params[0];
+    const virtualPath = req.params[0];
+    const filePath = getGitLabPath(virtualPath);
     
     const response = await gitlabApi.post(
       `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
@@ -217,7 +245,8 @@ apiRouter.delete("/workflows/*", async (req, res, next) => {
  */
 apiRouter.post("/workflows/*/restore", async (req, res, next) => {
   try {
-    const filePath = req.params[0];
+    const virtualPath = req.params[0];
+    const filePath = getGitLabPath(virtualPath);
     const originalPath = filePath.replace(/\.deleted$/, "");
 
     const response = await gitlabApi.post(
@@ -250,16 +279,9 @@ apiRouter.post(
   validateArgoWorkflow,
   async (req, res, next) => {
     try {
-      let filePath = req.params[0];
+      const virtualPath = req.params[0];
+      const filePath = getGitLabPath(virtualPath);
       const { content, commit_message } = req.body;
-
-      // Prepend GITLAB_WORKFLOWS_PATH if it's not already in the path and it's not the root
-      if (
-        GITLAB_WORKFLOWS_PATH !== "." &&
-        !filePath.startsWith(GITLAB_WORKFLOWS_PATH)
-      ) {
-        filePath = `${GITLAB_WORKFLOWS_PATH.replace(/\/$/, "")}/${filePath}`;
-      }
 
       // Inject defaults if configured
       const injectedContent = injectDefaults(content);
@@ -291,7 +313,8 @@ apiRouter.put(
   validateArgoWorkflow,
   async (req, res, next) => {
     try {
-      const filePath = req.params[0];
+      const virtualPath = req.params[0];
+      const filePath = getGitLabPath(virtualPath);
       const { content, commit_message } = req.body;
 
       // Inject defaults if configured
