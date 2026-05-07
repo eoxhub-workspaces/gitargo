@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import YAML from "yaml";
 import {
   getWorkflows,
@@ -18,6 +18,7 @@ import {
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import Spinner from "../components/global/Spinner";
+import { NewWorkflowModal } from "../components/modals/NewWorkflowModal";
 
 interface WorkflowMetadata {
   kind?: string;
@@ -27,6 +28,7 @@ interface WorkflowMetadata {
 }
 
 const ListView: React.FC = () => {
+  const navigate = useNavigate();
   const [workflows, setWorkflows] = useState<WorkflowFile[]>([]);
   const [metadata, setMetadata] = useState<Record<string, WorkflowMetadata>>(
     {}
@@ -34,6 +36,23 @@ const ListView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewTab, setViewTab] = useState<"active" | "deleted">("active");
+
+  const [newModalMode, setNewModalMode] = useState<"code" | "canvas" | null>(
+    null
+  );
+
+  const handleCreateNew = (name: string, kind: string) => {
+    if (newModalMode === "code") {
+      navigate(
+        `/new/code?name=${encodeURIComponent(name)}&kind=${encodeURIComponent(kind)}`
+      );
+    } else if (newModalMode === "canvas") {
+      navigate(
+        `/new/canvas?name=${encodeURIComponent(name)}&kind=${encodeURIComponent(kind)}`
+      );
+    }
+    setNewModalMode(null);
+  };
 
   const fetchWorkflows = async () => {
     try {
@@ -126,14 +145,20 @@ const ListView: React.FC = () => {
 
   return (
     <div className="flex flex-col flex-1 min-h-screen bg-gray-50">
+      {newModalMode && (
+        <NewWorkflowModal
+          onClose={() => setNewModalMode(null)}
+          onSubmit={handleCreateNew}
+        />
+      )}
       <header className="bg-white border-b border-gray-200 px-8 py-4 flex justify-between items-center sticky top-0 z-10 shadow-sm">
         <div>
           <h1 className="text-2xl font-bold text-[#004170]">Workflows</h1>
           <p className="text-sm text-gray-500">Manage your Argo Workflows</p>
         </div>
         <div className="flex space-x-2">
-          <Link
-            to="/new/code"
+          <button
+            onClick={() => setNewModalMode("code")}
             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded shadow-sm text-white bg-[#004170] hover:bg-[#002f52] focus:outline-none transition-colors"
           >
             <CodeBracketIcon
@@ -141,14 +166,14 @@ const ListView: React.FC = () => {
               aria-hidden="true"
             />
             New (Code)
-          </Link>
-          <Link
-            to="/new/canvas"
+          </button>
+          <button
+            onClick={() => setNewModalMode("canvas")}
             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded shadow-sm text-white bg-[#0078b4] hover:bg-[#005f8f] focus:outline-none transition-colors"
           >
             <Squares2X2Icon className="-ml-1 mr-2 h-5 w-5" aria-hidden="true" />
             New (Canvas)
-          </Link>
+          </button>
         </div>
       </header>
 
@@ -211,8 +236,8 @@ const ListView: React.FC = () => {
             </h3>
             {viewTab === "active" && (
               <div className="mt-6 flex justify-center space-x-3">
-                <Link
-                  to="/new/code"
+                <button
+                  onClick={() => setNewModalMode("code")}
                   className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded text-white bg-[#004170] hover:bg-[#002f52]"
                 >
                   <CodeBracketIcon
@@ -220,9 +245,9 @@ const ListView: React.FC = () => {
                     aria-hidden="true"
                   />
                   Code Mode
-                </Link>
-                <Link
-                  to="/new/canvas"
+                </button>
+                <button
+                  onClick={() => setNewModalMode("canvas")}
                   className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded text-white bg-[#0078b4] hover:bg-[#005f8f]"
                 >
                   <Squares2X2Icon
@@ -230,7 +255,7 @@ const ListView: React.FC = () => {
                     aria-hidden="true"
                   />
                   Canvas Mode
-                </Link>
+                </button>
               </div>
             )}
           </div>

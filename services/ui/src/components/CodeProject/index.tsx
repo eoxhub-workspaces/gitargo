@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import toast from "react-hot-toast";
 import { validateK8sYaml } from "../../utils/k8sValidation";
 import { CloudArrowUpIcon, Squares2X2Icon } from "@heroicons/react/20/solid";
@@ -12,12 +12,20 @@ import CodeEditor from "../CodeEditor";
 export default function CodeProject() {
   const { filename } = useParams<{ filename?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const initialName = queryParams.get("name") || undefined;
+  const initialKind = queryParams.get("kind") || "WorkflowTemplate";
 
-  const [currentFilename, setCurrentFilename] = useState(filename);
+  const [currentFilename, setCurrentFilename] = useState(
+    filename || initialName
+  );
   const [yamlContent, setYamlContent] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(!!filename);
 
   useTitle([currentFilename || "New workflow", "Code Mode"].join(" | "));
+
+  const isNewWorkflow = !filename && !!initialName;
 
   useEffect(() => {
     if (filename) {
@@ -35,25 +43,22 @@ export default function CodeProject() {
       };
       loadWorkflow();
     } else {
+      const logicalName = initialName
+        ? initialName.replace(/\.ya?ml$/i, "")
+        : "workflow-name";
       setYamlContent(
-        'apiVersion: argoproj.io/v1alpha1\nkind: WorkflowTemplate\nmetadata:\n  name: workflow-name\n  generateName: workflow-name-\nspec:\n  entrypoint: main\n  templates:\n    - name: main\n      container:\n        image: alpine:latest\n        command: [sh, -c]\n        args: ["echo Hello World"]\n'
+        `apiVersion: argoproj.io/v1alpha1\nkind: ${initialKind}\nmetadata:\n  name: ${logicalName}\n  generateName: ${logicalName}-\nspec:\n  entrypoint: main\n  templates:\n    - name: main\n      container:\n        image: alpine:latest\n        command: [sh, -c]\n        args: ["echo Hello World"]\n`
       );
       setLoading(false);
-      setCurrentFilename(undefined);
+      setCurrentFilename(initialName);
     }
-  }, [filename]);
+  }, [filename, initialKind, initialName]);
 
   const handleSave = async () => {
-    let name = currentFilename;
+    const name = currentFilename;
     if (!name) {
-      const promptResult = window.prompt(
-        "Enter filename (e.g. my-workflow.yaml)"
-      );
-      if (!promptResult) return;
-      name = promptResult;
-      if (!name.endsWith(".yaml") && !name.endsWith(".yml")) {
-        name += ".yaml";
-      }
+      toast.error("Filename is required.");
+      return;
     }
 
     try {
@@ -66,11 +71,11 @@ export default function CodeProject() {
 
     const saveToast = toast.loading("Saving workflow...");
     try {
-      if (currentFilename) {
+      if (!isNewWorkflow) {
         await api.updateWorkflow(
-          currentFilename,
+          name,
           yamlContent,
-          `Update ${currentFilename} via Code Editor`
+          `Update ${name} via Code Editor`
         );
       } else {
         await api.createWorkflow(

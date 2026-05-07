@@ -158,6 +158,30 @@ apiRouter.get("/workflows", async (req, res, next) => {
 });
 
 /**
+ * GET /api/workflows/<path>/history
+ * Get the commit history for a file.
+ */
+apiRouter.get("/workflows/*/history", async (req, res, next) => {
+  try {
+    const virtualPath = req.params[0];
+    const filePath = getGitLabPath(virtualPath);
+    const response = await gitlabApi.get(
+      `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+      {
+        params: {
+          path: filePath,
+          ref: GITLAB_BRANCH
+        }
+      }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /api/workflows/<path>
  * Get the raw content of a file.
  */
@@ -186,20 +210,27 @@ apiRouter.get("/workflows/*", async (req, res, next) => {
 });
 
 /**
- * GET /api/workflows/<path>/history
- * Get the commit history for a file.
+ * POST /api/workflows/<path>/restore
+ * Restore a soft-deleted workflow.
  */
-apiRouter.get("/workflows/*/history", async (req, res, next) => {
+apiRouter.post("/workflows/*/restore", async (req, res, next) => {
   try {
     const virtualPath = req.params[0];
     const filePath = getGitLabPath(virtualPath);
-    const response = await gitlabApi.get(
+    const originalPath = filePath.replace(/\.deleted$/, "");
+
+    const response = await gitlabApi.post(
       `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
       {
-        params: {
-          path: filePath,
-          ref: GITLAB_BRANCH
-        }
+        branch: GITLAB_BRANCH,
+        commit_message: `Restore ${originalPath}`,
+        actions: [
+          {
+            action: "move",
+            previous_path: filePath,
+            file_path: originalPath
+          }
+        ]
       }
     );
 
@@ -228,37 +259,6 @@ apiRouter.delete("/workflows/*", async (req, res, next) => {
             action: "move",
             previous_path: filePath,
             file_path: `${filePath}.deleted`
-          }
-        ]
-      }
-    );
-
-    res.json(response.data);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * POST /api/workflows/<path>/restore
- * Restore a soft-deleted workflow.
- */
-apiRouter.post("/workflows/*/restore", async (req, res, next) => {
-  try {
-    const virtualPath = req.params[0];
-    const filePath = getGitLabPath(virtualPath);
-    const originalPath = filePath.replace(/\.deleted$/, "");
-
-    const response = await gitlabApi.post(
-      `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
-      {
-        branch: GITLAB_BRANCH,
-        commit_message: `Restore ${originalPath}`,
-        actions: [
-          {
-            action: "move",
-            previous_path: filePath,
-            file_path: originalPath
           }
         ]
       }

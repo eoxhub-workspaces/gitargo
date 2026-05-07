@@ -33,7 +33,7 @@ import defaultCanvasPosition from "../../configs/defaults/canvasPosition";
 import defaultNodes from "../../configs/defaults/nodes";
 import defaultConnections from "../../configs/defaults/connections";
 
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import YAML from "yaml";
 import toast from "react-hot-toast";
 import * as api from "../../utils/api";
@@ -42,6 +42,11 @@ import { validateK8sYaml } from "../../utils/k8sValidation";
 
 export default function Project() {
   const { height } = useWindowDimensions();
+  const location = useLocation();
+  const queryParams = new URLSearchParams(location.search);
+  const initialName = queryParams.get("name") || undefined;
+  const initialKind = queryParams.get("kind") || "WorkflowTemplate";
+
   const stateNodesRef = useRef<Dictionary<INodeItem>>();
   const stateSelectedNodesRef = useRef<Record<string, any>>();
   const stateConnectionsRef = useRef<[[string, string]] | []>();
@@ -60,7 +65,9 @@ export default function Project() {
 
   const { filename, mode } = useParams<{ filename?: string; mode?: string }>();
   const navigate = useNavigate();
-  const [currentFilename, setCurrentFilename] = useState(filename);
+  const [currentFilename, setCurrentFilename] = useState(
+    filename || initialName
+  );
   const [viewMode, setViewMode] = useState<"split" | "canvas" | "code">(
     (mode as "split" | "canvas" | "code") || "split"
   );
@@ -71,17 +78,13 @@ export default function Project() {
   stateConnectionsRef.current = connections;
   stateSelectedNodesRef.current = selectedNodes;
 
+  const isNewWorkflow = !filename && !!initialName;
+
   const handleSave = async () => {
-    let name = currentFilename;
+    const name = currentFilename;
     if (!name) {
-      const promptResult = window.prompt(
-        "Enter filename (e.g. my-workflow.yaml)"
-      );
-      if (!promptResult) return;
-      name = promptResult;
-      if (!name.endsWith(".yaml") && !name.endsWith(".yml")) {
-        name += ".yaml";
-      }
+      toast.error("Filename is required.");
+      return;
     }
 
     const saveToast = toast.loading("Saving workflow...");
@@ -100,7 +103,9 @@ export default function Project() {
       const manifest = generateSteppedManifest(
         { nodes, connections: flatConnections },
         visualState,
-        baseYamlRef.current
+        baseYamlRef.current,
+        initialKind,
+        initialName
       );
       const yamlContent = YAML.stringify(manifest);
 
@@ -111,15 +116,10 @@ export default function Project() {
         return;
       }
 
-      if (currentFilename) {
-        await api.updateWorkflow(
-          currentFilename,
-          yamlContent,
-          `Update ${currentFilename}`
-        );
+      if (!isNewWorkflow) {
+        await api.updateWorkflow(name, yamlContent, `Update ${name}`);
       } else {
         await api.createWorkflow(name, yamlContent, `Create ${name}`);
-        setCurrentFilename(name);
         navigate(`/edit/canvas/${encodeURIComponent(name)}`, { replace: true });
       }
 
@@ -469,7 +469,7 @@ export default function Project() {
       setNodes(defaultNodes as any);
       setConnections(defaultConnections as any);
       setCanvasPosition(defaultCanvasPosition as any);
-      setCurrentFilename(undefined);
+      setCurrentFilename(initialName);
       baseYamlRef.current = null;
     }
   }, [filename]);

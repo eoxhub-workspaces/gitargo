@@ -240,13 +240,19 @@ const getTemplate = (nodes: Dictionary<ITemplateNode>): ITemplate[] | [] => {
   return ret;
 };
 
-const getBaseWorkflowTemplate = (): IWorkflow => {
+const getBaseWorkflowTemplate = (
+  initialKind?: string,
+  initialName?: string
+): IWorkflow => {
+  const logicalName = initialName
+    ? initialName.replace(/\.ya?ml$/i, "")
+    : "workflow-name";
   return {
     apiVersion: "argoproj.io/v1alpha1",
-    kind: "WorkflowTemplate",
+    kind: initialKind || "WorkflowTemplate",
     metadata: {
-      name: "workflow-name",
-      generateName: "workflow-name-",
+      name: logicalName,
+      generateName: `${logicalName}-`,
       annotations: {}
     },
     spec: {
@@ -271,7 +277,9 @@ const getEntryPointName = (node: INodeItem): string => {
 const generateSteppedManifest = (
   graphData: any,
   visualState?: any,
-  baseYaml?: any
+  baseYaml?: any,
+  initialKind?: string,
+  initialName?: string
 ): any => {
   const nodes = graphData["nodes"] as Record<string, INodeItem>;
   const connections = graphData["connections"];
@@ -280,7 +288,7 @@ const generateSteppedManifest = (
   // Use the provided baseYaml or default to a new Workflow template
   const base = baseYaml
     ? JSON.parse(JSON.stringify(baseYaml))
-    : getBaseWorkflowTemplate();
+    : getBaseWorkflowTemplate(initialKind, initialName);
   const templates = getTemplate(getTemplateNodes(nodes));
 
   if (visualState) {
