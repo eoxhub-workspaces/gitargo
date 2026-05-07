@@ -245,6 +245,7 @@ const getBaseWorkflowTemplate = (): IWorkflow => {
     apiVersion: "argoproj.io/v1alpha1",
     kind: "Workflow",
     metadata: {
+      name: "workflow-name",
       generateName: "workflow-name-",
       annotations: {}
     },

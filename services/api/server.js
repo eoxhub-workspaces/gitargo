@@ -106,7 +106,7 @@ const apiRouter = express.Router();
 
 /**
  * GET /api/workflows
- * List files ending in .yaml or .yml in the GITLAB_WORKFLOWS_PATH.
+ * List files ending in .yaml, .yml, or .deleted in the GITLAB_WORKFLOWS_PATH.
  */
 apiRouter.get("/workflows", async (req, res, next) => {
   try {
@@ -123,7 +123,7 @@ apiRouter.get("/workflows", async (req, res, next) => {
     const workflows = response.data.filter(
       (file) =>
         file.type === "blob" &&
-        (file.name.endsWith(".yaml") || file.name.endsWith(".yml"))
+        (file.name.endsWith(".yaml") || file.name.endsWith(".yml") || file.name.endsWith(".deleted"))
     );
 
     res.json(workflows);
@@ -183,6 +183,65 @@ apiRouter.get("/workflows/:path/history", async (req, res, next) => {
 });
 
 /**
+ * DELETE /api/workflows/:path
+ * Soft-delete a workflow by renaming it with a .deleted extension.
+ */
+apiRouter.delete("/workflows/:path", async (req, res, next) => {
+  try {
+    const filePath = req.params.path;
+    
+    const response = await gitlabApi.post(
+      `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+      {
+        branch: GITLAB_BRANCH,
+        commit_message: `Delete ${filePath}`,
+        actions: [
+          {
+            action: "move",
+            previous_path: filePath,
+            file_path: `${filePath}.deleted`
+          }
+        ]
+      }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/workflows/:path/restore
+ * Restore a soft-deleted workflow.
+ */
+apiRouter.post("/workflows/:path/restore", async (req, res, next) => {
+  try {
+    const filePath = req.params.path;
+    const originalPath = filePath.replace(/\.deleted$/, "");
+
+    const response = await gitlabApi.post(
+      `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+      {
+        branch: GITLAB_BRANCH,
+        commit_message: `Restore ${originalPath}`,
+        actions: [
+          {
+            action: "move",
+            previous_path: filePath,
+            file_path: originalPath
+          }
+        ]
+      }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /api/workflows/:path
  * Create a new file.
  */
@@ -191,14 +250,27 @@ apiRouter.post(
   validateArgoWorkflow,
   async (req, res, next) => {
     try {
-      const filePath = req.params.path;
+      let filePath = req.params.path;
       const { content, commit_message } = req.body;
 
+      // Prepend GITLAB_WORKFLOWS_PATH if it's not already in the path and it's not the root
+      if (
+        GITLAB_WORKFLOWS_PATH !== "." &&
+        !filePath.startsWith(GITLAB_WORKFLOWS_PATH)
+      ) {
+        filePath = `${GITLAB_WORKFLOWS_PATH.replace(/\/$/, "")}/${filePath}`;
+      }
+
+      // Inject defaults if configured
+      const injectedContent = injectDefaults(content);
+
       const response = await gitlabApi.post(
-        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}`,
+        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(
+          filePath
+        )}`,
         {
           branch: GITLAB_BRANCH,
-          content: content,
+          content: injectedContent,
           commit_message: commit_message || `Create ${filePath}`
         }
       );
@@ -222,11 +294,16 @@ apiRouter.put(
       const filePath = req.params.path;
       const { content, commit_message } = req.body;
 
+      // Inject defaults if configured
+      const injectedContent = injectDefaults(content);
+
       const response = await gitlabApi.put(
-        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}`,
+        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(
+          filePath
+        )}`,
         {
           branch: GITLAB_BRANCH,
-          content: content,
+          content: injectedContent,
           commit_message: commit_message || `Update ${filePath}`
         }
       );
@@ -237,6 +314,72 @@ apiRouter.put(
     }
   }
 );
+
+// --- Helper for injecting defaults ---
+function injectDefaults(content) {
+  const ARGO_NAMESPACE = process.env.ARGO_NAMESPACE;
+  const ARGO_SERVICE_ACCOUNT = process.env.ARGO_SERVICE_ACCOUNT;
+  const ARGO_TOLERATIONS = process.env.ARGO_TOLERATIONS;
+  const ARGO_NODE_SELECTOR = process.env.ARGO_NODE_SELECTOR;
+  const ARGO_AFFINITY = process.env.ARGO_AFFINITY;
+
+  try {
+    const parsed = YAML.parse(content);
+    if (!parsed || typeof parsed !== "object") return content;
+
+    if (!parsed.metadata) parsed.metadata = {};
+    
+    // Ensure metadata.name or generateName is present
+    if (!parsed.metadata.name && !parsed.metadata.generateName) {
+      parsed.metadata.name = "workflow-default";
+    }
+
+    if (ARGO_NAMESPACE && !parsed.metadata.namespace) {
+      parsed.metadata.namespace = ARGO_NAMESPACE;
+    }
+
+    if (!parsed.spec) parsed.spec = {};
+    const isCron = parsed.kind === "CronWorkflow";
+    if (isCron && !parsed.spec.workflowSpec) parsed.spec.workflowSpec = {};
+    const spec = isCron ? parsed.spec.workflowSpec : parsed.spec;
+
+    if (spec) {
+      if (ARGO_SERVICE_ACCOUNT && !spec.serviceAccountName) {
+        spec.serviceAccountName = ARGO_SERVICE_ACCOUNT;
+      }
+
+      if (ARGO_TOLERATIONS && (!spec.tolerations || spec.tolerations.length === 0)) {
+        try {
+          spec.tolerations = JSON.parse(ARGO_TOLERATIONS);
+        } catch (e) {
+          console.error("Failed to parse ARGO_TOLERATIONS", e);
+        }
+      }
+
+      if (ARGO_NODE_SELECTOR && (!spec.nodeSelector || Object.keys(spec.nodeSelector).length === 0)) {
+        try {
+          spec.nodeSelector = JSON.parse(ARGO_NODE_SELECTOR);
+        } catch (e) {
+          console.error("Failed to parse ARGO_NODE_SELECTOR", e);
+        }
+      }
+
+      if (ARGO_AFFINITY && (!spec.affinity || Object.keys(spec.affinity).length === 0)) {
+        try {
+          spec.affinity = JSON.parse(ARGO_AFFINITY);
+        } catch (e) {
+          console.error("Failed to parse ARGO_AFFINITY", e);
+        }
+      }
+    }
+
+    return YAML.stringify(parsed);
+  } catch (error) {
+    console.error("Error injecting defaults:", error);
+    return content;
+  }
+}
+
 
 // Resilient API mounting
 if (BASE_PATH !== "") {

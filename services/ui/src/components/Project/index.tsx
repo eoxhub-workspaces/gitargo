@@ -38,6 +38,7 @@ import YAML from "yaml";
 import toast from "react-hot-toast";
 import * as api from "../../utils/api";
 import generateSteppedManifest from "../../utils/generators/step";
+import { validateK8sYaml } from "../../utils/k8sValidation";
 
 export default function Project() {
   const { height } = useWindowDimensions();
@@ -103,6 +104,13 @@ export default function Project() {
       );
       const yamlContent = YAML.stringify(manifest);
 
+      try {
+        validateK8sYaml(yamlContent);
+      } catch (e: any) {
+        toast.error(`Validation Error: ${e.message}`, { duration: 5000 });
+        return;
+      }
+
       if (currentFilename) {
         await api.updateWorkflow(
           currentFilename,
@@ -116,8 +124,12 @@ export default function Project() {
       }
 
       toast.success("Workflow saved successfully!", { id: saveToast });
-    } catch (error) {
-      toast.error("Failed to save workflow", { id: saveToast });
+    } catch (error: any) {
+      const msg =
+        error.response?.data?.message ||
+        error.message ||
+        "Failed to save workflow";
+      toast.error(`Save Failed: ${msg}`, { id: saveToast, duration: 5000 });
       console.error(error);
     }
   };

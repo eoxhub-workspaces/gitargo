@@ -1,12 +1,8 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import YAML from "yaml";
 import toast from "react-hot-toast";
-import {
-  CloudArrowUpIcon,
-  CodeBracketIcon,
-  Squares2X2Icon
-} from "@heroicons/react/20/solid";
+import { validateK8sYaml } from "../../utils/k8sValidation";
+import { CloudArrowUpIcon, Squares2X2Icon } from "@heroicons/react/20/solid";
 
 import * as api from "../../utils/api";
 import { useTitle } from "../../hooks";
@@ -40,7 +36,7 @@ export default function CodeProject() {
       loadWorkflow();
     } else {
       setYamlContent(
-        'apiVersion: argoproj.io/v1alpha1\nkind: Workflow\nmetadata:\n  generateName: workflow-name-\nspec:\n  entrypoint: main\n  templates:\n    - name: main\n      container:\n        image: alpine:latest\n        command: [sh, -c]\n        args: ["echo Hello World"]\n'
+        'apiVersion: argoproj.io/v1alpha1\nkind: Workflow\nmetadata:\n  name: workflow-name\n  generateName: workflow-name-\nspec:\n  entrypoint: main\n  templates:\n    - name: main\n      container:\n        image: alpine:latest\n        command: [sh, -c]\n        args: ["echo Hello World"]\n'
       );
       setLoading(false);
       setCurrentFilename(undefined);
@@ -61,10 +57,10 @@ export default function CodeProject() {
     }
 
     try {
-      // Basic validation
-      YAML.parse(yamlContent);
+      // Validate for Kustomize and general Kubernetes correctness
+      validateK8sYaml(yamlContent);
     } catch (e: any) {
-      toast.error(`Invalid YAML: ${e.message}`);
+      toast.error(`Validation Error: ${e.message}`, { duration: 5000 });
       return;
     }
 
@@ -88,8 +84,12 @@ export default function CodeProject() {
       }
 
       toast.success("Workflow saved successfully!", { id: saveToast });
-    } catch (error) {
-      toast.error("Failed to save workflow", { id: saveToast });
+    } catch (error: any) {
+      const msg =
+        error.response?.data?.message ||
+        error.message ||
+        "Failed to save workflow";
+      toast.error(`Save Failed: ${msg}`, { id: saveToast, duration: 5000 });
       console.error(error);
     }
   };

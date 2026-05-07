@@ -82,4 +82,16 @@ export const updateWorkflow = async (
   return response.data;
 };
 
+export const deleteWorkflow = async (path: string) => {
+  const response = await api.delete(`/workflows/${encodeURIComponent(path)}`);
+  return response.data;
+};
+
+export const restoreWorkflow = async (path: string) => {
+  const response = await api.post(
+    `/workflows/${encodeURIComponent(path)}/restore`
+  );
+  return response.data;
+};
+
 export default api;
