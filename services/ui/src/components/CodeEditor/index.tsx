@@ -5,13 +5,20 @@ import Editor, { useMonaco } from "@monaco-editor/react";
 // The workers must be served from the public directory (static/js).
 window.MonacoEnvironment = {
   getWorkerUrl: function (_moduleId: any, label: string) {
+    const base = window.BASE_PATH || "";
+    const workerPath = (path: string) => {
+      // Ensure we don't have double slashes and it's absolute from the root
+      const p = `${base}/static/js/${path}`.replace(/\/+/g, "/");
+      return p;
+    };
+
     if (label === "yaml") {
-      return "./static/js/yaml.worker.js";
+      return workerPath("yaml.worker.js");
     }
     if (label === "json") {
-      return "./static/js/json.worker.js";
+      return workerPath("json.worker.js");
     }
-    return "./static/js/editor.worker.js";
+    return workerPath("editor.worker.js");
   }
 };
 
@@ -40,24 +47,8 @@ const CodeEditor = (props: ICodeEditorProps) => {
             format: true,
             schemas: [
               {
-                uri: "https://argo-schema/workflow.json",
-                fileMatch: ["*"],
-                schema: {
-                  oneOf: [
-                    {
-                      $ref: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json#/definitions/io.argoproj.workflow.v1alpha1.Workflow"
-                    },
-                    {
-                      $ref: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json#/definitions/io.argoproj.workflow.v1alpha1.CronWorkflow"
-                    },
-                    {
-                      $ref: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json#/definitions/io.argoproj.workflow.v1alpha1.WorkflowTemplate"
-                    },
-                    {
-                      $ref: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json#/definitions/io.argoproj.workflow.v1alpha1.ClusterWorkflowTemplate"
-                    }
-                  ]
-                }
+                uri: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json",
+                fileMatch: ["*"]
               }
             ]
           });
@@ -90,8 +81,8 @@ const CodeEditor = (props: ICodeEditorProps) => {
           scrollBeyondLastLine: true,
           fontSize: 14,
           tabSize: 2,
-          wordBasedSuggestions: "off",
-          acceptSuggestionOnEnter: "off",
+          wordBasedSuggestions: "currentDocument",
+          acceptSuggestionOnEnter: "on",
           suggestOnTriggerCharacters: true,
           quickSuggestions: {
             other: true,

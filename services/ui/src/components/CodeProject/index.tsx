@@ -3,6 +3,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom";
 import toast from "react-hot-toast";
 import { validateK8sYaml } from "../../utils/k8sValidation";
 import { CloudArrowUpIcon, Squares2X2Icon } from "@heroicons/react/20/solid";
+import YAML from "yaml";
 
 import * as api from "../../utils/api";
 import { useTitle } from "../../hooks";
@@ -16,43 +17,106 @@ export default function CodeProject() {
   const queryParams = new URLSearchParams(location.search);
   const initialName = queryParams.get("name") || undefined;
   const initialKind = queryParams.get("kind") || "WorkflowTemplate";
+  const initialProfile = queryParams.get("profile") || "";
+  const initialEphemeral = queryParams.get("ephemeral") === "true";
+  const initialEphemeralSize = queryParams.get("ephemeralSize") || "2Gi";
 
   const [currentFilename, setCurrentFilename] = useState(
     filename || initialName
   );
   const [yamlContent, setYamlContent] = useState<string>("");
-  const [loading, setLoading] = useState<boolean>(!!filename);
+  const [loading, setLoading] = useState<boolean>(true);
 
   useTitle([currentFilename || "New workflow", "Code Mode"].join(" | "));
 
   const isNewWorkflow = !filename && !!initialName;
 
   useEffect(() => {
-    if (filename) {
-      const loadWorkflow = async () => {
-        try {
+    const init = async () => {
+      try {
+        if (filename) {
           const content = await api.getWorkflow(filename);
           setYamlContent(content);
           setCurrentFilename(filename);
-        } catch (error) {
-          toast.error("Failed to load workflow");
-          console.error(error);
-        } finally {
-          setLoading(false);
+        } else {
+          const config = await api.getConfig();
+          const logicalName = initialName
+            ? initialName.replace(/\.ya?ml$/i, "")
+            : "workflow-name";
+
+          const profileData = initialProfile
+            ? config.profiles[initialProfile]
+            : null;
+
+          const workflow: any = {
+            apiVersion: "argoproj.io/v1alpha1",
+            kind: initialKind,
+            metadata: {
+              name: logicalName,
+              generateName: `${logicalName}-`
+            },
+            spec: {
+              entrypoint: "main",
+              templates: [
+                {
+                  name: "main",
+                  container: {
+                    image: "alpine:latest",
+                    command: ["sh", "-c"],
+                    args: ["echo Hello World"]
+                  }
+                }
+              ]
+            }
+          };
+
+          if (profileData) {
+            workflow.spec.templates[0].container.resources =
+              profileData.resources;
+            if (profileData.tolerations) {
+              workflow.spec.tolerations = profileData.tolerations;
+            }
+          }
+
+          if (initialEphemeral) {
+            const vol = {
+              ...config.ephemeralVolume,
+              storage: initialEphemeralSize
+            };
+            workflow.spec.volumeClaimTemplates = [
+              {
+                metadata: { name: vol.name },
+                spec: {
+                  accessModes: ["ReadWriteOnce"],
+                  resources: { requests: { storage: vol.storage } },
+                  storageClassName: vol.storageClassName
+                }
+              }
+            ];
+            workflow.spec.templates[0].container.volumeMounts = [
+              { name: vol.name, mountPath: vol.mountPath }
+            ];
+          }
+
+          setYamlContent(YAML.stringify(workflow));
+          setCurrentFilename(initialName);
         }
-      };
-      loadWorkflow();
-    } else {
-      const logicalName = initialName
-        ? initialName.replace(/\.ya?ml$/i, "")
-        : "workflow-name";
-      setYamlContent(
-        `apiVersion: argoproj.io/v1alpha1\nkind: ${initialKind}\nmetadata:\n  name: ${logicalName}\n  generateName: ${logicalName}-\nspec:\n  entrypoint: main\n  templates:\n    - name: main\n      container:\n        image: alpine:latest\n        command: [sh, -c]\n        args: ["echo Hello World"]\n`
-      );
-      setLoading(false);
-      setCurrentFilename(initialName);
-    }
-  }, [filename, initialKind, initialName]);
+      } catch (error) {
+        toast.error("Failed to initialize workflow");
+        console.error(error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    init();
+  }, [
+    filename,
+    initialKind,
+    initialName,
+    initialProfile,
+    initialEphemeral,
+    initialEphemeralSize
+  ]);
 
   const handleSave = async () => {
     const name = currentFilename;

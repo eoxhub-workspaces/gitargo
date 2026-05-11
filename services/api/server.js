@@ -100,9 +100,68 @@ const validateArgoWorkflow = (req, res, next) => {
   }
 };
 
+// --- Configuration & Profiles ---
+const DEFAULT_PROFILES = {
+  "cpu-standard": {
+    label: "Standard CPU (2 CPU, 4Gi RAM)",
+    resources: {
+      limits: { cpu: "2", memory: "4Gi" },
+      requests: { cpu: "500m", memory: "1Gi" }
+    }
+  },
+  "cpu-performance": {
+    label: "Performance CPU (10 CPU, 48Gi RAM)",
+    resources: {
+      limits: { cpu: "10", memory: "48Gi" },
+      requests: { cpu: "5", memory: "24Gi" }
+    }
+  },
+  "gpu-nvidia": {
+    label: "NVIDIA GPU (1 GPU, 4 CPU, 16Gi RAM)",
+    resources: {
+      limits: { "nvidia.com/gpu": "1", cpu: "4", memory: "16Gi" },
+      requests: { "nvidia.com/gpu": "1", cpu: "2", memory: "8Gi" }
+    },
+    tolerations: [
+      { key: "nvidia.com/gpu", operator: "Exists", effect: "NoSchedule" }
+    ]
+  }
+};
+
+let ARGO_PROFILES = DEFAULT_PROFILES;
+if (process.env.ARGO_PROFILES) {
+  try {
+    ARGO_PROFILES = JSON.parse(process.env.ARGO_PROFILES);
+  } catch (e) {
+    console.error("Failed to parse ARGO_PROFILES from environment, using defaults.", e);
+  }
+}
+
+const EPHEMERAL_VOLUME_CONFIG = {
+  name: "ephemeral-workdir",
+  storage: "2Gi",
+  storageClassName: "csi-disk",
+  mountPath: "/workdir"
+};
+
 // --- 2. API ROUTES ---
 
 const apiRouter = express.Router();
+
+/**
+ * GET /api/config
+ * Expose relevant configuration and profiles to the frontend.
+ */
+apiRouter.get("/config", (req, res) => {
+  res.json({
+    profiles: ARGO_PROFILES,
+    ephemeralVolume: EPHEMERAL_VOLUME_CONFIG,
+    defaults: {
+      namespace: process.env.ARGO_NAMESPACE || "default",
+      serviceAccount: process.env.ARGO_SERVICE_ACCOUNT || "default"
+    }
+  });
+});
 
 // Helper to convert a frontend virtual path to a physical GitLab path
 function getGitLabPath(virtualPath) {

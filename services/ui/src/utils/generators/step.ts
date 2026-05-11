@@ -242,12 +242,13 @@ const getTemplate = (nodes: Dictionary<ITemplateNode>): ITemplate[] | [] => {
 
 const getBaseWorkflowTemplate = (
   initialKind?: string,
-  initialName?: string
+  initialName?: string,
+  options?: { profileData?: any; ephemeralVol?: any }
 ): IWorkflow => {
   const logicalName = initialName
     ? initialName.replace(/\.ya?ml$/i, "")
     : "workflow-name";
-  return {
+  const base: IWorkflow = {
     apiVersion: "argoproj.io/v1alpha1",
     kind: initialKind || "WorkflowTemplate",
     metadata: {
@@ -260,6 +261,25 @@ const getBaseWorkflowTemplate = (
       templates: []
     }
   };
+
+  if (options?.profileData?.tolerations) {
+    base.spec.tolerations = options.profileData.tolerations;
+  }
+
+  if (options?.ephemeralVol) {
+    base.spec.volumeClaimTemplates = [
+      {
+        metadata: { name: options.ephemeralVol.name },
+        spec: {
+          accessModes: ["ReadWriteOnce"],
+          resources: { requests: { storage: options.ephemeralVol.storage } },
+          storageClassName: options.ephemeralVol.storageClassName
+        }
+      }
+    ];
+  }
+
+  return base;
 };
 
 const getEntryPointName = (node: INodeItem): string => {
@@ -279,7 +299,8 @@ const generateSteppedManifest = (
   visualState?: any,
   baseYaml?: any,
   initialKind?: string,
-  initialName?: string
+  initialName?: string,
+  options?: { profileData?: any; ephemeralVol?: any }
 ): any => {
   const nodes = graphData["nodes"] as Record<string, INodeItem>;
   const connections = graphData["connections"];
@@ -288,8 +309,34 @@ const generateSteppedManifest = (
   // Use the provided baseYaml or default to a new Workflow template
   const base = baseYaml
     ? JSON.parse(JSON.stringify(baseYaml))
-    : getBaseWorkflowTemplate(initialKind, initialName);
+    : getBaseWorkflowTemplate(initialKind, initialName, options);
+
   const templates = getTemplate(getTemplateNodes(nodes));
+
+  // Inject profile resources and ephemeral volume mounts into templates
+  templates.forEach((template) => {
+    const container = template.container || template.script;
+    if (container) {
+      if (options?.profileData?.resources) {
+        container.resources = {
+          ...options.profileData.resources,
+          ...(container.resources || {})
+        };
+      }
+      if (options?.ephemeralVol) {
+        if (!container.volumeMounts) container.volumeMounts = [];
+        const alreadyMounted = container.volumeMounts.some(
+          (m: any) => m.name === options.ephemeralVol.name
+        );
+        if (!alreadyMounted) {
+          container.volumeMounts.push({
+            name: options.ephemeralVol.name,
+            mountPath: options.ephemeralVol.mountPath
+          });
+        }
+      }
+    }
+  });
 
   if (visualState) {
     if (!base.metadata) base.metadata = {};

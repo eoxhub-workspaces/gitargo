@@ -41,15 +41,23 @@ const ListView: React.FC = () => {
     null
   );
 
-  const handleCreateNew = (name: string, kind: string) => {
+  const handleCreateNew = (
+    name: string,
+    kind: string,
+    options: { profile?: string; ephemeral?: boolean; ephemeralSize?: string }
+  ) => {
+    const params = new URLSearchParams({
+      name,
+      kind,
+      profile: options.profile || "",
+      ephemeral: options.ephemeral ? "true" : "false",
+      ephemeralSize: options.ephemeralSize || "2Gi"
+    });
+
     if (newModalMode === "code") {
-      navigate(
-        `/new/code?name=${encodeURIComponent(name)}&kind=${encodeURIComponent(kind)}`
-      );
+      navigate(`/new/code?${params.toString()}`);
     } else if (newModalMode === "canvas") {
-      navigate(
-        `/new/canvas?name=${encodeURIComponent(name)}&kind=${encodeURIComponent(kind)}`
-      );
+      navigate(`/new/canvas?${params.toString()}`);
     }
     setNewModalMode(null);
   };
@@ -263,7 +271,7 @@ const ListView: React.FC = () => {
           <div className="bg-white shadow overflow-hidden rounded-md border border-gray-200">
             <ul className="divide-y divide-gray-200">
               {displayedWorkflows.map((workflow) => (
-                <li key={workflow.id}>
+                <li key={workflow.path}>
                   <div
                     className={`px-6 py-4 flex items-center justify-between hover:bg-[#f8fbfc] transition-colors ${viewTab === "deleted" ? "opacity-70" : ""}`}
                   >

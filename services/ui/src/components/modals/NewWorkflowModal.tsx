@@ -1,9 +1,14 @@
-import React, { useState } from "react";
-import { XMarkIcon } from "@heroicons/react/24/outline";
+import React, { useState, useEffect } from "react";
+import { XMarkIcon, InformationCircleIcon } from "@heroicons/react/24/outline";
+import { getConfig, AppConfig } from "../../utils/api";
 
 interface INewWorkflowModalProps {
   onClose: () => void;
-  onSubmit: (name: string, kind: string) => void;
+  onSubmit: (
+    name: string,
+    kind: string,
+    options: { profile?: string; ephemeral?: boolean; ephemeralSize?: string }
+  ) => void;
 }
 
 export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
@@ -12,6 +17,21 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
 }) => {
   const [name, setName] = useState("");
   const [kind, setKind] = useState("WorkflowTemplate");
+  const [profile, setProfile] = useState("");
+  const [ephemeral, setEphemeral] = useState(false);
+  const [ephemeralSize, setEphemeralSize] = useState("2Gi");
+  const [config, setConfig] = useState<AppConfig | null>(null);
+
+  useEffect(() => {
+    getConfig()
+      .then((res) => {
+        setConfig(res);
+        if (res.ephemeralVolume?.storage) {
+          setEphemeralSize(res.ephemeralVolume.storage);
+        }
+      })
+      .catch(console.error);
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,7 +42,7 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
     finalName = finalName.replace(/\.ya?ml$/i, "");
     finalName += ".yaml";
 
-    onSubmit(finalName, kind);
+    onSubmit(finalName, kind, { profile, ephemeral, ephemeralSize });
   };
 
   return (
@@ -65,10 +85,6 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
                       .yaml
                     </span>
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    The name of the workflow. The .yaml extension is added
-                    automatically.
-                  </p>
                 </div>
                 <div className="mb-4">
                   <label className="block text-gray-700 text-sm font-bold mb-2">
@@ -77,7 +93,7 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
                   <select
                     value={kind}
                     onChange={(e) => setKind(e.target.value)}
-                    className="shadow border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline bg-white"
+                    className="shadow border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline bg-white text-sm"
                   >
                     <option value="WorkflowTemplate">
                       WorkflowTemplate (Recommended)
@@ -88,6 +104,74 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
                       ClusterWorkflowTemplate
                     </option>
                   </select>
+                </div>
+
+                <div className="mb-4 border-t pt-4">
+                  <label className="block text-gray-700 text-sm font-bold mb-2">
+                    Resource Profile
+                  </label>
+                  <select
+                    value={profile}
+                    onChange={(e) => setProfile(e.target.value)}
+                    className="shadow border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline bg-white text-sm"
+                  >
+                    <option value="">None (Default)</option>
+                    {config &&
+                      Object.entries(config.profiles).map(([id, p]) => (
+                        <option key={id} value={id}>
+                          {p.label}
+                        </option>
+                      ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Pre-configured resource limits and tolerations.
+                  </p>
+                </div>
+
+                <div className="mb-4">
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id="ephemeral-vol"
+                      checked={ephemeral}
+                      onChange={(e) => setEphemeral(e.target.checked)}
+                      className="h-4 w-4 text-[#004170] focus:ring-[#004170] border-gray-300 rounded"
+                    />
+                    <label
+                      htmlFor="ephemeral-vol"
+                      className="ml-2 block text-sm font-bold text-gray-700"
+                    >
+                      Enable Ephemeral Storage
+                    </label>
+                  </div>
+                  <div className="ml-6 mt-2">
+                    <div className="flex items-start bg-blue-50 p-2 rounded text-xs text-blue-800 mb-2">
+                      <InformationCircleIcon className="w-5 h-5 mr-1 flex-shrink-0" />
+                      <p>
+                        Provides a temporary workspace (<code>/workdir</code>)
+                        shared among all containers within a workflow step. It
+                        is ideal for processing large datasets or passing
+                        intermediate files between containers. It is
+                        automatically deleted when the step completes.
+                      </p>
+                    </div>
+
+                    {ephemeral && (
+                      <div className="flex items-center mt-2">
+                        <label className="text-xs font-semibold text-gray-700 mr-2">
+                          Storage Size:
+                        </label>
+                        <input
+                          type="text"
+                          value={ephemeralSize}
+                          onChange={(e) => setEphemeralSize(e.target.value)}
+                          placeholder="e.g. 2Gi, 10Gi"
+                          className="shadow-sm appearance-none border rounded py-1 px-2 text-gray-700 text-xs focus:outline-none focus:ring-[#004170] focus:border-[#004170] w-24"
+                          required={ephemeral}
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="flex items-center justify-end px-4 py-3 border-t border-solid border-blueGray-200 rounded-b space-x-2">

@@ -34,6 +34,32 @@ export interface CommitHistory {
   message: string;
 }
 
+export interface AppConfig {
+  profiles: Record<
+    string,
+    {
+      label: string;
+      resources: any;
+      tolerations?: any[];
+    }
+  >;
+  ephemeralVolume: {
+    name: string;
+    storage: string;
+    storageClassName: string;
+    mountPath: string;
+  };
+  defaults: {
+    namespace: string;
+    serviceAccount: string;
+  };
+}
+
+export const getConfig = async (): Promise<AppConfig> => {
+  const response = await api.get<AppConfig>("/config");
+  return response.data;
+};
+
 export const getWorkflows = async (): Promise<WorkflowFile[]> => {
   const response = await api.get<WorkflowFile[]>("/workflows");
   return response.data;

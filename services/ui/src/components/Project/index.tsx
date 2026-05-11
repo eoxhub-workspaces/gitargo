@@ -46,6 +46,9 @@ export default function Project() {
   const queryParams = new URLSearchParams(location.search);
   const initialName = queryParams.get("name") || undefined;
   const initialKind = queryParams.get("kind") || "WorkflowTemplate";
+  const initialProfile = queryParams.get("profile") || "";
+  const initialEphemeral = queryParams.get("ephemeral") === "true";
+  const initialEphemeralSize = queryParams.get("ephemeralSize") || "2Gi";
 
   const stateNodesRef = useRef<Dictionary<INodeItem>>();
   const stateSelectedNodesRef = useRef<Record<string, any>>();
@@ -62,6 +65,7 @@ export default function Project() {
   const [canvasPosition, setCanvasPosition] = useState<Record<string, number>>(
     {}
   );
+  const [config, setConfig] = useState<api.AppConfig | null>(null);
 
   const { filename, mode } = useParams<{ filename?: string; mode?: string }>();
   const navigate = useNavigate();
@@ -71,6 +75,10 @@ export default function Project() {
   const [viewMode, setViewMode] = useState<"split" | "canvas" | "code">(
     (mode as "split" | "canvas" | "code") || "split"
   );
+
+  useEffect(() => {
+    api.getConfig().then(setConfig).catch(console.error);
+  }, []);
 
   useTitle([currentFilename || "New workflow", ""].join(" | "));
 
@@ -100,12 +108,24 @@ export default function Project() {
         target: conn[1]
       }));
 
+      const options = config
+        ? {
+            profileData: initialProfile
+              ? config.profiles[initialProfile]
+              : null,
+            ephemeralVol: initialEphemeral
+              ? { ...config.ephemeralVolume, storage: initialEphemeralSize }
+              : null
+          }
+        : {};
+
       const manifest = generateSteppedManifest(
         { nodes, connections: flatConnections },
         visualState,
         baseYamlRef.current,
         initialKind,
-        initialName
+        initialName,
+        options
       );
       const yamlContent = YAML.stringify(manifest);
 

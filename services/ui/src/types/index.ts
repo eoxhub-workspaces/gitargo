@@ -162,6 +162,9 @@ export interface IObjectMeta {
 export interface IWorkflowSpec {
   entrypoint: string;
   templates: ITemplate[];
+  tolerations?: any[];
+  volumeClaimTemplates?: any[];
+  workflowSpec?: any; // For CronWorkflow support
 }
 
 // https://argoproj.github.io/argo-workflows/fields/#resourcetemplate
@@ -183,6 +186,8 @@ export interface IScriptTemplate {
   image: string;
   imagePullPolicy: string;
   source: string;
+  resources?: any;
+  volumeMounts?: any[];
 }
 
 // https://argoproj.github.io/argo-workflows/fields/#suspendtemplate
@@ -209,6 +214,8 @@ export interface IContainer {
   command?: string[];
   image: string;
   imagePullPolicy: string;
+  resources?: any;
+  volumeMounts?: any[];
 }
 
 // https://argoproj.github.io/argo-workflows/fields/#workflowstep
