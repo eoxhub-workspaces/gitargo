@@ -80,10 +80,7 @@ const ListView: React.FC = () => {
           if (kind === "CronWorkflow") {
             schedule = parsed?.spec?.schedule;
             entrypoint = parsed?.spec?.workflowSpec?.entrypoint;
-          } else if (
-            kind === "WorkflowTemplate" ||
-            kind === "ClusterWorkflowTemplate"
-          ) {
+          } else if (kind === "WorkflowTemplate") {
             entrypoint = parsed?.spec?.templates?.[0]?.name;
           } else {
             entrypoint = parsed?.spec?.entrypoint;

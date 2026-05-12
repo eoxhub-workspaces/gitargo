@@ -248,26 +248,40 @@ const getBaseWorkflowTemplate = (
   const logicalName = initialName
     ? initialName.replace(/\.ya?ml$/i, "")
     : "workflow-name";
-  const base: IWorkflow = {
+
+  const kind = initialKind || "WorkflowTemplate";
+  const isCron = kind === "CronWorkflow";
+
+  const base: IWorkflow | any = {
     apiVersion: "argoproj.io/v1alpha1",
-    kind: initialKind || "WorkflowTemplate",
+    kind,
     metadata: {
       name: logicalName,
       generateName: `${logicalName}-`,
       annotations: {}
     },
-    spec: {
-      entrypoint: "",
-      templates: []
-    }
+    spec: isCron
+      ? {
+          schedule: "* * * * *",
+          workflowSpec: {
+            entrypoint: "",
+            templates: []
+          }
+        }
+      : {
+          entrypoint: "",
+          templates: []
+        }
   };
 
+  const targetSpec = isCron ? base.spec.workflowSpec : base.spec;
+
   if (options?.profileData?.tolerations) {
-    base.spec.tolerations = options.profileData.tolerations;
+    targetSpec.tolerations = options.profileData.tolerations;
   }
 
   if (options?.ephemeralVol) {
-    base.spec.volumeClaimTemplates = [
+    targetSpec.volumeClaimTemplates = [
       {
         metadata: { name: options.ephemeralVol.name },
         spec: {
@@ -279,7 +293,7 @@ const getBaseWorkflowTemplate = (
     ];
   }
 
-  return base;
+  return base as IWorkflow;
 };
 
 const getEntryPointName = (node: INodeItem): string => {

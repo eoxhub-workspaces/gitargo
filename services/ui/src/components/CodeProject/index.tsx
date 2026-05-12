@@ -48,6 +48,22 @@ export default function CodeProject() {
             ? config.profiles[initialProfile]
             : null;
 
+          const isCron = initialKind === "CronWorkflow";
+
+          const baseSpec = {
+            entrypoint: "main",
+            templates: [
+              {
+                name: "main",
+                container: {
+                  image: "alpine:latest",
+                  command: ["sh", "-c"],
+                  args: ["echo Hello World"]
+                }
+              }
+            ]
+          };
+
           const workflow: any = {
             apiVersion: "argoproj.io/v1alpha1",
             kind: initialKind,
@@ -55,26 +71,22 @@ export default function CodeProject() {
               name: logicalName,
               generateName: `${logicalName}-`
             },
-            spec: {
-              entrypoint: "main",
-              templates: [
-                {
-                  name: "main",
-                  container: {
-                    image: "alpine:latest",
-                    command: ["sh", "-c"],
-                    args: ["echo Hello World"]
-                  }
+            spec: isCron
+              ? {
+                  schedule: "* * * * *",
+                  workflowSpec: baseSpec
                 }
-              ]
-            }
+              : baseSpec
           };
 
+          const targetSpec = isCron
+            ? workflow.spec.workflowSpec
+            : workflow.spec;
+
           if (profileData) {
-            workflow.spec.templates[0].container.resources =
-              profileData.resources;
+            targetSpec.templates[0].container.resources = profileData.resources;
             if (profileData.tolerations) {
-              workflow.spec.tolerations = profileData.tolerations;
+              targetSpec.tolerations = profileData.tolerations;
             }
           }
 
@@ -83,7 +95,7 @@ export default function CodeProject() {
               ...config.ephemeralVolume,
               storage: initialEphemeralSize
             };
-            workflow.spec.volumeClaimTemplates = [
+            targetSpec.volumeClaimTemplates = [
               {
                 metadata: { name: vol.name },
                 spec: {
@@ -93,7 +105,7 @@ export default function CodeProject() {
                 }
               }
             ];
-            workflow.spec.templates[0].container.volumeMounts = [
+            targetSpec.templates[0].container.volumeMounts = [
               { name: vol.name, mountPath: vol.mountPath }
             ];
           }

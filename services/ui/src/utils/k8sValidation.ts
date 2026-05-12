@@ -20,12 +20,7 @@ export const validateK8sYaml = (yamlContent: string): void => {
     throw new Error("Missing 'kind'.");
   }
 
-  const allowedArgoKinds = [
-    "Workflow",
-    "CronWorkflow",
-    "WorkflowTemplate",
-    "ClusterWorkflowTemplate"
-  ];
+  const allowedArgoKinds = ["Workflow", "CronWorkflow", "WorkflowTemplate"];
 
   if (!allowedArgoKinds.includes(parsed.kind)) {
     throw new Error(

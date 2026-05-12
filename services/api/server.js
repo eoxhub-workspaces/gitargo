@@ -66,8 +66,7 @@ app.use(express.static(path.join(__dirname, "public")));
 const allowedArgoKinds = [
   "Workflow",
   "CronWorkflow",
-  "WorkflowTemplate",
-  "ClusterWorkflowTemplate"
+  "WorkflowTemplate"
 ];
 
 const validateArgoWorkflow = (req, res, next) => {

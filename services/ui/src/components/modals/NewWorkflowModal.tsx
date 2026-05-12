@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { XMarkIcon, InformationCircleIcon } from "@heroicons/react/24/outline";
+import { XMarkIcon } from "@heroicons/react/24/outline";
 import { getConfig, AppConfig } from "../../utils/api";
+import { InfoButton } from "../global/InfoButton";
 
 interface INewWorkflowModalProps {
   onClose: () => void;
@@ -66,9 +67,12 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
             <form onSubmit={handleSubmit}>
               <div className="relative px-4 py-3 flex-auto">
                 <div className="mb-4">
-                  <label className="block text-gray-700 text-sm font-bold mb-2">
-                    Workflow Name
-                  </label>
+                  <div className="flex items-center mb-2">
+                    <label className="block text-gray-700 text-sm font-bold">
+                      Workflow Name
+                    </label>
+                    <InfoButton text="The unique name for your workflow file. This is how you'll identify it in the list." />
+                  </div>
                   <div className="flex items-center">
                     <input
                       type="text"
@@ -87,9 +91,12 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
                   </div>
                 </div>
                 <div className="mb-4">
-                  <label className="block text-gray-700 text-sm font-bold mb-2">
-                    Workflow Kind
-                  </label>
+                  <div className="flex items-center mb-2">
+                    <label className="block text-gray-700 text-sm font-bold">
+                      Workflow Kind
+                    </label>
+                    <InfoButton text="The type of Argo resource to create. WorkflowTemplate is recommended for reusable logic." />
+                  </div>
                   <select
                     value={kind}
                     onChange={(e) => setKind(e.target.value)}
@@ -100,16 +107,16 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
                     </option>
                     <option value="Workflow">Workflow</option>
                     <option value="CronWorkflow">CronWorkflow</option>
-                    <option value="ClusterWorkflowTemplate">
-                      ClusterWorkflowTemplate
-                    </option>
                   </select>
                 </div>
 
                 <div className="mb-4 border-t pt-4">
-                  <label className="block text-gray-700 text-sm font-bold mb-2">
-                    Resource Profile
-                  </label>
+                  <div className="flex items-center mb-2">
+                    <label className="block text-gray-700 text-sm font-bold">
+                      Resource Profile
+                    </label>
+                    <InfoButton text="Pre-configured resource limits (CPU/Memory) and node tolerations for the workflow tasks." />
+                  </div>
                   <select
                     value={profile}
                     onChange={(e) => setProfile(e.target.value)}
@@ -143,30 +150,21 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
                     >
                       Enable Ephemeral Storage
                     </label>
+                    <InfoButton text="Provides a temporary workspace (/workdir) shared among all containers within a workflow step. It is automatically deleted when the step completes." />
                   </div>
                   <div className="ml-6 mt-2">
-                    <div className="flex items-start bg-blue-50 p-2 rounded text-xs text-blue-800 mb-2">
-                      <InformationCircleIcon className="w-5 h-5 mr-1 flex-shrink-0" />
-                      <p>
-                        Provides a temporary workspace (<code>/workdir</code>)
-                        shared among all containers within a workflow step. It
-                        is ideal for processing large datasets or passing
-                        intermediate files between containers. It is
-                        automatically deleted when the step completes.
-                      </p>
-                    </div>
-
                     {ephemeral && (
                       <div className="flex items-center mt-2">
-                        <label className="text-xs font-semibold text-gray-700 mr-2">
+                        <label className="text-xs font-semibold text-gray-700 mr-1">
                           Storage Size:
                         </label>
+                        <InfoButton text="The amount of temporary storage to request (e.g. 2Gi, 10Gi)." />
                         <input
                           type="text"
                           value={ephemeralSize}
                           onChange={(e) => setEphemeralSize(e.target.value)}
                           placeholder="e.g. 2Gi, 10Gi"
-                          className="shadow-sm appearance-none border rounded py-1 px-2 text-gray-700 text-xs focus:outline-none focus:ring-[#004170] focus:border-[#004170] w-24"
+                          className="shadow-sm appearance-none border rounded py-1 px-2 text-gray-700 text-xs focus:outline-none focus:ring-[#004170] focus:border-[#004170] w-24 ml-2"
                           required={ephemeral}
                         />
                       </div>
