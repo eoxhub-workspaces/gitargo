@@ -398,7 +398,8 @@ const ListView: React.FC = () => {
                                   >
                                     <InformationCircleIcon className="h-5 w-5 text-gray-400 cursor-help" />
                                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block w-48 p-2 bg-gray-900 text-white text-[10px] rounded shadow-lg z-50">
-                                      Templates must have an 'execute' entrypoint to be published.
+                                      Templates must have an 'execute'
+                                      entrypoint to be published.
                                       <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-gray-900"></div>
                                     </div>
                                   </div>

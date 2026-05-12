@@ -68,12 +68,16 @@ export const getPublishedWorkflows = async (): Promise<string[]> => {
 };
 
 export const publishWorkflow = async (path: string) => {
-  const response = await api.post(`/workflows/${encodeURIComponent(path)}/publish`);
+  const response = await api.post(
+    `/workflows/${encodeURIComponent(path)}/publish`
+  );
   return response.data;
 };
 
 export const unpublishWorkflow = async (path: string) => {
-  const response = await api.delete(`/workflows/${encodeURIComponent(path)}/publish`);
+  const response = await api.delete(
+    `/workflows/${encodeURIComponent(path)}/publish`
+  );
   return response.data;
 };
 
