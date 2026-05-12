@@ -26,6 +26,7 @@ export default function CodeProject() {
   );
   const [yamlContent, setYamlContent] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
+  const [config, setConfig] = useState<api.AppConfig | null>(null);
 
   useTitle([currentFilename || "New workflow", "Code Mode"].join(" | "));
 
@@ -34,18 +35,20 @@ export default function CodeProject() {
   useEffect(() => {
     const init = async () => {
       try {
+        const appConfig = await api.getConfig();
+        setConfig(appConfig);
+
         if (filename) {
           const content = await api.getWorkflow(filename);
           setYamlContent(content);
           setCurrentFilename(filename);
         } else {
-          const config = await api.getConfig();
           const logicalName = initialName
             ? initialName.replace(/\.ya?ml$/i, "")
             : "workflow-name";
 
           const profileData = initialProfile
-            ? config.profiles[initialProfile]
+            ? appConfig.profiles[initialProfile]
             : null;
 
           const isCron = initialKind === "CronWorkflow";
@@ -92,7 +95,7 @@ export default function CodeProject() {
 
           if (initialEphemeral) {
             const vol = {
-              ...config.ephemeralVolume,
+              ...appConfig.ephemeralVolume,
               storage: initialEphemeralSize
             };
             targetSpec.volumeClaimTemplates = [
@@ -192,7 +195,7 @@ export default function CodeProject() {
             </span>
           </div>
           <div className="flex space-x-2">
-            {currentFilename && (
+            {currentFilename && config?.experimentalCanvas && (
               <button
                 className="flex space-x-1 items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors"
                 onClick={() =>

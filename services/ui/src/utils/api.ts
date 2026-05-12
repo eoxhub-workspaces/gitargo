@@ -53,10 +53,27 @@ export interface AppConfig {
     namespace: string;
     serviceAccount: string;
   };
+  allowPublishing: boolean;
+  experimentalCanvas: boolean;
 }
 
 export const getConfig = async (): Promise<AppConfig> => {
   const response = await api.get<AppConfig>("/config");
+  return response.data;
+};
+
+export const getPublishedWorkflows = async (): Promise<string[]> => {
+  const response = await api.get<string[]>("/published-workflows");
+  return response.data;
+};
+
+export const publishWorkflow = async (path: string) => {
+  const response = await api.post(`/workflows/${encodeURIComponent(path)}/publish`);
+  return response.data;
+};
+
+export const unpublishWorkflow = async (path: string) => {
+  const response = await api.delete(`/workflows/${encodeURIComponent(path)}/publish`);
   return response.data;
 };
 

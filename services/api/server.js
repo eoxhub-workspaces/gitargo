@@ -155,6 +155,8 @@ apiRouter.get("/config", (req, res) => {
   res.json({
     profiles: ARGO_PROFILES,
     ephemeralVolume: EPHEMERAL_VOLUME_CONFIG,
+    allowPublishing: process.env.ALLOW_PUBLISHING === "true",
+    experimentalCanvas: process.env.EXPERIMENTAL_CANVAS === "true",
     defaults: {
       namespace: process.env.ARGO_NAMESPACE || "default",
       serviceAccount: process.env.ARGO_SERVICE_ACCOUNT || "default"
@@ -171,6 +173,148 @@ function getGitLabPath(virtualPath) {
   const basePath = GITLAB_WORKFLOWS_PATH.replace(/\/$/, "").replace(/^\//, "");
   return `${basePath}/${cleanVirtualPath}`;
 }
+
+/**
+ * GET /api/published-workflows
+ * Get the list of published workflow IDs from pygeoapi/hr-pygeoapi.yaml.
+ */
+apiRouter.get("/published-workflows", async (req, res, next) => {
+  try {
+    const filePath = "pygeoapi/hr-pygeoapi.yaml";
+    try {
+      const response = await gitlabApi.get(
+        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
+        { params: { ref: GITLAB_BRANCH } }
+      );
+      const parsed = YAML.parse(response.data);
+      const published = parsed?.spec?.values?.argoWorkflows || [];
+      res.json(published.map(p => p.id));
+    } catch (error) {
+      if (error.response && error.response.status === 404) {
+        return res.json([]);
+      }
+      throw error;
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/workflows/.../publish
+ * Publish a workflow template to pygeoapi/hr-pygeoapi.yaml.
+ */
+apiRouter.post("/workflows/*/publish", async (req, res, next) => {
+  try {
+    const virtualPath = req.params[0];
+    const filename = virtualPath.split('/').pop();
+    const logicalName = filename.replace(/\.ya?ml$/i, "");
+    const filePath = "pygeoapi/hr-pygeoapi.yaml";
+
+    let content = "";
+    let action = "update";
+
+    try {
+      const response = await gitlabApi.get(
+        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
+        { params: { ref: GITLAB_BRANCH } }
+      );
+      content = response.data;
+    } catch (error) {
+      if (error.response && error.response.status === 404) {
+        action = "create";
+        content = "spec:\n  values:\n    argoWorkflow: []";
+      } else {
+        throw error;
+      }
+    }
+
+    const parsed = YAML.parse(content) || {};
+    if (!parsed.spec) parsed.spec = {};
+    if (!parsed.spec.values) parsed.spec.values = {};
+    if (!parsed.spec.values.argoWorkflows) parsed.spec.values.argoWorkflows = [];
+
+    const exists = parsed.spec.values.argoWorkflows.some(w => w.id === logicalName);
+    if (!exists) {
+      parsed.spec.values.argoWorkflows.push({
+        id: logicalName,
+        workflowTemplate: logicalName
+      });
+
+      await gitlabApi.post(
+        `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+        {
+          branch: GITLAB_BRANCH,
+          commit_message: `Publish ${logicalName} to pygeoapi`,
+          actions: [
+            {
+              action: action,
+              file_path: filePath,
+              content: YAML.stringify(parsed)
+            }
+          ]
+        }
+      );
+    }
+
+    res.json({ message: `Workflow ${logicalName} published successfully.` });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * DELETE /api/workflows/.../publish
+ * Unpublish a workflow template from pygeoapi/hr-pygeoapi.yaml.
+ */
+apiRouter.delete("/workflows/*/publish", async (req, res, next) => {
+  try {
+    const virtualPath = req.params[0];
+    const filename = virtualPath.split('/').pop();
+    const logicalName = filename.replace(/\.ya?ml$/i, "");
+    const filePath = "pygeoapi/hr-pygeoapi.yaml";
+
+    try {
+      const response = await gitlabApi.get(
+        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
+        { params: { ref: GITLAB_BRANCH } }
+      );
+      
+      const parsed = YAML.parse(response.data);
+      if (parsed?.spec?.values?.argoWorkflows) {
+        const initialLength = parsed.spec.values.argoWorkflows.length;
+        parsed.spec.values.argoWorkflows = parsed.spec.values.argoWorkflows.filter(
+          w => w.id !== logicalName
+        );
+
+        if (parsed.spec.values.argoWorkflows.length < initialLength) {
+          await gitlabApi.post(
+            `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+            {
+              branch: GITLAB_BRANCH,
+              commit_message: `Unpublish ${logicalName} from pygeoapi`,
+              actions: [
+                {
+                  action: "update",
+                  file_path: filePath,
+                  content: YAML.stringify(parsed)
+                }
+              ]
+            }
+          );
+        }
+      }
+      res.json({ message: `Workflow ${logicalName} unpublished successfully.` });
+    } catch (error) {
+      if (error.response && error.response.status === 404) {
+        return res.json({ message: "File not found, nothing to unpublish." });
+      }
+      throw error;
+    }
+  } catch (error) {
+    next(error);
+  }
+});
 
 /**
  * GET /api/workflows
@@ -217,7 +361,7 @@ apiRouter.get("/workflows", async (req, res, next) => {
 });
 
 /**
- * GET /api/workflows/<path>/history
+ * GET /api/workflows/.../history
  * Get the commit history for a file.
  */
 apiRouter.get("/workflows/*/history", async (req, res, next) => {

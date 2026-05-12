@@ -629,26 +629,30 @@ export default function Project() {
               <div className="absolute top-0 right-0 z-40">
                 <div className="flex space-x-2 p-2">
                   <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-md mr-4 shadow-sm border border-gray-200 dark:border-gray-700">
-                    <button
-                      className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                        viewMode === "canvas"
-                          ? "bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-indigo-400"
-                          : "text-gray-500 hover:text-gray-700 dark:text-gray-400"
-                      }`}
-                      onClick={() => setViewMode("canvas")}
-                    >
-                      Canvas
-                    </button>
-                    <button
-                      className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                        viewMode === "split"
-                          ? "bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-indigo-400"
-                          : "text-gray-500 hover:text-gray-700 dark:text-gray-400"
-                      }`}
-                      onClick={() => setViewMode("split")}
-                    >
-                      Split
-                    </button>
+                    {config?.experimentalCanvas && (
+                      <>
+                        <button
+                          className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                            viewMode === "canvas"
+                              ? "bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-indigo-400"
+                              : "text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                          }`}
+                          onClick={() => setViewMode("canvas")}
+                        >
+                          Canvas
+                        </button>
+                        <button
+                          className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                            viewMode === "split"
+                              ? "bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-indigo-400"
+                              : "text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                          }`}
+                          onClick={() => setViewMode("split")}
+                        >
+                          Split
+                        </button>
+                      </>
+                    )}
                     <button
                       className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
                         viewMode === "code"
@@ -717,18 +721,22 @@ export default function Project() {
             {viewMode === "code" && (
               <div className="absolute top-2 left-2 z-50">
                 <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-md shadow-sm border border-gray-200 dark:border-gray-700">
-                  <button
-                    className="px-3 py-1 text-xs font-medium rounded-md transition-colors text-gray-500 hover:text-gray-700 dark:text-gray-400"
-                    onClick={() => setViewMode("canvas")}
-                  >
-                    Canvas
-                  </button>
-                  <button
-                    className="px-3 py-1 text-xs font-medium rounded-md transition-colors text-gray-500 hover:text-gray-700 dark:text-gray-400"
-                    onClick={() => setViewMode("split")}
-                  >
-                    Split
-                  </button>
+                  {config?.experimentalCanvas && (
+                    <>
+                      <button
+                        className="px-3 py-1 text-xs font-medium rounded-md transition-colors text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                        onClick={() => setViewMode("canvas")}
+                      >
+                        Canvas
+                      </button>
+                      <button
+                        className="px-3 py-1 text-xs font-medium rounded-md transition-colors text-gray-500 hover:text-gray-700 dark:text-gray-400"
+                        onClick={() => setViewMode("split")}
+                      >
+                        Split
+                      </button>
+                    </>
+                  )}
                   <button
                     className="px-3 py-1 text-xs font-medium rounded-md transition-colors bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-indigo-400"
                     onClick={() => setViewMode("code")}
