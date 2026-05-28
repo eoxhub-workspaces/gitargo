@@ -1,16 +1,15 @@
-# Argo Workflow Manager
+# Gitargo
 
-A visual management service for Argo Workflows, backed by GitLab. This tool allows you to create, edit, and track the history of Argo Workflow definitions through an intuitive drag-and-drop interface, with all changes automatically synchronized to a GitLab repository.
+A management service for Argo Workflows, backed by GitLab. This tool allows you to create, edit, and track the history of Argo Workflow definitions through an web user interface, with all changes automatically synchronized to a GitLab repository.
 
-Starting point and logic for canvas rendering from https://github.com/omhq/visual-argo-workflows.
+As optional experimental feature it also has canvas rendering, for visual workflow editing. The project started from https://github.com/omhq/visual-argo-workflows.
 
 ## Features
 
-- **Visual Workflow Editor**: Build complex Argo Workflows using a graphical canvas.
 - **GitLab Integration**: Direct synchronization with GitLab. Every save is a commit.
-- **Visual State Persistence**: Automatically stores the graphical layout within the Workflow YAML annotations, ensuring you can always resume editing from where you left off.
 - **Workflow Browser**: List and search all workflow definitions in your repository.
 - **Commit History**: View the history of changes for every workflow file directly in the UI.
+- **Visual Workflow Editor**: Experimental - Build complex Argo Workflows using a graphical canvas.
 - **Docker Ready**: Fully containerized and ready for deployment.
 
 ## Architecture
