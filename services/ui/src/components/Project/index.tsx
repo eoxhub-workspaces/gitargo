@@ -136,10 +136,24 @@ export default function Project() {
         return;
       }
 
+      const shouldApplyDefaults = window.confirm(
+        "Would you like to automatically ingest defaults (resource profiles, tolerations, etc.) into this workflow?"
+      );
+
       if (!isNewWorkflow) {
-        await api.updateWorkflow(name, yamlContent, `Update ${name}`);
+        await api.updateWorkflow(
+          name,
+          yamlContent,
+          `Update ${name}`,
+          shouldApplyDefaults
+        );
       } else {
-        await api.createWorkflow(name, yamlContent, `Create ${name}`);
+        await api.createWorkflow(
+          name,
+          yamlContent,
+          `Create ${name}`,
+          shouldApplyDefaults
+        );
         navigate(`/edit/canvas/${encodeURIComponent(name)}`, { replace: true });
       }
 

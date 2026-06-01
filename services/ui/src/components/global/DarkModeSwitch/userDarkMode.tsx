@@ -1,13 +1,17 @@
 import { useEffect, useState } from "react";
 
 export function usePrefersDarkMode() {
-  const [value, setValue] = useState(true);
+  const [value, setValue] = useState(false); // Default to light mode (false)
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    setValue(mediaQuery.matches);
+    // Removed automatic sync with OS preference to force light as default
+    // setValue(mediaQuery.matches);
 
-    const handler = () => setValue(mediaQuery.matches);
+    const handler = () => {
+      // Still listen for changes if we want, but we prioritize light mode on first load
+      // setValue(mediaQuery.matches);
+    };
     mediaQuery.addEventListener("change", handler);
     return () => mediaQuery.removeEventListener("change", handler);
   }, []);

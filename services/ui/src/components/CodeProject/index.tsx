@@ -150,17 +150,23 @@ export default function CodeProject() {
 
     const saveToast = toast.loading("Saving workflow...");
     try {
+      const shouldApplyDefaults = window.confirm(
+        "Would you like to automatically ingest defaults (resource profiles, tolerations, etc.) into this workflow?"
+      );
+
       if (!isNewWorkflow) {
         await api.updateWorkflow(
           name,
           yamlContent,
-          `Update ${name} via Code Editor`
+          `Update ${name} via Code Editor`,
+          shouldApplyDefaults
         );
       } else {
         await api.createWorkflow(
           name,
           yamlContent,
-          `Create ${name} via Code Editor`
+          `Create ${name} via Code Editor`,
+          shouldApplyDefaults
         );
         setCurrentFilename(name);
         // Switch to the edit route for the new file

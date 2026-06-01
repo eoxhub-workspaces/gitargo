@@ -6,17 +6,27 @@ As optional experimental feature it also has canvas rendering, for visual workfl
 
 ## Features
 
-- **GitLab Integration**: Direct synchronization with GitLab. Every save is a commit.
 - **Workflow Browser**: List and search all workflow definitions in your repository.
+- **Workflow Monitoring**: Live tracking of Argo Workflow executions.
+- **Log Viewer**: Integrated log viewing via Loki proxy.
+- **GitLab Integration**: Direct synchronization with GitLab. Every save is a commit.
+- **Keycloak Auth**: Integrated OIDC authentication for secure access and commit attribution.
 - **Commit History**: View the history of changes for every workflow file directly in the UI.
 - **Visual Workflow Editor**: Experimental - Build complex Argo Workflows using a graphical canvas.
+- **Automatic Ingestion**: User-confirmed injection of default K8s properties (tolerations, etc.) during save.
 - **Docker Ready**: Fully containerized and ready for deployment.
 
 ## Architecture
 
 The project consists of two main components:
-1.  **Frontend (React)**: A modified version of `visual-argo-workflows` that handles the graphical editing and YAML generation.
-2.  **Backend (Node.js/Express)**: A secure proxy that communicates with the GitLab API using a private token, preventing sensitive credentials from being exposed to the browser.
+1.  **Frontend (React)**: A modified version of `visual-argo-workflows` that handles the graphical editing, monitoring dashboards, and YAML generation.
+2.  **Backend (Node.js/Express)**: A secure proxy that communicates with the GitLab API, Kubernetes API, and Loki Log Viewer. It handles OIDC authentication and attributes commits to the logged-in user.
+
+## Monitoring & Tracking
+
+GitArgo provides two ways to track workflow executions:
+1.  **Kubernetes API (Primary)**: If Kubernetes credentials are provided, GitArgo fetches live workflow status, node trees, and pod information directly from the cluster.
+2.  **Loki Fallback**: If Kubernetes access is unavailable, GitArgo automatically falls back to querying the configured Log Viewer (Loki) for workflow labels. This allows monitoring historical and active executions even without direct cluster access.
 
 ## Getting Started
 
@@ -40,6 +50,7 @@ The easiest way to run the service is using Docker.
       -e GITLAB_PROJECT_ID="your_project_id" \
       -e GITLAB_URL="https://gitlab.com" \
       -e GITLAB_WORKFLOWS_PATH="workflows" \
+      -e LOG_VIEWER_URL="http://logviewer:8080/search" \
       argo-manager
     ```
 
@@ -53,6 +64,18 @@ The easiest way to run the service is using Docker.
 | `GITLAB_BRANCH` | The branch where workflows are stored. | `main` |
 | `GITLAB_WORKFLOWS_PATH` | The subdirectory in the repo containing `.yaml` files. | `.` (Root) |
 | `PORT` | The port the service runs on inside the container. | `3000` |
+| `OIDC_ISSUER_BASE_URL` | Keycloak/OIDC Issuer URL. | - |
+| `OIDC_CLIENT_ID` | OIDC Client ID. | - |
+| `OIDC_SECRET` | OIDC Client Secret. | - |
+| `OIDC_BASE_URL` | Public URL of the application. | `http://localhost:3000` |
+| `ARGO_SERVER_URL` | URL of the Argo Server API (e.g. `https://argo-workflows...`). | - |
+| `LOG_VIEWER_URL` | Internal or external URL for the Loki Log Viewer API. | `https://hub-otc.eox.at/...` |
+| `ARGO_NAMESPACE` | Default namespace for workflows. | `default` |
+| `ARGO_TOLERATIONS` | JSON string of default tolerations to ingest on save. | - |
+
+## How it Works: Automatic Ingestion
+
+When saving a workflow, the UI will prompt the user if they want to "ingest defaults". If confirmed, the backend automatically injects infrastructure-specific properties (tolerations, service accounts, node selectors) defined in the environment variables into the YAML before committing to GitLab. This ensures workflows are optimized for the target environment without requiring manual user configuration.
 
 ## How it Works: Visual State
 
@@ -64,7 +87,6 @@ To maintain the visual layout without requiring a separate database, this tool u
 ## Development
 
 If you want to run the components separately for development:
-## Development
 
 ### Backend
 ```bash
@@ -100,4 +122,3 @@ npm run lint:fix
 ```
 
 ## License
-

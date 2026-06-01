@@ -1,6 +1,8 @@
 import axios from "axios";
 
-const api = axios.create();
+const api = axios.create({
+  withCredentials: true
+});
 
 // Use an interceptor to set the baseURL dynamically at request time.
 // This ensures that window.BASE_PATH (which is calculated and set in index.tsx)
@@ -12,6 +14,34 @@ api.interceptors.request.use((config) => {
   config.baseURL = isDev ? "http://localhost:3000/api" : `${basePath}/api`;
   return config;
 });
+
+// Response interceptor to handle authentication redirects
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    // If the backend returns 401 Unauthorized, it means the OIDC session is expired or missing.
+    if (error.response && error.response.status === 401) {
+      // Avoid infinite loop if we are already at the login endpoint
+      if (window.location.pathname.endsWith("/login")) {
+        return Promise.reject(error);
+      }
+
+      const isDev = process.env.NODE_ENV === "development";
+      const basePath = window.BASE_PATH || "";
+
+      // In local development, the React dev server (usually 3001) and backend (3000)
+      // run on different ports. We must redirect to the backend port specifically.
+      if (isDev) {
+        window.location.href = "http://localhost:3000/login";
+      } else {
+        // Ensure absolute path by starting with /
+        const loginUrl = `${basePath}/login`.replace(/\/+/g, "/");
+        window.location.href = loginUrl.startsWith("/") ? loginUrl : `/${loginUrl}`;
+      }
+    }
+    return Promise.reject(error);
+  }
+);
 
 export interface WorkflowFile {
   id: string;
@@ -56,6 +86,51 @@ export interface AppConfig {
   allowPublishing: boolean;
   experimentalCanvas: boolean;
 }
+
+export interface WorkflowExecution {
+  metadata: {
+    name: string;
+    namespace: string;
+    creationTimestamp: string;
+    labels?: Record<string, string>;
+  };
+  status?: {
+    phase: string;
+    startedAt: string;
+    finishedAt?: string;
+    nodes?: Record<string, any>;
+  };
+  spec: any;
+}
+
+export const getExecutions = async (): Promise<WorkflowExecution[]> => {
+  const response = await api.get<WorkflowExecution[]>("/executions");
+  return response.data;
+};
+
+export const getExecution = async (
+  name: string
+): Promise<WorkflowExecution> => {
+  const response = await api.get<WorkflowExecution>(`/executions/${name}`);
+  return response.data;
+};
+
+export const submitExecution = async (
+  workflow: any
+): Promise<WorkflowExecution> => {
+  const response = await api.post<WorkflowExecution>("/executions", workflow);
+  return response.data;
+};
+
+export const getLogs = async (
+  id: string,
+  type: "pod" | "workflow" = "pod"
+): Promise<string> => {
+  const response = await api.get(`/logs/${id}`, {
+    params: { type }
+  });
+  return response.data;
+};
 
 export const getConfig = async (): Promise<AppConfig> => {
   const response = await api.get<AppConfig>("/config");
@@ -108,11 +183,13 @@ export const getWorkflowHistory = async (
 export const createWorkflow = async (
   path: string,
   content: string,
-  commitMessage?: string
+  commitMessage: string,
+  applyDefaults = false
 ) => {
   const response = await api.post(`/workflows/${encodeURIComponent(path)}`, {
     content,
-    commit_message: commitMessage
+    commit_message: commitMessage,
+    applyDefaults
   });
   return response.data;
 };
@@ -120,11 +197,13 @@ export const createWorkflow = async (
 export const updateWorkflow = async (
   path: string,
   content: string,
-  commitMessage?: string
+  commitMessage: string,
+  applyDefaults = false
 ) => {
   const response = await api.put(`/workflows/${encodeURIComponent(path)}`, {
     content,
-    commit_message: commitMessage
+    commit_message: commitMessage,
+    applyDefaults
   });
   return response.data;
 };

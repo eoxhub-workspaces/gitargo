@@ -4,6 +4,7 @@ const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
 const YAML = require('yaml');
+const { auth, requiresAuth } = require('express-openid-connect');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,8 +29,63 @@ const gitlabApi = axios.create({
   },
 });
 
-app.use(cors());
+// CORS configuration to support authenticated requests (withCredentials: true)
+const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS 
+  ? process.env.CORS_ALLOWED_ORIGINS.split(',') 
+  : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:8000', 'http://localhost:8080'];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
+
+// OIDC Authentication Configuration
+const oidcConfig = {
+  authRequired: false, // Allow public access to some routes if needed, but we'll protect API
+  auth0Logout: true,
+  secret: process.env.OIDC_SECRET || 'a-very-long-and-random-secret-string-change-me',
+  baseURL: process.env.OIDC_BASE_URL || `http://localhost:${PORT}`,
+  clientID: process.env.OIDC_CLIENT_ID,
+  clientSecret: process.env.OIDC_SECRET,
+  issuerBaseURL: process.env.OIDC_ISSUER_BASE_URL,
+  authorizationParams: {
+    response_type: 'code',
+    scope: 'openid profile email groups',
+  },
+  routes: {
+    login: false, // We'll handle custom login if needed, or use default
+  },
+  // Custom error handler to avoid 302 redirects for AJAX/API requests
+  errorOnRequiredAuth: true,
+};
+
+// Only enable OIDC if configured
+if (process.env.OIDC_ISSUER_BASE_URL && process.env.OIDC_CLIENT_ID) {
+  console.log(`OIDC Authentication enabled for Issuer: ${process.env.OIDC_ISSUER_BASE_URL}`);
+  app.use(auth(oidcConfig));
+
+  // Custom login route to handle base path correctly
+  app.get('/login', (req, res) => {
+    res.oidc.login({ returnTo: '/' });
+  });
+
+  // Emergency local logout if Keycloak discovery fails
+  app.get('/logout-local', (req, res) => {
+    res.clearCookie('appSession');
+    res.redirect(`${BASE_PATH}/`);
+  });
+}
 
 const BASE_PATH = process.env.BASE_PATH || "";
 console.log(`Application BASE_PATH is set to: "${BASE_PATH}"`);
@@ -143,9 +199,48 @@ const EPHEMERAL_VOLUME_CONFIG = {
   mountPath: "/workdir"
 };
 
+// Helper to get GitLab commit author options from OIDC user
+function getCommitOptions(req) {
+  const options = {};
+  if (req.oidc && req.oidc.user) {
+    options.author_name = req.oidc.user.name || req.oidc.user.nickname;
+    options.author_email = req.oidc.user.email;
+  }
+  return options;
+}
+
 // --- 2. API ROUTES ---
 
 const apiRouter = express.Router();
+
+/**
+ * GET /api/diag/token
+ * Diagnostic endpoint to view the current OIDC token claims.
+ */
+apiRouter.get("/diag/token", (req, res) => {
+  if (!req.oidc || (!req.oidc.accessToken && !req.oidc.idToken)) {
+    return res.status(401).json({ message: "No OIDC session found." });
+  }
+
+  const accessToken = req.oidc.accessToken ? req.oidc.accessToken.access_token : null;
+  const idToken = req.oidc.idToken;
+
+  res.json({
+    accessToken: accessToken ? decodeJwt(accessToken) : null,
+    idToken: idToken ? decodeJwt(idToken) : null,
+    rawAccessToken: accessToken,
+    rawIdToken: idToken
+  });
+});
+
+// Protect all /api routes if OIDC is enabled
+if (process.env.OIDC_ISSUER_BASE_URL && process.env.OIDC_CLIENT_ID) {
+  apiRouter.use((req, res, next) => {
+    // Skip protection for diagnostic endpoint
+    if (req.path === "/diag/token") return next();
+    requiresAuth()(req, res, next);
+  });
+}
 
 /**
  * GET /api/config
@@ -484,16 +579,19 @@ apiRouter.post(
     try {
       const virtualPath = req.params[0];
       const filePath = getGitLabPath(virtualPath);
-      const { content, commit_message } = req.body;
+      const { content, commit_message, applyDefaults } = req.body;
 
-      // Inject defaults if configured
-      const injectedContent = injectDefaults(content, virtualPath);
+      // Inject defaults if requested
+      const injectedContent = applyDefaults 
+        ? injectDefaults(content, virtualPath)
+        : content;
 
       const response = await gitlabApi.post(
         `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
         {
           branch: GITLAB_BRANCH,
           commit_message: commit_message || `Create ${filePath}`,
+          ...getCommitOptions(req),
           actions: [
             {
               action: "create",
@@ -522,10 +620,12 @@ apiRouter.put(
     try {
       const virtualPath = req.params[0];
       const filePath = getGitLabPath(virtualPath);
-      const { content, commit_message } = req.body;
+      const { content, commit_message, applyDefaults } = req.body;
 
-      // Inject defaults if configured
-      const injectedContent = injectDefaults(content, virtualPath);
+      // Inject defaults if requested
+      const injectedContent = applyDefaults 
+        ? injectDefaults(content, virtualPath)
+        : content;
 
       try {
         const response = await gitlabApi.post(
@@ -533,6 +633,7 @@ apiRouter.put(
           {
             branch: GITLAB_BRANCH,
             commit_message: commit_message || `Update ${filePath}`,
+            ...getCommitOptions(req),
             actions: [
               {
                 action: "update",
@@ -656,6 +757,267 @@ function injectDefaults(content, virtualPath) {
 }
 
 
+// Helper to decode JWT payload without verification (for logging claims only)
+function decodeJwt(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = Buffer.from(parts[1], 'base64').toString();
+    return JSON.parse(payload);
+  } catch (e) {
+    return null;
+  }
+}
+
+// Helper to get OIDC access token or static fallback
+function getAuthHeaders(req) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+  };
+  
+  // 1. Static Override
+  if (process.env.ARGO_AUTH_TOKEN) {
+    const tokenValue = process.env.ARGO_AUTH_TOKEN.startsWith('Bearer ') 
+      ? process.env.ARGO_AUTH_TOKEN 
+      : `Bearer ${process.env.ARGO_AUTH_TOKEN}`;
+    headers['Authorization'] = tokenValue;
+    headers['Cookie'] = `authorization=${tokenValue}`;
+    return headers;
+  }
+
+  // 2. OIDC Session Tokens
+  if (req.oidc) {
+    // Prefer Access Token because we verified it has the correct "argo-workflows" audience.
+    // If it's missing, fall back to ID Token.
+    const accessToken = req.oidc.accessToken ? req.oidc.accessToken.access_token : null;
+    const idToken = req.oidc.idToken;
+    
+    const token = accessToken || idToken;
+    
+    if (token && typeof token === 'string') {
+      headers['Authorization'] = `Bearer ${token}`;
+      headers['Cookie'] = `authorization=${token}`; // Removed Bearer from cookie
+      
+      const decoded = decodeJwt(token);
+      if (decoded) {
+        const type = accessToken ? "Access Token" : "ID Token";
+        console.log(`Using ${type} - Issuer: ${decoded.iss}, Audience: ${JSON.stringify(decoded.aud)}, Groups: ${JSON.stringify(decoded.groups || [])}`);
+      }
+    } else {
+      console.warn("No valid OIDC token found in session.");
+    }
+  }
+  return headers;
+}
+
+/**
+ * GET /api/executions
+ * List Argo Workflows via Argo Server API or Loki fallback.
+ */
+apiRouter.get("/executions", async (req, res, next) => {
+  const namespace = process.env.ARGO_NAMESPACE || "default";
+  
+  // Try Argo Server API first
+  if (process.env.ARGO_SERVER_URL) {
+    const argoServerUrl = process.env.ARGO_SERVER_URL.replace(/\/$/, "");
+    const targetUrl = `${argoServerUrl}/api/v1/workflows/${namespace}`;
+    try {
+      console.log(`Fetching executions from Argo: ${targetUrl}`);
+      const headers = getAuthHeaders(req);
+      const response = await axios.get(targetUrl, { headers });
+      return res.json(response.data.items || []);
+    } catch (argoError) {
+      console.warn(`Argo Server API listing failed at ${targetUrl}, falling back to Loki.`, argoError.message);
+      if (argoError.response) {
+        if (argoError.response.headers['www-authenticate']) {
+          console.warn("Argo Www-Authenticate:", argoError.response.headers['www-authenticate']);
+        }
+        console.warn("Argo Response Data:", JSON.stringify(argoError.response.data));
+      }
+    }
+  }
+
+  // Fallback to Loki
+  const lokiUrl = process.env.LOG_VIEWER_URL || `https://hub-test.eox.at/services/eoxhub-gateway/cif/log-viewer/search`;
+  try {
+    console.log(`Fetching executions from Loki fallback: ${lokiUrl}`);
+    const headers = getAuthHeaders(req);
+    const params = {
+      sel_label: 'workflows_argoproj_io_workflow',
+      sel_value: '',
+      start_time: new Date(Date.now() - 24 * 3600000).toISOString().slice(0, 16),
+      end_time: new Date().toISOString().slice(0, 16),
+      query: ''
+    };
+    
+    const response = await axios.get(lokiUrl, { params, headers });
+    // ... rest of the mockItems logic ...
+
+    const workflowNames = new Set();
+    const mockItems = [];
+    const logs = response.data;
+    
+    if (Array.isArray(logs)) {
+      logs.forEach(log => {
+        if (log.labels && log.labels.workflows_argoproj_io_workflow) {
+          const name = log.labels.workflows_argoproj_io_workflow;
+          if (!workflowNames.has(name)) {
+            workflowNames.add(name);
+            mockItems.push({
+              metadata: {
+                name: name,
+                namespace: namespace,
+                creationTimestamp: log.timestamp || new Date().toISOString(),
+                labels: log.labels
+              },
+              status: {
+                phase: "Unknown (Loki)",
+                startedAt: log.timestamp || new Date().toISOString()
+              }
+            });
+          }
+        }
+      });
+    }
+    res.json(mockItems);
+  } catch (error) {
+    console.error("Error listing executions (Loki fallback failed):", error.message);
+    next(error);
+  }
+});
+
+/**
+ * GET /api/executions/:name
+ * Get details of a specific Argo Workflow via Argo Server API.
+ */
+apiRouter.get("/executions/:name", async (req, res, next) => {
+  const namespace = process.env.ARGO_NAMESPACE || "default";
+  const { name } = req.params;
+
+  if (process.env.ARGO_SERVER_URL) {
+    const argoServerUrl = process.env.ARGO_SERVER_URL.replace(/\/$/, "");
+    const targetUrl = `${argoServerUrl}/api/v1/workflows/${namespace}/${name}`;
+    try {
+      console.log(`Fetching execution details from Argo: ${targetUrl}`);
+      const headers = getAuthHeaders(req);
+      const response = await axios.get(targetUrl, { headers });
+      return res.json(response.data);
+    } catch (argoError) {
+      console.warn(`Argo Server API get failed for ${name} at ${targetUrl}.`, argoError.message);
+    }
+  }
+
+  // Final minimal mock for Loki fallback context
+  res.json({
+    metadata: {
+      name: name,
+      namespace: namespace,
+      creationTimestamp: new Date().toISOString(),
+    },
+    status: {
+      phase: "Unknown (Loki Only)",
+      nodes: {
+        [name]: {
+          id: name,
+          name: name,
+          type: "Pod",
+          phase: "Unknown"
+        }
+      }
+    }
+  });
+});
+
+/**
+ * POST /api/executions
+ * Submit a new Argo Workflow.
+ */
+apiRouter.post("/executions", async (req, res, next) => {
+  try {
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+    const workflow = req.body;
+    
+    // Basic validation
+    if (!workflow || typeof workflow !== "object") {
+      return res.status(400).json({ message: "Invalid workflow definition." });
+    }
+
+    // Ensure metadata and correct apiVersion/kind
+    if (!workflow.metadata) workflow.metadata = {};
+    workflow.metadata.namespace = namespace;
+    workflow.kind = "Workflow";
+    workflow.apiVersion = "argoproj.io/v1alpha1";
+    
+    // Remove resourceVersion/uid if copying from an existing workflow
+    delete workflow.metadata.resourceVersion;
+    delete workflow.metadata.uid;
+    delete workflow.metadata.generateName; 
+
+    // OPTION 1: Argo Server API (Preferred if URL is provided)
+    if (process.env.ARGO_SERVER_URL) {
+      const argoServerUrl = process.env.ARGO_SERVER_URL.replace(/\/$/, "");
+      const targetUrl = `${argoServerUrl}/api/v1/workflows/${namespace}`;
+      console.log(`Submitting workflow to Argo Server API: ${targetUrl}`);
+      
+      const headers = getAuthHeaders(req);
+
+      try {
+        const response = await axios.post(
+          targetUrl,
+          { workflow },
+          { headers }
+        );
+        return res.status(201).json(response.data);
+      } catch (argoError) {
+        console.error(`Argo Server API submission failed at ${targetUrl}:`, argoError.response?.data || argoError.message);
+        return res.status(argoError.response?.status || 500).json(argoError.response?.data || { message: argoError.message });
+      }
+    }
+
+    return res.status(400).json({ message: "Argo Server URL is not configured. Execution disabled." });
+  } catch (error) {
+    console.error("Error submitting execution:", error.message);
+    next(error);
+  }
+});
+
+/**
+ * GET /api/logs/:id
+ * Proxy logs from Loki log viewer.
+ */
+apiRouter.get("/logs/:id", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { start_time, end_time, type } = req.query; // type can be 'pod' or 'workflow'
+    
+    // Construct Loki URL based on provided examples
+    const lokiUrl = process.env.LOG_VIEWER_URL || `https://hub-otc.eox.at/services/eoxhub-gateway/cif/log-viewer/search`;
+    
+    const label = type === 'workflow' ? 'workflows_argoproj_io_workflow' : 'pod';
+
+    console.log(`Proxying logs from Loki: ${lokiUrl} (Label: ${label}, Value: ${id})`);
+    const headers = getAuthHeaders(req);
+
+    const response = await axios.get(lokiUrl, {
+      params: {
+        sel_label: label,
+        sel_value: id,
+        start_time: start_time || new Date(Date.now() - 3600000 * 24).toISOString().slice(0, 16), // Default to last 24h
+        end_time: end_time || new Date().toISOString().slice(0, 16),
+        query: ''
+      },
+      headers
+    });
+    res.send(response.data);
+  } catch (error) {
+    console.error(`Error fetching logs for ${req.params.id}:`, error.message);
+    if (error.response) {
+       console.error("Loki Response Data:", JSON.stringify(error.response.data));
+    }
+    next(error);
+  }
+});
+
 // Resilient API mounting
 if (BASE_PATH !== "") {
   app.use(`${BASE_PATH}/api`, apiRouter);
@@ -687,6 +1049,14 @@ if (BASE_PATH !== "") {
 
 // Basic error handler
 app.use((err, req, res, next) => {
+  // If this is an OIDC auth error from requiresAuth() and we're on an API route
+  if (err.status === 401 || err.statusCode === 401) {
+    return res.status(401).json({ 
+      message: 'Authentication Required',
+      loginUrl: `${BASE_PATH}/login` 
+    });
+  }
+
   console.error(err.stack);
   const status = err.response ? err.response.status : 500;
   const message = err.response ? err.response.data : { message: err.message };

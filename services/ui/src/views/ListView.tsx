@@ -11,6 +11,7 @@ import {
   publishWorkflow,
   unpublishWorkflow,
   getConfig,
+  submitExecution,
   AppConfig
 } from "../utils/api";
 import {
@@ -23,7 +24,8 @@ import {
   ArrowPathIcon,
   CloudArrowUpIcon,
   CloudArrowDownIcon,
-  InformationCircleIcon
+  InformationCircleIcon,
+  PlayIcon
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import Spinner from "../components/global/Spinner";
@@ -73,6 +75,19 @@ const ListView: React.FC = () => {
       navigate(`/new/canvas?${params.toString()}`);
     }
     setNewModalMode(null);
+  };
+
+  const handleExecute = async (path: string) => {
+    const executeToast = toast.loading("Submitting workflow...");
+    try {
+      const content = await getWorkflow(path);
+      const parsed = YAML.parse(content);
+      await submitExecution(parsed);
+      toast.success("Workflow submitted successfully!", { id: executeToast });
+      navigate("/executions");
+    } catch (err: any) {
+      toast.error(`Failed to submit: ${err.message}`, { id: executeToast });
+    }
   };
 
   const fetchWorkflows = async () => {
@@ -387,6 +402,27 @@ const ListView: React.FC = () => {
                     <div className="ml-4 flex-shrink-0 flex items-center space-x-2">
                       {viewTab === "active" ? (
                         <>
+                          <button
+                            onClick={() => handleExecute(workflow.path)}
+                            className="inline-flex items-center px-3 py-1.5 border border-blue-300 shadow-sm text-xs font-medium rounded text-blue-700 bg-white hover:bg-blue-50 transition-colors"
+                            title="Execute Workflow"
+                          >
+                            <PlayIcon className="h-4 w-4 mr-1.5" />
+                            Execute
+                          </button>
+                          {metadata[workflow.path]?.kind === "CronWorkflow" && (
+                            <Link
+                              to={`/executions?cron=${workflow.path
+                                .split("/")
+                                .pop()
+                                ?.replace(/\.ya?ml$/i, "")}`}
+                              className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+                              title="View Cron Executions"
+                            >
+                              <ClockIcon className="h-4 w-4 mr-1.5 text-gray-500" />
+                              History
+                            </Link>
+                          )}
                           {config?.allowPublishing &&
                             metadata[workflow.path]?.kind ===
                               "WorkflowTemplate" && (
