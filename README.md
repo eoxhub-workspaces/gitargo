@@ -86,14 +86,25 @@ If you want to run the components separately for development:
 
 ### Rapid Deployment Script
 
-For testing backend changes rapidly in a Kubernetes environment without a full image rebuild, a helper script is provided:
+For testing changes rapidly in a Kubernetes environment without a full image rebuild, a helper script is provided:
 
 ```bash
-# Push current backend code directly to the running pod and reload
+# Push current backend/frontend code directly to the running pod and restart the server
 ./push.sh <namespace>
 ```
 
-### Backend
+**Note for Hot-Reloading:**
+To ensure the server picks up backend changes without the container being wiped (which happens on a full container restart), your development pod should be running with a shell loop. You can achieve this by adding a `command` override to your Kubernetes deployment manifest:
+
+```yaml
+spec:
+  containers:
+  - name: argo-manager
+    # ...
+    command: ["sh", "-c", "while true; do node server.js; sleep 1; done"]
+```
+
+If you only change UI files in `services/ui/src`, no restart is needed; the changes will be visible as soon as the script finishes copying.
 ```bash
 cd services/api
 npm install
