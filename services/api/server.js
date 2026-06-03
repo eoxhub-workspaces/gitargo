@@ -3,8 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const path = require('path');
+const fs = require('fs');
 const YAML = require('yaml');
-const { auth, requiresAuth } = require('express-openid-connect');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -50,49 +50,56 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// OIDC Authentication Configuration
-const oidcConfig = {
-  authRequired: false, // Allow public access to some routes if needed, but we'll protect API
-  auth0Logout: true,
-  secret: process.env.OIDC_SECRET || 'a-very-long-and-random-secret-string-change-me',
-  baseURL: process.env.OIDC_BASE_URL || `http://localhost:${PORT}`,
-  clientID: process.env.OIDC_CLIENT_ID,
-  clientSecret: process.env.OIDC_SECRET,
-  issuerBaseURL: process.env.OIDC_ISSUER_BASE_URL,
-  authorizationParams: {
-    response_type: 'code',
-    scope: 'openid profile email groups',
-  },
-  routes: {
-    login: false, // We'll handle custom login if needed, or use default
-  },
-  // Custom error handler to avoid 302 redirects for AJAX/API requests
-  errorOnRequiredAuth: true,
-};
-
-// Only enable OIDC if configured
-if (process.env.OIDC_ISSUER_BASE_URL && process.env.OIDC_CLIENT_ID) {
-  console.log(`OIDC Authentication enabled for Issuer: ${process.env.OIDC_ISSUER_BASE_URL}`);
-  app.use(auth(oidcConfig));
-
-  // Custom login route to handle base path correctly
-  app.get('/login', (req, res) => {
-    res.oidc.login({ returnTo: '/' });
-  });
-
-  // Emergency local logout if Keycloak discovery fails
-  app.get('/logout-local', (req, res) => {
-    res.clearCookie('appSession');
-    res.redirect(`${BASE_PATH}/`);
-  });
+// Helper to decode JWT payload without verification (for logging claims only)
+function decodeJwt(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = Buffer.from(parts[1], 'base64').toString();
+    return JSON.parse(payload);
+  } catch (e) {
+    return null;
+  }
 }
+
+// Simple Authentication Middleware (Checks session token/header)
+app.use((req, res, next) => {
+  const authHeader = req.headers.authorization;
+  let token = null;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7);
+  } else if (req.headers.cookie) {
+    const cookies = req.headers.cookie.split(';').reduce((acc, cookie) => {
+      const [key, value] = cookie.trim().split('=');
+      acc[key] = value;
+      return acc;
+    }, {});
+    token = cookies['access_token'] || cookies['id_token'] || cookies['appSession'];
+  }
+
+  if (token) {
+    req.token = token;
+    req.user = decodeJwt(token);
+  }
+  next();
+});
+
+const requiresAuth = (req, res, next) => {
+  if (req.user || process.env.NODE_ENV === 'development') {
+    return next();
+  }
+  res.status(401).json({ 
+    message: 'Authentication Required',
+    loginUrl: `${BASE_PATH}/login` 
+  });
+};
 
 const BASE_PATH = process.env.BASE_PATH || "";
 console.log(`Application BASE_PATH is set to: "${BASE_PATH}"`);
 
 // Helper to serve index.html with injected BASE_PATH config
 const serveIndex = (req, res) => {
-  const fs = require("fs");
   const indexPath = path.join(__dirname, "public", "index.html");
 
   fs.readFile(indexPath, "utf8", (err, data) => {
@@ -199,12 +206,12 @@ const EPHEMERAL_VOLUME_CONFIG = {
   mountPath: "/workdir"
 };
 
-// Helper to get GitLab commit author options from OIDC user
+// Helper to get GitLab commit author options from session user
 function getCommitOptions(req) {
   const options = {};
-  if (req.oidc && req.oidc.user) {
-    options.author_name = req.oidc.user.name || req.oidc.user.nickname;
-    options.author_email = req.oidc.user.email;
+  if (req.user) {
+    options.author_name = req.user.name || req.user.nickname || req.user.preferred_username || req.user.sub;
+    options.author_email = req.user.email;
   }
   return options;
 }
@@ -215,32 +222,25 @@ const apiRouter = express.Router();
 
 /**
  * GET /api/diag/token
- * Diagnostic endpoint to view the current OIDC token claims.
+ * Diagnostic endpoint to view the current session token claims.
  */
 apiRouter.get("/diag/token", (req, res) => {
-  if (!req.oidc || (!req.oidc.accessToken && !req.oidc.idToken)) {
-    return res.status(401).json({ message: "No OIDC session found." });
+  if (!req.user) {
+    return res.status(401).json({ message: "No session found." });
   }
 
-  const accessToken = req.oidc.accessToken ? req.oidc.accessToken.access_token : null;
-  const idToken = req.oidc.idToken;
-
   res.json({
-    accessToken: accessToken ? decodeJwt(accessToken) : null,
-    idToken: idToken ? decodeJwt(idToken) : null,
-    rawAccessToken: accessToken,
-    rawIdToken: idToken
+    user: req.user,
+    token: req.token ? "present" : "missing"
   });
 });
 
-// Protect all /api routes if OIDC is enabled
-if (process.env.OIDC_ISSUER_BASE_URL && process.env.OIDC_CLIENT_ID) {
-  apiRouter.use((req, res, next) => {
-    // Skip protection for diagnostic endpoint
-    if (req.path === "/diag/token") return next();
-    requiresAuth()(req, res, next);
-  });
-}
+// Protect all /api routes
+apiRouter.use((req, res, next) => {
+  // Skip protection for diagnostic endpoint
+  if (req.path === "/diag/token") return next();
+  requiresAuth(req, res, next);
+});
 
 /**
  * GET /api/config
@@ -252,6 +252,7 @@ apiRouter.get("/config", (req, res) => {
     ephemeralVolume: EPHEMERAL_VOLUME_CONFIG,
     allowPublishing: process.env.ALLOW_PUBLISHING === "true",
     experimentalCanvas: process.env.EXPERIMENTAL_CANVAS === "true",
+    logViewerUrl: process.env.LOG_VIEWER_URL || `https://hub-test.eox.at/services/eoxhub-gateway/cif/log-viewer/search`,
     defaults: {
       namespace: process.env.ARGO_NAMESPACE || "default",
       serviceAccount: process.env.ARGO_SERVICE_ACCOUNT || "default"
@@ -769,43 +770,33 @@ function decodeJwt(token) {
   }
 }
 
-// Helper to get OIDC access token or static fallback
+// Helper to get access token or static fallback
 function getAuthHeaders(req) {
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
   };
   
-  // 1. Static Override
-  if (process.env.ARGO_AUTH_TOKEN) {
-    const tokenValue = process.env.ARGO_AUTH_TOKEN.startsWith('Bearer ') 
-      ? process.env.ARGO_AUTH_TOKEN 
-      : `Bearer ${process.env.ARGO_AUTH_TOKEN}`;
-    headers['Authorization'] = tokenValue;
-    headers['Cookie'] = `authorization=${tokenValue}`;
-    return headers;
+  // 1. Static Override or Service Account Token
+  let token = process.env.ARGO_AUTH_TOKEN;
+  const saTokenPath = '/var/run/secrets/kubernetes.io/serviceaccount/token';
+  
+  if (!token && fs.existsSync(saTokenPath)) {
+    try {
+      token = fs.readFileSync(saTokenPath, 'utf8').trim();
+    } catch (e) {
+      console.warn("Failed to read service account token from " + saTokenPath, e);
+    }
   }
 
-  // 2. OIDC Session Tokens
-  if (req.oidc) {
-    // Prefer Access Token because we verified it has the correct "argo-workflows" audience.
-    // If it's missing, fall back to ID Token.
-    const accessToken = req.oidc.accessToken ? req.oidc.accessToken.access_token : null;
-    const idToken = req.oidc.idToken;
-    
-    const token = accessToken || idToken;
-    
-    if (token && typeof token === 'string') {
-      headers['Authorization'] = `Bearer ${token}`;
-      headers['Cookie'] = `authorization=${token}`; // Removed Bearer from cookie
-      
-      const decoded = decodeJwt(token);
-      if (decoded) {
-        const type = accessToken ? "Access Token" : "ID Token";
-        console.log(`Using ${type} - Issuer: ${decoded.iss}, Audience: ${JSON.stringify(decoded.aud)}, Groups: ${JSON.stringify(decoded.groups || [])}`);
-      }
-    } else {
-      console.warn("No valid OIDC token found in session.");
-    }
+  // 2. Fallback to User Session Token if needed (though SA is preferred now)
+  if (!token && req.token) {
+    token = req.token;
+  }
+  
+  if (token) {
+    const tokenValue = token.startsWith('Bearer ') ? token : `Bearer ${token}`;
+    headers['Authorization'] = tokenValue;
+    headers['Cookie'] = `authorization=${tokenValue}`;
   }
   return headers;
 }
@@ -1049,7 +1040,7 @@ if (BASE_PATH !== "") {
 
 // Basic error handler
 app.use((err, req, res, next) => {
-  // If this is an OIDC auth error from requiresAuth() and we're on an API route
+  // If this is an auth error from requiresAuth and we're on an API route
   if (err.status === 401 || err.statusCode === 401) {
     return res.status(401).json({ 
       message: 'Authentication Required',

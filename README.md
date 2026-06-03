@@ -10,8 +10,8 @@ As optional experimental feature it also has canvas rendering, for visual workfl
 - **Workflow Monitoring**: Live tracking of Argo Workflow executions.
 - **Log Viewer**: Integrated log viewing via Loki proxy.
 - **GitLab Integration**: Direct synchronization with GitLab. Every save is a commit.
-- **Keycloak Auth**: Integrated OIDC authentication for secure access and commit attribution.
 - **Commit History**: View the history of changes for every workflow file directly in the UI.
+- **Authentication**: Session-based token verification utilizing Kubernetes Service Account tokens or proxy-injected cookies.
 - **Visual Workflow Editor**: Experimental - Build complex Argo Workflows using a graphical canvas.
 - **Automatic Ingestion**: User-confirmed injection of default K8s properties (tolerations, etc.) during save.
 - **Docker Ready**: Fully containerized and ready for deployment.
@@ -20,7 +20,7 @@ As optional experimental feature it also has canvas rendering, for visual workfl
 
 The project consists of two main components:
 1.  **Frontend (React)**: A modified version of `visual-argo-workflows` that handles the graphical editing, monitoring dashboards, and YAML generation.
-2.  **Backend (Node.js/Express)**: A secure proxy that communicates with the GitLab API, Kubernetes API, and Loki Log Viewer. It handles OIDC authentication and attributes commits to the logged-in user.
+2.  **Backend (Node.js/Express)**: A proxy that communicates with the GitLab API and Kubernetes API. It handles token extraction for authentication and attributes commits to the authenticated user.
 
 ## Monitoring & Tracking
 
@@ -64,10 +64,6 @@ The easiest way to run the service is using Docker.
 | `GITLAB_BRANCH` | The branch where workflows are stored. | `main` |
 | `GITLAB_WORKFLOWS_PATH` | The subdirectory in the repo containing `.yaml` files. | `.` (Root) |
 | `PORT` | The port the service runs on inside the container. | `3000` |
-| `OIDC_ISSUER_BASE_URL` | Keycloak/OIDC Issuer URL. | - |
-| `OIDC_CLIENT_ID` | OIDC Client ID. | - |
-| `OIDC_SECRET` | OIDC Client Secret. | - |
-| `OIDC_BASE_URL` | Public URL of the application. | `http://localhost:3000` |
 | `ARGO_SERVER_URL` | URL of the Argo Server API (e.g. `https://argo-workflows...`). | - |
 | `LOG_VIEWER_URL` | Internal or external URL for the Loki Log Viewer API. | `https://hub-otc.eox.at/...` |
 | `ARGO_NAMESPACE` | Default namespace for workflows. | `default` |
@@ -87,6 +83,15 @@ To maintain the visual layout without requiring a separate database, this tool u
 ## Development
 
 If you want to run the components separately for development:
+
+### Rapid Deployment Script
+
+For testing backend changes rapidly in a Kubernetes environment without a full image rebuild, a helper script is provided:
+
+```bash
+# Push current backend code directly to the running pod and reload
+./push.sh <namespace>
+```
 
 ### Backend
 ```bash

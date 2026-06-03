@@ -68,7 +68,7 @@ const CodeEditor = (props: ICodeEditorProps) => {
       <Editor
         height={typeof height === "number" ? `${height}px` : height}
         language={language}
-        theme="vs-dark"
+        theme="vs-light"
         value={data}
         onChange={handleEditorChange}
         options={{
