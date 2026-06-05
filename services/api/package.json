@@ -1,13 +1,14 @@
 {
-  "name": "argo-manager-api",
+  "name": "gitargo-api",
   "version": "1.0.0",
-  "description": "Backend API for argo-manager",
+  "description": "Backend API for gitargo",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@kubernetes/client-node": "^0.20.0",
     "axios": "^1.6.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",

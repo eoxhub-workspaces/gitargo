@@ -10,7 +10,9 @@ RUN npm run build
 FROM node:lts-bookworm-slim AS production
 WORKDIR /app
 COPY services/api/package*.json ./
-RUN npm install --production --legacy-peer-deps
+# Install all dependencies (including devDependencies like nodemon)
+# so that hot-reloading works in dev environments via push.sh
+RUN npm install --legacy-peer-deps
 COPY services/api/ ./
 # Copy built frontend assets to the backend's public directory
 COPY --from=build-frontend /app/ui/build ./public

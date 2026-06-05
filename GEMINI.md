@@ -1,9 +1,9 @@
 # Project Gemini Instructions
 
-This file contains instructions and context for Gemini CLI agents working on the `argo-manager` project.
+This file contains instructions and context for Gemini CLI agents working on the `gitargo` project.
 
 ## Project Overview
-`argo-manager` is a web-based UI for managing Argo workflows, featuring a React-based frontend and a Python/Django backend (based on the presence of `static` and `zappa_settings.json` in `.gitignore`).
+`gitargo` is a web-based UI for managing Argo workflows, featuring a React-based frontend and a Python/Django backend (based on the presence of `static` and `zappa_settings.json` in `.gitignore`).
 
 ## Technology Stack
 - **Frontend:** React (TypeScript), Tailwind CSS, yarn/npm.

@@ -32,6 +32,14 @@ const ExecutionsView: React.FC = () => {
     try {
       if (!selectedExe) setLoading(true);
       const data = await getExecutions();
+
+      // Defensive check: ensure data is an array
+      if (!Array.isArray(data)) {
+        console.error("Expected array from getExecutions, got:", data);
+        setExecutions([]);
+        return;
+      }
+
       setExecutions(data);
 
       // If we have a selected execution, update it from the fresh data

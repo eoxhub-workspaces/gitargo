@@ -5,6 +5,7 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const YAML = require('yaml');
+const k8s = require('@kubernetes/client-node');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -758,219 +759,131 @@ function injectDefaults(content, virtualPath) {
 }
 
 
-// Helper to decode JWT payload without verification (for logging claims only)
-function decodeJwt(token) {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const payload = Buffer.from(parts[1], 'base64').toString();
-    return JSON.parse(payload);
-  } catch (e) {
-    return null;
-  }
+// --- Kubernetes Client Initialization ---
+const kc = new k8s.KubeConfig();
+try {
+  kc.loadFromDefault(); // Attempts ~/.kube/config first, then falls back to loadFromCluster()
+  console.log("Kubernetes client initialized successfully.");
+} catch (e) {
+  console.error("Failed to initialize Kubernetes client:", e.message);
 }
 
-// Helper to get access token or static fallback
-function getAuthHeaders(req) {
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-  };
-  
-  // 1. Static Override or Service Account Token
-  let token = process.env.ARGO_AUTH_TOKEN;
-  const saTokenPath = '/var/run/secrets/kubernetes.io/serviceaccount/token';
-  
-  if (!token && fs.existsSync(saTokenPath)) {
-    try {
-      token = fs.readFileSync(saTokenPath, 'utf8').trim();
-    } catch (e) {
-      console.warn("Failed to read service account token from " + saTokenPath, e);
-    }
-  }
-
-  // 2. Fallback to User Session Token if needed (though SA is preferred now)
-  if (!token && req.token) {
-    token = req.token;
-  }
-  
-  if (token) {
-    const tokenValue = token.startsWith('Bearer ') ? token : `Bearer ${token}`;
-    headers['Authorization'] = tokenValue;
-    headers['Cookie'] = `authorization=${tokenValue}`;
-  }
-  return headers;
-}
+const customObjectsApi = kc.makeApiClient(k8s.CustomObjectsApi);
 
 /**
  * GET /api/executions
- * List Argo Workflows via Argo Server API or Loki fallback.
+ * List Argo Workflows directly via Kubernetes API using the official client
  */
 apiRouter.get("/executions", async (req, res, next) => {
-  const namespace = process.env.ARGO_NAMESPACE || "default";
-  
-  // Try Argo Server API first
-  if (process.env.ARGO_SERVER_URL) {
-    const argoServerUrl = process.env.ARGO_SERVER_URL.replace(/\/$/, "");
-    const targetUrl = `${argoServerUrl}/api/v1/workflows/${namespace}`;
-    try {
-      console.log(`Fetching executions from Argo: ${targetUrl}`);
-      const headers = getAuthHeaders(req);
-      const response = await axios.get(targetUrl, { headers });
-      return res.json(response.data.items || []);
-    } catch (argoError) {
-      console.warn(`Argo Server API listing failed at ${targetUrl}, falling back to Loki.`, argoError.message);
-      if (argoError.response) {
-        if (argoError.response.headers['www-authenticate']) {
-          console.warn("Argo Www-Authenticate:", argoError.response.headers['www-authenticate']);
-        }
-        console.warn("Argo Response Data:", JSON.stringify(argoError.response.data));
-      }
-    }
-  }
-
-  // Fallback to Loki
-  const lokiUrl = process.env.LOG_VIEWER_URL || `https://hub-test.eox.at/services/eoxhub-gateway/cif/log-viewer/search`;
   try {
-    console.log(`Fetching executions from Loki fallback: ${lokiUrl}`);
-    const headers = getAuthHeaders(req);
-    const params = {
-      sel_label: 'workflows_argoproj_io_workflow',
-      sel_value: '',
-      start_time: new Date(Date.now() - 24 * 3600000).toISOString().slice(0, 16),
-      end_time: new Date().toISOString().slice(0, 16),
-      query: ''
-    };
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+    console.log(`Fetching workflows from K8s API (namespace: ${namespace})`);
     
-    const response = await axios.get(lokiUrl, { params, headers });
-    // ... rest of the mockItems logic ...
-
-    const workflowNames = new Set();
-    const mockItems = [];
-    const logs = response.data;
+    const response = await customObjectsApi.listNamespacedCustomObject(
+      'argoproj.io',
+      'v1alpha1',
+      namespace,
+      'workflows'
+    );
     
-    if (Array.isArray(logs)) {
-      logs.forEach(log => {
-        if (log.labels && log.labels.workflows_argoproj_io_workflow) {
-          const name = log.labels.workflows_argoproj_io_workflow;
-          if (!workflowNames.has(name)) {
-            workflowNames.add(name);
-            mockItems.push({
-              metadata: {
-                name: name,
-                namespace: namespace,
-                creationTimestamp: log.timestamp || new Date().toISOString(),
-                labels: log.labels
-              },
-              status: {
-                phase: "Unknown (Loki)",
-                startedAt: log.timestamp || new Date().toISOString()
-              }
-            });
-          }
-        }
-      });
-    }
-    res.json(mockItems);
+    // The K8s client wraps the response in { response, body }
+    const items = response.body.items || [];
+    res.json(Array.isArray(items) ? items : []);
   } catch (error) {
-    console.error("Error listing executions (Loki fallback failed):", error.message);
+    console.error("Error fetching workflows from K8s API:", error.message);
+    if (error.body) {
+       console.error("K8s API Error Body:", error.body);
+    }
     next(error);
   }
 });
 
 /**
  * GET /api/executions/:name
- * Get details of a specific Argo Workflow via Argo Server API.
+ * Get details of a specific Argo Workflow directly via Kubernetes API
  */
 apiRouter.get("/executions/:name", async (req, res, next) => {
-  const namespace = process.env.ARGO_NAMESPACE || "default";
-  const { name } = req.params;
-
-  if (process.env.ARGO_SERVER_URL) {
-    const argoServerUrl = process.env.ARGO_SERVER_URL.replace(/\/$/, "");
-    const targetUrl = `${argoServerUrl}/api/v1/workflows/${namespace}/${name}`;
-    try {
-      console.log(`Fetching execution details from Argo: ${targetUrl}`);
-      const headers = getAuthHeaders(req);
-      const response = await axios.get(targetUrl, { headers });
-      return res.json(response.data);
-    } catch (argoError) {
-      console.warn(`Argo Server API get failed for ${name} at ${targetUrl}.`, argoError.message);
-    }
+  try {
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+    const { name } = req.params;
+    
+    console.log(`Fetching workflow details from K8s API (namespace: ${namespace}, name: ${name})`);
+    const response = await customObjectsApi.getNamespacedCustomObject(
+      'argoproj.io',
+      'v1alpha1',
+      namespace,
+      'workflows',
+      name
+    );
+    
+    res.json(response.body);
+  } catch (error) {
+    console.error(`Error fetching workflow ${req.params.name} from K8s API:`, error.message);
+    next(error);
   }
-
-  // Final minimal mock for Loki fallback context
-  res.json({
-    metadata: {
-      name: name,
-      namespace: namespace,
-      creationTimestamp: new Date().toISOString(),
-    },
-    status: {
-      phase: "Unknown (Loki Only)",
-      nodes: {
-        [name]: {
-          id: name,
-          name: name,
-          type: "Pod",
-          phase: "Unknown"
-        }
-      }
-    }
-  });
 });
 
 /**
  * POST /api/executions
- * Submit a new Argo Workflow.
+ * Submit a new Argo Workflow directly via Kubernetes API
  */
 apiRouter.post("/executions", async (req, res, next) => {
   try {
     const namespace = process.env.ARGO_NAMESPACE || "default";
     const workflow = req.body;
     
-    // Basic validation
     if (!workflow || typeof workflow !== "object") {
       return res.status(400).json({ message: "Invalid workflow definition." });
     }
 
-    // Ensure metadata and correct apiVersion/kind
     if (!workflow.metadata) workflow.metadata = {};
     workflow.metadata.namespace = namespace;
     workflow.kind = "Workflow";
     workflow.apiVersion = "argoproj.io/v1alpha1";
     
-    // Remove resourceVersion/uid if copying from an existing workflow
     delete workflow.metadata.resourceVersion;
     delete workflow.metadata.uid;
     delete workflow.metadata.generateName; 
 
-    // OPTION 1: Argo Server API (Preferred if URL is provided)
-    if (process.env.ARGO_SERVER_URL) {
-      const argoServerUrl = process.env.ARGO_SERVER_URL.replace(/\/$/, "");
-      const targetUrl = `${argoServerUrl}/api/v1/workflows/${namespace}`;
-      console.log(`Submitting workflow to Argo Server API: ${targetUrl}`);
-      
-      const headers = getAuthHeaders(req);
-
-      try {
-        const response = await axios.post(
-          targetUrl,
-          { workflow },
-          { headers }
-        );
-        return res.status(201).json(response.data);
-      } catch (argoError) {
-        console.error(`Argo Server API submission failed at ${targetUrl}:`, argoError.response?.data || argoError.message);
-        return res.status(argoError.response?.status || 500).json(argoError.response?.data || { message: argoError.message });
-      }
-    }
-
-    return res.status(400).json({ message: "Argo Server URL is not configured. Execution disabled." });
+    console.log(`Submitting workflow to K8s API (namespace: ${namespace})`);
+    
+    const response = await customObjectsApi.createNamespacedCustomObject(
+      'argoproj.io',
+      'v1alpha1',
+      namespace,
+      'workflows',
+      workflow
+    );
+    
+    res.status(201).json(response.body);
   } catch (error) {
-    console.error("Error submitting execution:", error.message);
+    console.error("Error submitting workflow to K8s API:", error.message);
+    if (error.body) {
+      console.error(`K8s API Error Body:`, error.body);
+      return res.status(error.statusCode || 500).json(error.body);
+    }
     next(error);
   }
 });
+
+// Helper for Loki requests
+function getLokiConfig(req, targetUrl) {
+  const headers = {};
+  if (req.token) {
+    const tokenValue = req.token.startsWith('Bearer ') ? req.token : `Bearer ${req.token}`;
+    headers['Authorization'] = tokenValue;
+    headers['Cookie'] = `authorization=${tokenValue}`;
+  }
+  
+  const https = require('https');
+  const isHttps = targetUrl.startsWith('https://');
+  const config = { headers };
+  
+  if (isHttps) {
+    config.httpsAgent = new https.Agent({ rejectUnauthorized: false });
+  }
+  return config;
+}
 
 /**
  * GET /api/logs/:id
@@ -979,41 +892,38 @@ apiRouter.post("/executions", async (req, res, next) => {
 apiRouter.get("/logs/:id", async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { start_time, end_time, type } = req.query; // type can be 'pod' or 'workflow'
-    
-    // Construct Loki URL based on provided examples
-    const lokiUrl = process.env.LOG_VIEWER_URL || `https://hub-otc.eox.at/services/eoxhub-gateway/cif/log-viewer/search`;
-    
+    const { type, start_time, end_time } = req.query;
+    const lokiUrl = process.env.LOG_VIEWER_URL || `https://hub-test.eox.at/services/eoxhub-gateway/cif/log-viewer/search`;
     const label = type === 'workflow' ? 'workflows_argoproj_io_workflow' : 'pod';
 
+    const config = getLokiConfig(req, lokiUrl);
+    config.params = {
+      sel_label: label,
+      sel_value: id,
+      start_time: start_time || new Date(Date.now() - 3600000 * 24).toISOString().slice(0, 16),
+      end_time: end_time || new Date().toISOString().slice(0, 16),
+      query: ''
+    };
+    
     console.log(`Proxying logs from Loki: ${lokiUrl} (Label: ${label}, Value: ${id})`);
-    const headers = getAuthHeaders(req);
-
-    const response = await axios.get(lokiUrl, {
-      params: {
-        sel_label: label,
-        sel_value: id,
-        start_time: start_time || new Date(Date.now() - 3600000 * 24).toISOString().slice(0, 16), // Default to last 24h
-        end_time: end_time || new Date().toISOString().slice(0, 16),
-        query: ''
-      },
-      headers
-    });
+    const response = await axios.get(lokiUrl, config);
     res.send(response.data);
   } catch (error) {
     console.error(`Error fetching logs for ${req.params.id}:`, error.message);
-    if (error.response) {
-       console.error("Loki Response Data:", JSON.stringify(error.response.data));
-    }
     next(error);
   }
 });
 
-// Resilient API mounting
+
+// --- Resilient API Mounting ---
 if (BASE_PATH !== "") {
-  app.use(`${BASE_PATH}/api`, apiRouter);
+  // Ensure the base path does not have a trailing slash, but the mount point expects a slash before 'api'
+  const cleanBasePath = BASE_PATH.replace(/\/$/, "");
+  app.use(`${cleanBasePath}/api`, apiRouter);
 }
-app.use("/api", apiRouter);
+
+// Always mount on /api as a fallback
+app.use('/api', apiRouter);
 
 // --- 3. CATCH-ALL ROUTE ---
 

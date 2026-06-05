@@ -40,7 +40,7 @@ The easiest way to run the service is using Docker.
 
 1.  **Build the image**:
     ```bash
-    docker build -t argo-manager .
+    docker build -t gitargo .
     ```
 
 2.  **Run the container**:
@@ -51,7 +51,7 @@ The easiest way to run the service is using Docker.
       -e GITLAB_URL="https://gitlab.com" \
       -e GITLAB_WORKFLOWS_PATH="workflows" \
       -e LOG_VIEWER_URL="http://logviewer:8080/search" \
-      argo-manager
+      gitargo
     ```
 
 ### Configuration (Environment Variables)
@@ -99,7 +99,7 @@ To ensure the server picks up backend changes without the container being wiped 
 ```yaml
 spec:
   containers:
-  - name: argo-manager
+  - name: gitargo
     # ...
     command: ["sh", "-c", "while true; do node server.js; sleep 1; done"]
 ```
