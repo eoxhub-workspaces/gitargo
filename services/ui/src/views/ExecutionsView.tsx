@@ -1,6 +1,11 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { useLocation } from "react-router-dom";
-import { getExecutions, WorkflowExecution, getLogs } from "../utils/api";
+import {
+  getExecutions,
+  WorkflowExecution,
+  getLogs,
+  deleteExecution
+} from "../utils/api";
 import Spinner from "../components/global/Spinner";
 import {
   CheckCircleIcon,
@@ -21,12 +26,32 @@ const ExecutionsView: React.FC = () => {
   );
   const [logs, setLogs] = useState<string | null>(null);
   const [logsLoading, setLogsLoading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const queryParams = useMemo(
     () => new URLSearchParams(location.search),
     [location.search]
   );
   const cronFilter = queryParams.get("cron");
+
+  const handleDelete = async (name: string) => {
+    if (
+      !window.confirm(`Are you sure you want to delete workflow run ${name}?`)
+    )
+      return;
+    setIsDeleting(true);
+    try {
+      await deleteExecution(name);
+      if (selectedExe?.metadata.name === name) {
+        setSelectedExe(null);
+      }
+      await fetchExecutions();
+    } catch (err: any) {
+      alert(`Failed to delete: ${err.message || "Unknown error"}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const fetchExecutions = async () => {
     try {
@@ -182,17 +207,25 @@ const ExecutionsView: React.FC = () => {
                       <ChevronRightIcon className="h-5 w-5 text-gray-400" />
                     </div>
                   </div>
-                  <div className="mt-2 sm:flex sm:justify-between">
-                    <div className="sm:flex">
-                      <p className="flex items-center text-sm text-gray-500">
-                        <ClockIcon className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" />
-                        Created{" "}
-                        {new Date(
-                          exe.metadata.creationTimestamp
-                        ).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
+                  <div className="mt-2 flex items-center justify-between sm:mt-0">
+                    <p className="flex items-center text-sm text-gray-500">
+                      <ClockIcon className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" />
+                      Created{" "}
+                      {new Date(
+                        exe.metadata.creationTimestamp
+                      ).toLocaleString()}
+                    </p>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(exe.metadata.name);
+                      }}
+                      disabled={isDeleting}
+                      className="ml-4 text-red-500 hover:text-red-700 text-xs px-2 py-1 border border-transparent rounded hover:border-red-200 bg-white shadow-sm z-10"
+                    >
+                      Delete
+                    </button>
+                  </div>{" "}
                 </div>
               </li>
             ))}

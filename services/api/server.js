@@ -761,9 +761,51 @@ function injectDefaults(content, virtualPath) {
 
 // --- Kubernetes Client Initialization ---
 const kc = new k8s.KubeConfig();
+const SA_TOKEN_PATH = '/var/run/secrets/kubernetes.io/serviceaccount/token';
+
 try {
-  kc.loadFromDefault(); // Attempts ~/.kube/config first, then falls back to loadFromCluster()
-  console.log("Kubernetes client initialized successfully.");
+  if (fs.existsSync(SA_TOKEN_PATH)) {
+    console.log(`Found ServiceAccount token at ${SA_TOKEN_PATH}`);
+    kc.loadFromCluster();
+  } else {
+    console.warn(`ServiceAccount token NOT FOUND at ${SA_TOKEN_PATH}. Falling back to default config.`);
+    kc.loadFromDefault();
+  }
+  
+  // Explicitly check for KUBERNETES_SERVICE_HOST to handle environments where DNS for .default.svc is flaky
+  const cluster = kc.getCurrentCluster();
+  if (cluster && process.env.KUBERNETES_SERVICE_HOST) {
+    const host = process.env.KUBERNETES_SERVICE_HOST;
+    const port = process.env.KUBERNETES_SERVICE_PORT || '443';
+    cluster.server = `https://${host}:${port}`;
+    cluster.skipTLSVerify = true; // Skip verification when using IP address
+    console.log(`Using KUBERNETES_SERVICE_HOST for API connection: ${cluster.server} (TLS verify skipped)`);
+  }
+
+  // Allow manual token override from environment
+  if (process.env.ARGO_AUTH_TOKEN) {
+    console.log("Applying ARGO_AUTH_TOKEN override from environment.");
+    const user = kc.getCurrentUser();
+    if (user) {
+      user.token = process.env.ARGO_AUTH_TOKEN;
+    } else {
+      kc.addUser({
+        name: 'default-user',
+        token: process.env.ARGO_AUTH_TOKEN
+      });
+      const context = kc.getContextObject('default');
+      if (context) {
+        context.user = 'default-user';
+      }
+    }
+  }
+  
+  const user = kc.getCurrentUser();
+  if (user && user.token) {
+    console.log("Kubernetes client initialized with a token.");
+  } else {
+    console.warn("Kubernetes client initialized but NO TOKEN was found.");
+  }
 } catch (e) {
   console.error("Failed to initialize Kubernetes client:", e.message);
 }
@@ -824,6 +866,36 @@ apiRouter.get("/executions/:name", async (req, res, next) => {
 });
 
 /**
+ * DELETE /api/executions/:name
+ * Delete a specific Argo Workflow directly via Kubernetes API
+ */
+apiRouter.delete("/executions/:name", async (req, res, next) => {
+  try {
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+    const { name } = req.params;
+    
+    console.log(`Deleting workflow from K8s API (namespace: ${namespace}, name: ${name})`);
+    
+    const response = await customObjectsApi.deleteNamespacedCustomObject(
+      'argoproj.io',
+      'v1alpha1',
+      namespace,
+      'workflows',
+      name
+    );
+    
+    res.json({ message: `Workflow ${name} deleted successfully.` });
+  } catch (error) {
+    console.error(`Error deleting workflow ${req.params.name} from K8s API:`, error.message);
+    if (error.body) {
+      console.error(`K8s API Error Body:`, error.body);
+      return res.status(error.statusCode || 500).json(error.body);
+    }
+    next(error);
+  }
+});
+
+/**
  * POST /api/executions
  * Submit a new Argo Workflow directly via Kubernetes API
  */
@@ -843,7 +915,18 @@ apiRouter.post("/executions", async (req, res, next) => {
     
     delete workflow.metadata.resourceVersion;
     delete workflow.metadata.uid;
-    delete workflow.metadata.generateName; 
+    
+    // To allow multiple executions of the same template, we must use generateName
+    // and remove the exact name, so Kubernetes appends a unique ID.
+    if (workflow.metadata.name) {
+      workflow.metadata.generateName = workflow.metadata.name;
+      if (!workflow.metadata.generateName.endsWith('-')) {
+         workflow.metadata.generateName += '-';
+      }
+      delete workflow.metadata.name;
+    } else if (!workflow.metadata.generateName) {
+      workflow.metadata.generateName = 'workflow-';
+    }
 
     console.log(`Submitting workflow to K8s API (namespace: ${namespace})`);
     

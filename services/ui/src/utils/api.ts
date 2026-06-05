@@ -118,6 +118,10 @@ export const getExecution = async (
   return response.data;
 };
 
+export const deleteExecution = async (name: string): Promise<void> => {
+  await api.delete(`/executions/${name}`);
+};
+
 export const submitExecution = async (
   workflow: any
 ): Promise<WorkflowExecution> => {
