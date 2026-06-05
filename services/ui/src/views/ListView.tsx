@@ -349,7 +349,14 @@ const ListView: React.FC = () => {
               {displayedWorkflows.map((workflow) => (
                 <li key={workflow.path}>
                   <div
-                    className={`px-6 py-4 flex items-center justify-between hover:bg-[#f8fbfc] transition-colors ${viewTab === "deleted" ? "opacity-70" : ""}`}
+                    onClick={() => {
+                      if (viewTab === "active") {
+                        navigate(
+                          `/edit/code/${encodeURIComponent(workflow.path)}`
+                        );
+                      }
+                    }}
+                    className={`px-6 py-4 flex items-center justify-between hover:bg-[#f8fbfc] transition-colors ${viewTab === "deleted" ? "opacity-70" : "cursor-pointer"}`}
                   >
                     <div className="flex items-center min-w-0 flex-1">
                       <div className="flex-shrink-0">
@@ -399,7 +406,10 @@ const ListView: React.FC = () => {
                         </p>
                       </div>
                     </div>
-                    <div className="ml-4 flex-shrink-0 flex items-center space-x-2">
+                    <div
+                      className="ml-4 flex-shrink-0 flex items-center space-x-2"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       {viewTab === "active" ? (
                         <>
                           <button
@@ -410,19 +420,17 @@ const ListView: React.FC = () => {
                             <PlayIcon className="h-4 w-4 mr-1.5" />
                             Execute
                           </button>
-                          {metadata[workflow.path]?.kind === "CronWorkflow" && (
-                            <Link
-                              to={`/executions?cron=${workflow.path
-                                .split("/")
-                                .pop()
-                                ?.replace(/\.ya?ml$/i, "")}`}
-                              className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-                              title="View Cron Executions"
-                            >
-                              <ClockIcon className="h-4 w-4 mr-1.5 text-gray-500" />
-                              History
-                            </Link>
-                          )}
+                          <Link
+                            to={`/executions?workflow=${workflow.path
+                              .split("/")
+                              .pop()
+                              ?.replace(/\.ya?ml$/i, "")}`}
+                            className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+                            title="View Executions"
+                          >
+                            <ClockIcon className="h-4 w-4 mr-1.5 text-gray-500" />
+                            Runs
+                          </Link>
                           {config?.allowPublishing &&
                             metadata[workflow.path]?.kind ===
                               "WorkflowTemplate" && (
@@ -514,19 +522,11 @@ const ListView: React.FC = () => {
                                 </button>
                               </div>
                             )}
-                          <div className="flex border border-gray-300 rounded overflow-hidden shadow-sm">
-                            <Link
-                              to={`/edit/code/${encodeURIComponent(workflow.path)}`}
-                              className={`inline-flex items-center px-3 py-1.5 text-xs font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors ${config?.experimentalCanvas ? "border-r border-gray-300" : ""}`}
-                              title="Edit in Code Mode"
-                            >
-                              <CodeBracketIcon className="mr-1.5 h-4 w-4 text-[#004170]" />
-                              Code
-                            </Link>
+                          <div className="flex rounded overflow-hidden shadow-sm">
                             {config?.experimentalCanvas && (
                               <Link
                                 to={`/edit/canvas/${encodeURIComponent(workflow.path)}`}
-                                className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors"
+                                className="inline-flex items-center px-3 py-1.5 text-xs font-medium border border-gray-300 rounded text-gray-700 bg-white hover:bg-gray-50 transition-colors"
                                 title="Edit in Canvas Mode"
                               >
                                 <Squares2X2Icon className="mr-1.5 h-4 w-4 text-[#0078b4]" />
@@ -534,13 +534,6 @@ const ListView: React.FC = () => {
                               </Link>
                             )}
                           </div>
-                          <Link
-                            to={`/history/${encodeURIComponent(workflow.path)}`}
-                            className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-                            title="History"
-                          >
-                            <ClockIcon className="h-4 w-4 text-gray-500" />
-                          </Link>
                           <button
                             onClick={() => handleDelete(workflow.path)}
                             className="inline-flex items-center px-3 py-1.5 border border-red-300 shadow-sm text-xs font-medium rounded text-red-700 bg-white hover:bg-red-50 transition-colors"
@@ -551,14 +544,6 @@ const ListView: React.FC = () => {
                         </>
                       ) : (
                         <>
-                          <Link
-                            to={`/history/${encodeURIComponent(workflow.path)}`}
-                            className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-                            title="History"
-                          >
-                            <ClockIcon className="-ml-0.5 mr-1 h-4 w-4 text-gray-500" />
-                            History
-                          </Link>
                           <button
                             onClick={() => handleRestore(workflow.path)}
                             className="inline-flex items-center px-3 py-1.5 border border-green-300 shadow-sm text-xs font-medium rounded text-green-700 bg-white hover:bg-green-50 transition-colors"

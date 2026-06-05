@@ -13,7 +13,8 @@ import {
   ClockIcon,
   ArrowPathIcon,
   CommandLineIcon,
-  ChevronRightIcon
+  ChevronRightIcon,
+  TrashIcon
 } from "@heroicons/react/24/outline";
 
 const ExecutionsView: React.FC = () => {
@@ -33,6 +34,7 @@ const ExecutionsView: React.FC = () => {
     [location.search]
   );
   const cronFilter = queryParams.get("cron");
+  const workflowFilter = queryParams.get("workflow");
 
   const handleDelete = async (name: string) => {
     if (
@@ -80,15 +82,27 @@ const ExecutionsView: React.FC = () => {
       setLoading(false);
     }
   };
-
   const filteredExecutions = useMemo(() => {
-    if (!cronFilter) return executions;
-    return executions.filter(
-      (exe) =>
-        exe.metadata.labels?.["workflows.argoproj.io/cron-workflow"] ===
-        cronFilter
-    );
-  }, [executions, cronFilter]);
+    let result = executions;
+    if (cronFilter) {
+      result = result.filter(
+        (exe) =>
+          exe.metadata.labels &&
+          exe.metadata.labels["workflows.argoproj.io/cron-workflow"] ===
+            cronFilter
+      );
+    }
+    if (workflowFilter) {
+      result = result.filter(
+        (exe) =>
+          (exe.metadata.labels &&
+            exe.metadata.labels["workflows.argoproj.io/workflow-template"] ===
+              workflowFilter) ||
+          exe.metadata.name.startsWith(`${workflowFilter}-`)
+      );
+    }
+    return result;
+  }, [executions, cronFilter, workflowFilter]);
 
   useEffect(() => {
     fetchExecutions();
@@ -221,9 +235,10 @@ const ExecutionsView: React.FC = () => {
                         handleDelete(exe.metadata.name);
                       }}
                       disabled={isDeleting}
-                      className="ml-4 text-red-500 hover:text-red-700 text-xs px-2 py-1 border border-transparent rounded hover:border-red-200 bg-white shadow-sm z-10"
+                      className="ml-4 inline-flex items-center px-3 py-1.5 border border-red-300 shadow-sm text-xs font-medium rounded text-red-700 bg-white hover:bg-red-50 transition-colors z-10"
+                      title="Delete Execution"
                     >
-                      Delete
+                      <TrashIcon className="h-4 w-4" />
                     </button>
                   </div>{" "}
                 </div>

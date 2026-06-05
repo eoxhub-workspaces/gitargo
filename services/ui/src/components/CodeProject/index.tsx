@@ -2,7 +2,12 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import toast from "react-hot-toast";
 import { validateK8sYaml } from "../../utils/k8sValidation";
-import { CloudArrowUpIcon, Squares2X2Icon } from "@heroicons/react/20/solid";
+import {
+  CloudArrowUpIcon,
+  Squares2X2Icon,
+  ClockIcon,
+  PlayIcon
+} from "@heroicons/react/20/solid";
 import YAML from "yaml";
 
 import * as api from "../../utils/api";
@@ -27,10 +32,61 @@ export default function CodeProject() {
   const [yamlContent, setYamlContent] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
   const [config, setConfig] = useState<api.AppConfig | null>(null);
+  const [executions, setExecutions] = useState<api.WorkflowExecution[]>([]);
+  const [showRuns, setShowRuns] = useState(!!filename);
 
   useTitle([currentFilename || "New workflow", "Code Mode"].join(" | "));
 
   const isNewWorkflow = !filename && !!initialName;
+
+  const fetchExecutions = async () => {
+    if (!filename) return;
+    try {
+      const data = await api.getExecutions();
+      const logicalName = decodeURIComponent(filename)
+        .split("/")
+        .pop()
+        ?.replace(/\.ya?ml$/i, "");
+
+      const filtered = data.filter(
+        (exe) =>
+          (exe.metadata.labels &&
+            exe.metadata.labels["workflows.argoproj.io/workflow-template"] ===
+              logicalName) ||
+          exe.metadata.name.startsWith(`${logicalName}-`)
+      );
+
+      // Sort newest first
+      filtered.sort(
+        (a, b) =>
+          new Date(b.metadata.creationTimestamp).getTime() -
+          new Date(a.metadata.creationTimestamp).getTime()
+      );
+
+      setExecutions(filtered);
+    } catch (err: any) {
+      console.error("Failed to fetch executions:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchExecutions();
+    const interval = setInterval(fetchExecutions, 10000);
+    return () => clearInterval(interval);
+  }, [filename]);
+
+  const handleSaveAndRun = async () => {
+    await handleSave();
+    try {
+      const parsed = YAML.parse(yamlContent);
+      await api.submitExecution(parsed);
+      toast.success("Workflow executed successfully!");
+      if (!showRuns) setShowRuns(true);
+      setTimeout(fetchExecutions, 1000); // refresh after a short delay
+    } catch (err: any) {
+      toast.error(`Execution failed: ${err.message || "Unknown error"}`);
+    }
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -201,6 +257,16 @@ export default function CodeProject() {
             </span>
           </div>
           <div className="flex space-x-2">
+            {!isNewWorkflow && (
+              <button
+                className={`flex space-x-1 items-center px-3 py-1.5 border text-sm font-medium rounded-md transition-colors ${showRuns ? "bg-gray-100 border-gray-300 text-gray-800" : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"}`}
+                onClick={() => setShowRuns(!showRuns)}
+                title="Toggle Runs"
+              >
+                <ClockIcon className="w-4 h-4 text-gray-500" />
+                <span>Runs</span>
+              </button>
+            )}
             {currentFilename && config?.experimentalCanvas && (
               <button
                 className="flex space-x-1 items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors"
@@ -216,32 +282,99 @@ export default function CodeProject() {
               </button>
             )}
             <button
-              className="flex space-x-1 items-center px-4 py-1.5 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-[#004170] hover:bg-[#002f52] focus:outline-none transition-colors"
+              className="flex space-x-1 items-center px-4 py-1.5 border border-transparent text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 border-gray-300 focus:outline-none transition-colors"
               onClick={handleSave}
             >
               <CloudArrowUpIcon className="w-4 h-4" />
               <span>Save</span>
             </button>
+            <button
+              className="flex space-x-1 items-center px-4 py-1.5 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none transition-colors"
+              onClick={handleSaveAndRun}
+            >
+              <PlayIcon className="w-4 h-4" />
+              <span>Save & Run</span>
+            </button>
           </div>
         </div>
 
         {/* Editor Area */}
-        <div className="flex-1 relative">
-          {/* 
-              We use a wrapper to hide the negative padding/margin that the CodeEditor 
-              might have, since it was originally built for the split view. 
-              The CodeEditor component has 'pt-9' hardcoded which we just absorb here.
-           */}
-          <div className="absolute inset-0 bg-[#1e1e1e]">
-            <CodeEditor
-              data={yamlContent}
-              language="yaml"
-              onChange={(val) => setYamlContent(val)}
-              disabled={false}
-              lineWrapping={true}
-              height="100%"
-            />
+        <div className="flex-1 flex overflow-hidden">
+          <div
+            className={`relative ${showRuns ? "w-2/3 border-r border-gray-200" : "w-full"}`}
+          >
+            <div className="absolute inset-0 bg-white">
+              <CodeEditor
+                data={yamlContent}
+                language="yaml"
+                onChange={(val) => setYamlContent(val)}
+                disabled={false}
+                lineWrapping={true}
+                height="100%"
+              />
+            </div>
           </div>
+          {showRuns && (
+            <div className="w-1/3 bg-gray-50 overflow-y-auto flex flex-col">
+              <div className="p-4 border-b border-gray-200 bg-white flex justify-between items-center sticky top-0 z-10">
+                <h3 className="text-sm font-semibold text-gray-700">
+                  Recent Runs
+                </h3>
+              </div>
+              <ul className="divide-y divide-gray-200">
+                {executions.length === 0 ? (
+                  <li className="p-4 text-sm text-gray-500 text-center">
+                    No runs available
+                  </li>
+                ) : (
+                  executions.map((exe) => (
+                    <li
+                      key={exe.metadata.name}
+                      className="p-4 hover:bg-gray-100 transition-colors cursor-pointer"
+                      onClick={() =>
+                        navigate(
+                          `/executions?workflow=${decodeURIComponent(
+                            filename || ""
+                          )
+                            .split("/")
+                            .pop()
+                            ?.replace(/\.ya?ml$/i, "")}`
+                        )
+                      }
+                    >
+                      <div className="flex justify-between items-start mb-1">
+                        <span className="text-sm font-medium text-gray-900 truncate">
+                          {exe.metadata.name}
+                        </span>
+                        <span
+                          className={`text-xs font-mono px-1.5 py-0.5 rounded ml-2 ${
+                            exe.status?.phase === "Succeeded"
+                              ? "bg-green-100 text-green-800"
+                              : exe.status?.phase === "Failed" ||
+                                  exe.status?.phase === "Error"
+                                ? "bg-red-100 text-red-800"
+                                : exe.status?.phase === "Running"
+                                  ? "bg-blue-100 text-blue-800"
+                                  : "bg-gray-200 text-gray-800"
+                          }`}
+                        >
+                          {exe.status?.phase || "Pending"}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs text-gray-500 mt-2">
+                        <span>
+                          Started:{" "}
+                          {exe.status?.startedAt
+                            ? new Date(exe.status.startedAt).toLocaleString()
+                            : "N/A"}
+                        </span>
+                      </div>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
     </div>
