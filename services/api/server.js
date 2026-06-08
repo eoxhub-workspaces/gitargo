@@ -413,6 +413,48 @@ apiRouter.delete("/workflows/*/publish", async (req, res, next) => {
   }
 });
 
+// GET /api/workflows/*/sync-status
+// Check if the Kubernetes resource for a workflow has been updated with a specific sync-token.
+apiRouter.get("/workflows/*/sync-status", async (req, res, next) => {
+  try {
+    const virtualPath = req.params[0];
+    const filename = virtualPath.split('/').pop();
+    const logicalName = filename.replace(/\.ya?ml$/i, "");
+    const { token } = req.query;
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+
+    if (!token) {
+      return res.status(400).json({ message: "token query parameter is required." });
+    }
+
+    console.log(`Checking sync status for ${logicalName} with token ${token}`);
+
+    // We check all allowed Argo kinds
+    for (const kind of allowedArgoKinds) {
+      try {
+        const response = await customObjectsApi.getNamespacedCustomObject(
+          'argoproj.io',
+          'v1alpha1',
+          namespace,
+          `${kind.toLowerCase()}s`,
+          logicalName
+        );
+
+        const currentToken = response.body.metadata?.annotations?.['gitargo/sync-token'];
+        if (currentToken === token) {
+          return res.json({ synced: true, kind: kind });
+        }
+      } catch (e) {
+        // Resource might not exist as this kind, ignore and try next
+      }
+    }
+
+    res.json({ synced: false });
+  } catch (error) {
+    next(error);
+  }
+});
+
 /**
  * GET /api/workflows
  * List files ending in .yaml, .yml, or .deleted in the GITLAB_WORKFLOWS_PATH.
@@ -968,32 +1010,156 @@ function getLokiConfig(req, targetUrl) {
   return config;
 }
 
+// --- Loki Log Integration ---
+const LOKI_URL = process.env.LOKI_URL || "http://localhost:4567";
+const NAMESPACE = process.env.ARGO_NAMESPACE || "default";
+const NAMESPACE_LABEL = process.env.LOKI_NAMESPACE_LABEL || "namespace";
+const ARGO_WORKFLOW_LABEL = process.env.ARGO_WORKFLOW_LABEL || "workflows_argoproj_io_workflow";
+const LOKI_LABELS = [
+  "app_kubernetes_io_name",
+  "container",
+  "instance",
+  "job",
+  "k8s_pod_name",
+  "pod",
+  "service_name",
+  ARGO_WORKFLOW_LABEL,
+];
+
+function toLokiTimestamp(dtStr) {
+  try {
+    if (!dtStr) return "";
+    const dt = new Date(dtStr);
+    return (BigInt(dt.getTime()) * BigInt(1000000)).toString();
+  } catch (e) {
+    return "";
+  }
+}
+
+/**
+ * GET /api/logs/labels
+ * Fetch all available label keys for the namespace.
+ */
+apiRouter.get("/logs/labels", async (req, res, next) => {
+  try {
+    const { start_time } = req.query;
+    const startNs = toLokiTimestamp(start_time || new Date(Date.now() - 3600000).toISOString());
+    
+    const config = getLokiConfig(req, LOKI_URL);
+    config.params = {
+      query: `{${NAMESPACE_LABEL}="${NAMESPACE}"}`,
+      start: startNs
+    };
+
+    const resp = await axios.get(`${LOKI_URL}/loki/api/v1/labels`, config);
+    const labels = resp.data.data || [];
+    const filtered = labels.filter(l => !l.startsWith("__") && LOKI_LABELS.includes(l)).sort();
+    res.json(filtered.length > 0 ? filtered : LOKI_LABELS);
+  } catch (error) {
+    console.error("Error fetching Loki labels:", error.message);
+    res.json(LOKI_LABELS);
+  }
+});
+
+/**
+ * GET /api/logs/values/:label
+ * Fetch all values for a specific label key.
+ */
+apiRouter.get("/logs/values/:label", async (req, res, next) => {
+  try {
+    const { label } = req.params;
+    const { start_time, end_time } = req.query;
+    
+    if (!LOKI_LABELS.includes(label)) {
+      return res.status(400).json({ message: `Label ${label} not allowed.` });
+    }
+
+    const startNs = toLokiTimestamp(start_time || new Date(Date.now() - 3600000).toISOString());
+    const endNs = end_time ? toLokiTimestamp(end_time) : null;
+
+    const config = getLokiConfig(req, LOKI_URL);
+    config.params = {
+      query: `{${NAMESPACE_LABEL}="${NAMESPACE}"}`,
+      start: startNs
+    };
+    if (endNs) config.params.end = endNs;
+
+    const resp = await axios.get(`${LOKI_URL}/loki/api/v1/label/${label}/values`, config);
+    res.json((resp.data.data || []).sort());
+  } catch (error) {
+    console.error(`Error fetching Loki values for ${req.params.label}:`, error.message);
+    res.json([]);
+  }
+});
+
 /**
  * GET /api/logs/:id
- * Proxy logs from Loki log viewer.
+ * Fetch raw logs for a specific workflow or pod from Loki.
  */
 apiRouter.get("/logs/:id", async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { type, start_time, end_time } = req.query;
-    const lokiUrl = process.env.LOG_VIEWER_URL || `https://hub-test.eox.at/services/eoxhub-gateway/cif/log-viewer/search`;
-    const label = type === 'workflow' ? 'workflows_argoproj_io_workflow' : 'pod';
+    const { type, start_time, end_time, query } = req.query;
+    const label = type === 'workflow' ? ARGO_WORKFLOW_LABEL : 'pod';
 
-    const config = getLokiConfig(req, lokiUrl);
+    const startNs = toLokiTimestamp(start_time || new Date(Date.now() - 3600000 * 24).toISOString());
+    const endNs = end_time ? toLokiTimestamp(end_time) : null;
+
+    let logql = `{${NAMESPACE_LABEL}="${NAMESPACE}", ${label}="${id}"}`;
+    if (query) {
+      logql += ` |= "${query}"`;
+    }
+
+    const config = getLokiConfig(req, LOKI_URL);
     config.params = {
-      sel_label: label,
-      sel_value: id,
-      start_time: start_time || new Date(Date.now() - 3600000 * 24).toISOString().slice(0, 16),
-      end_time: end_time || new Date().toISOString().slice(0, 16),
-      query: ''
+      query: logql,
+      limit: 1000,
+      start: startNs
     };
+    if (endNs) config.params.end = endNs;
+
+    console.log(`Fetching logs from Loki: ${LOKI_URL}/loki/api/v1/query_range?query=${logql}`);
+    const resp = await axios.get(`${LOKI_URL}/loki/api/v1/query_range`, config);
     
-    console.log(`Proxying logs from Loki: ${lokiUrl} (Label: ${label}, Value: ${id})`);
-    const response = await axios.get(lokiUrl, config);
-    res.send(response.data);
+    let logs = [];
+    if (resp.data.data && resp.data.data.result && resp.data.data.result.length > 0) {
+      for (const stream of resp.data.data.result) {
+        for (const val of stream.values) {
+          let line = val[1];
+          
+          // Clean CRI-O / Docker format: logtag="F" message="..."
+          const messageMatch = line.match(/logtag="[A-Z]" message="(.*)"/);
+          if (messageMatch) {
+            line = messageMatch[1];
+          }
+
+          // Filter out Argo Executor noise
+          const isArgoNoise = 
+            line.includes('argo=true') || 
+            line.includes('Workflow Executor') ||
+            line.includes('Using executor retry strategy') ||
+            line.includes('Executor initialized') ||
+            line.includes('Starting deadline monitor') ||
+            line.includes('Main container completed') ||
+            line.includes('No output parameters') ||
+            line.includes('No output artifacts') ||
+            line.includes('Capturing script output ignored');
+
+          if (!isArgoNoise) {
+            logs.push(line);
+          }
+        }
+      }
+    }
+
+    if (logs.length === 0) {
+      return res.send("No logs found in Loki for the specified execution time range.");
+    }
+    
+    res.send(logs.reverse().join('\n'));
   } catch (error) {
     console.error(`Error fetching logs for ${req.params.id}:`, error.message);
-    next(error);
+    res.status(500).send("Error fetching logs from Loki.");
   }
 });
 

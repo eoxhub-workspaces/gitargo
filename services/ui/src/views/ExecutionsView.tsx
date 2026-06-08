@@ -25,9 +25,10 @@ const ExecutionsView: React.FC = () => {
   const [selectedExe, setSelectedExe] = useState<WorkflowExecution | null>(
     null
   );
-  const [logs, setLogs] = useState<string | null>(null);
+  const [logs, setLogs] = useState<string>("");
   const [logsLoading, setLogsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   const queryParams = useMemo(
     () => new URLSearchParams(location.search),
@@ -101,7 +102,13 @@ const ExecutionsView: React.FC = () => {
           exe.metadata.name.startsWith(`${workflowFilter}-`)
       );
     }
-    return result;
+    // Sort by creationTimestamp descending (newest first)
+    return [...result].sort((a, b) => {
+      return (
+        new Date(b.metadata.creationTimestamp).getTime() -
+        new Date(a.metadata.creationTimestamp).getTime()
+      );
+    });
   }, [executions, cronFilter, workflowFilter]);
 
   useEffect(() => {
@@ -110,16 +117,82 @@ const ExecutionsView: React.FC = () => {
     return () => clearInterval(interval);
   }, [selectedExe?.metadata.name]);
 
-  const fetchLogs = async (id: string, type: "pod" | "workflow" = "pod") => {
+  const [logQuery, setLogQuery] = useState("");
+
+  const fetchLogs = async (
+    id: string,
+    type: "pod" | "workflow" = "pod",
+    query?: string,
+    isPolling = false
+  ) => {
     try {
-      setLogsLoading(true);
-      setLogs(null);
-      const data = await getLogs(id, type);
+      if (!isPolling) {
+        setLogsLoading(true);
+        setLogs("");
+      }
+      setSelectedNodeId(id);
+
+      let startTime: string | undefined;
+      let endTime: string | undefined;
+
+      if (selectedExe) {
+        startTime = selectedExe.status?.startedAt;
+        if (type === "pod" && selectedExe.status?.nodes?.[id]) {
+          const node = selectedExe.status.nodes[id];
+          if (node.startedAt) startTime = node.startedAt;
+          if (node.finishedAt) endTime = node.finishedAt;
+        }
+      }
+
+      // Buffer start time by 5 minutes to account for clock skew
+      if (startTime) {
+        const dt = new Date(startTime);
+        dt.setMinutes(dt.getMinutes() - 5);
+        startTime = dt.toISOString();
+      }
+
+      // Buffer end time by 5 minutes if it exists
+      if (endTime) {
+        const dt = new Date(endTime);
+        dt.setMinutes(dt.getMinutes() + 5);
+        endTime = dt.toISOString();
+      }
+
+      const data = await getLogs(id, type, query, startTime, endTime);
       setLogs(data);
     } catch (err: any) {
-      setLogs("Failed to fetch logs: " + err.message);
+      if (!isPolling) setLogs("Failed to fetch logs: " + err.message);
     } finally {
-      setLogsLoading(false);
+      if (!isPolling) setLogsLoading(false);
+    }
+  };
+
+  // Poll for logs if the selected node is currently running
+  useEffect(() => {
+    if (!selectedExe || !selectedNodeId) return;
+
+    const node = selectedExe.status?.nodes?.[selectedNodeId];
+    if (node && node.phase === "Running" && node.type === "Pod") {
+      const interval = setInterval(() => {
+        fetchLogs(selectedNodeId, "pod", logQuery, true);
+      }, 5000); // Poll every 5 seconds
+      return () => clearInterval(interval);
+    }
+  }, [selectedExe, selectedNodeId, logQuery]);
+
+  const handleLogSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedExe) {
+      // If we have a selected node that is a Pod, use its ID, otherwise use the workflow ID
+      const activePod = Object.values(selectedExe.status?.nodes || {}).find(
+        (n: any) =>
+          n.phase === "Running" ||
+          n.phase === "Succeeded" ||
+          n.phase === "Failed"
+      );
+      const id = activePod ? (activePod as any).id : selectedExe.metadata.name;
+      const type = activePod ? "pod" : "workflow";
+      fetchLogs(id, type as any, logQuery);
     }
   };
 
@@ -151,8 +224,8 @@ const ExecutionsView: React.FC = () => {
   if (error) return <div className="p-8 text-red-500 text-center">{error}</div>;
 
   return (
-    <div className="p-8 max-w-7xl mx-auto min-h-screen flex flex-col">
-      <div className="flex justify-between items-center mb-6">
+    <div className="p-8 max-w-7xl mx-auto h-screen flex flex-col overflow-hidden">
+      <div className="flex justify-between items-center mb-6 flex-shrink-0">
         <h1 className="text-2xl font-bold text-[#004170]">
           {selectedExe
             ? selectedExe.metadata.name
@@ -165,7 +238,8 @@ const ExecutionsView: React.FC = () => {
             <button
               onClick={() => {
                 setSelectedExe(null);
-                setLogs(null);
+                setLogs("");
+                setSelectedNodeId(null);
               }}
               className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors"
             >
@@ -192,7 +266,7 @@ const ExecutionsView: React.FC = () => {
       </div>
 
       {!selectedExe ? (
-        <div className="bg-white shadow overflow-hidden sm:rounded-md border border-gray-200">
+        <div className="bg-white shadow overflow-y-auto sm:rounded-md border border-gray-200 flex-1">
           <ul className="divide-y divide-gray-200">
             {filteredExecutions.map((exe) => (
               <li key={exe.metadata.name} onClick={() => setSelectedExe(exe)}>
@@ -252,8 +326,8 @@ const ExecutionsView: React.FC = () => {
           </ul>
         </div>
       ) : (
-        <div className="flex flex-col flex-1 space-y-6 overflow-hidden">
-          <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
+        <div className="flex flex-col flex-1 space-y-6 overflow-hidden min-h-0">
+          <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm flex-shrink-0">
             <div className="flex justify-between items-start">
               <div>
                 <p className="text-sm text-gray-500">
@@ -285,8 +359,8 @@ const ExecutionsView: React.FC = () => {
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0">
             {/* Steps List */}
-            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col shadow-sm">
-              <div className="p-4 bg-gray-50 border-b border-gray-200 font-medium text-gray-700">
+            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col shadow-sm min-h-0">
+              <div className="p-4 bg-gray-50 border-b border-gray-200 font-medium text-gray-700 flex-shrink-0">
                 Nodes / Steps
               </div>
               <div className="flex-1 overflow-y-auto">
@@ -325,19 +399,42 @@ const ExecutionsView: React.FC = () => {
             </div>
 
             {/* Logs Panel */}
-            <div className="bg-[#1e1e1e] rounded-lg overflow-hidden flex flex-col shadow-lg border border-gray-800">
-              <div className="p-4 bg-gray-900 border-b border-gray-800 font-medium text-gray-300 flex justify-between items-center">
+            <div className="bg-[#1e1e1e] rounded-lg overflow-hidden flex flex-col shadow-lg border border-gray-800 min-h-0">
+              <div className="p-4 bg-gray-900 border-b border-gray-800 font-medium text-gray-300 flex justify-between items-center flex-shrink-0">
                 <div className="flex items-center space-x-2">
                   <CommandLineIcon className="h-4 w-4" />
                   <span>Logs</span>
                 </div>
-                {logsLoading && <Spinner className="w-4 h-4 text-blue-500" />}
+                <div className="flex items-center space-x-2">
+                  <form onSubmit={handleLogSearch} className="relative">
+                    <input
+                      type="text"
+                      value={logQuery}
+                      onChange={(e) => setLogQuery(e.target.value)}
+                      placeholder="Filter logs..."
+                      className="bg-gray-800 border border-gray-700 text-gray-300 text-xs rounded px-2 py-1 focus:outline-none focus:border-blue-500 w-32 md:w-48"
+                    />
+                    <button type="submit" className="hidden"></button>
+                  </form>
+                  {logsLoading && <Spinner className="w-4 h-4 text-blue-500" />}
+                </div>
               </div>
-              <div className="flex-1 p-4 font-mono text-xs text-green-400 overflow-y-auto whitespace-pre-wrap">
-                {logs ||
-                  (logsLoading
-                    ? "Fetching logs..."
-                    : "Select a pod node to view logs.")}
+              <div className="flex-1 p-4 font-mono text-xs text-green-400 overflow-y-auto whitespace-pre-wrap min-h-0">
+                {logsLoading ? (
+                  <div className="flex items-center space-x-2 text-gray-500">
+                    <Spinner className="w-3 h-3" />
+                    <span>Fetching logs...</span>
+                  </div>
+                ) : logs ? (
+                  logs
+                ) : selectedNodeId ? (
+                  <div className="text-gray-500 italic">
+                    No logs found for this node. They may have been rotated or
+                    expired.
+                  </div>
+                ) : (
+                  "Select a pod node to view logs."
+                )}
               </div>
             </div>
           </div>

@@ -1,6 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Dictionary, omit } from "lodash";
-import { PlusIcon, CloudArrowUpIcon } from "@heroicons/react/20/solid";
+import {
+  PlusIcon,
+  CloudArrowUpIcon,
+  PlayIcon
+} from "@heroicons/react/20/solid";
 import {
   ITemplateNode,
   INodeItem,
@@ -88,14 +92,16 @@ export default function Project() {
 
   const isNewWorkflow = !filename && !!initialName;
 
-  const handleSave = async () => {
+  const handleSave = async (runAfterSave = false) => {
     const name = currentFilename;
     if (!name) {
       toast.error("Filename is required.");
       return;
     }
 
-    const saveToast = toast.loading("Saving workflow...");
+    const saveToast = toast.loading(
+      runAfterSave ? "Saving and preparing run..." : "Saving workflow..."
+    );
     try {
       const visualState = {
         nodes,
@@ -127,12 +133,24 @@ export default function Project() {
         initialName,
         options
       );
+
+      // Inject sync token for reconciliation if running after save
+      const syncToken = Date.now().toString();
+      if (runAfterSave) {
+        if (!manifest.metadata) manifest.metadata = {};
+        if (!manifest.metadata.annotations) manifest.metadata.annotations = {};
+        manifest.metadata.annotations["gitargo/sync-token"] = syncToken;
+      }
+
       const yamlContent = YAML.stringify(manifest);
 
       try {
         validateK8sYaml(yamlContent);
       } catch (e: any) {
-        toast.error(`Validation Error: ${e.message}`, { duration: 5000 });
+        toast.error(`Validation Error: ${e.message}`, {
+          duration: 5000,
+          id: saveToast
+        });
         return;
       }
 
@@ -154,10 +172,54 @@ export default function Project() {
           `Create ${name}`,
           shouldApplyDefaults
         );
-        navigate(`/edit/canvas/${encodeURIComponent(name)}`, { replace: true });
+        // We don't navigate yet if we're running after save,
+        // but we update the currentFilename so polling works.
+        setCurrentFilename(name);
       }
 
-      toast.success("Workflow saved successfully!", { id: saveToast });
+      if (runAfterSave) {
+        toast.loading("Waiting for GitOps reconciliation...", {
+          id: saveToast
+        });
+
+        // Polling for sync status
+        let synced = false;
+        let attempts = 0;
+        const maxAttempts = 30; // 30 seconds
+
+        while (!synced && attempts < maxAttempts) {
+          attempts++;
+          await new Promise((r) => setTimeout(r, 1000));
+          try {
+            const status = await api.getSyncStatus(name, syncToken);
+            if (status.synced) {
+              synced = true;
+              break;
+            }
+          } catch (e) {
+            console.warn("Sync status check failed, retrying...", e);
+          }
+        }
+
+        if (synced) {
+          toast.loading("Submitting workflow...", { id: saveToast });
+          await api.submitExecution(manifest);
+          toast.success("Workflow saved and submitted!", { id: saveToast });
+          navigate("/executions");
+        } else {
+          toast.error(
+            "Workflow saved but GitOps reconciliation timed out. You may need to run it manually.",
+            { id: saveToast, duration: 7000 }
+          );
+        }
+      } else {
+        toast.success("Workflow saved successfully!", { id: saveToast });
+        if (isNewWorkflow) {
+          navigate(`/edit/canvas/${encodeURIComponent(name)}`, {
+            replace: true
+          });
+        }
+      }
     } catch (error: any) {
       const msg =
         error.response?.data?.message ||
@@ -700,10 +762,18 @@ export default function Project() {
                   <button
                     className="flex space-x-1 btn-util"
                     type="button"
-                    onClick={handleSave}
+                    onClick={() => handleSave(false)}
                   >
                     <CloudArrowUpIcon className="w-4" />
                     <span>Save</span>
+                  </button>
+                  <button
+                    className="flex space-x-1 btn-util bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
+                    type="button"
+                    onClick={() => handleSave(true)}
+                  >
+                    <PlayIcon className="w-4" />
+                    <span>Save & Run</span>
                   </button>
                 </div>
               </div>

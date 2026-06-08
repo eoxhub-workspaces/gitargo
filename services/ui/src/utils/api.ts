@@ -131,34 +131,13 @@ export const submitExecution = async (
 
 export const getLogs = async (
   id: string,
-  type: "pod" | "workflow" = "pod"
+  type: "pod" | "workflow" = "pod",
+  query?: string,
+  startTime?: string,
+  endTime?: string
 ): Promise<string> => {
-  // Try direct Loki fetch if URL is available in config
-  try {
-    const config = await getConfig();
-    if (config.logViewerUrl) {
-      const label =
-        type === "workflow" ? "workflows_argoproj_io_workflow" : "pod";
-      const response = await axios.get(config.logViewerUrl, {
-        params: {
-          sel_label: label,
-          sel_value: id,
-          start_time: new Date(Date.now() - 3600000 * 24)
-            .toISOString()
-            .slice(0, 16),
-          end_time: new Date().toISOString().slice(0, 16),
-          query: ""
-        },
-        withCredentials: true
-      });
-      return response.data;
-    }
-  } catch (err) {
-    console.warn("Direct Loki fetch failed, falling back to proxy:", err);
-  }
-
   const response = await api.get(`/logs/${id}`, {
-    params: { type }
+    params: { type, query, start_time: startTime, end_time: endTime }
   });
   return response.data;
 };
@@ -183,6 +162,19 @@ export const publishWorkflow = async (path: string) => {
 export const unpublishWorkflow = async (path: string) => {
   const response = await api.delete(
     `/workflows/${encodeURIComponent(path)}/publish`
+  );
+  return response.data;
+};
+
+export const getSyncStatus = async (
+  path: string,
+  token: string
+): Promise<{ synced: boolean; kind?: string }> => {
+  const response = await api.get(
+    `/workflows/${encodeURIComponent(path)}/sync-status`,
+    {
+      params: { token }
+    }
   );
   return response.data;
 };
