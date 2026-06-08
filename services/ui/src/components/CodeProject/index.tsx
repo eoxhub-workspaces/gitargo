@@ -6,7 +6,8 @@ import {
   CloudArrowUpIcon,
   Squares2X2Icon,
   ClockIcon,
-  PlayIcon
+  PlayIcon,
+  ServerStackIcon
 } from "@heroicons/react/20/solid";
 import YAML from "yaml";
 
@@ -33,7 +34,10 @@ export default function CodeProject() {
   const [loading, setLoading] = useState<boolean>(true);
   const [config, setConfig] = useState<api.AppConfig | null>(null);
   const [executions, setExecutions] = useState<api.WorkflowExecution[]>([]);
-  const [showRuns, setShowRuns] = useState(!!filename);
+  const [history, setHistory] = useState<api.CommitHistory[]>([]);
+  const [activePanel, setActivePanel] = useState<"runs" | "history" | null>(
+    filename ? "runs" : null
+  );
 
   useTitle([currentFilename || "New workflow", "Code Mode"].join(" | "));
 
@@ -69,8 +73,19 @@ export default function CodeProject() {
     }
   };
 
+  const fetchHistory = async () => {
+    if (!filename) return;
+    try {
+      const data = await api.getWorkflowHistory(decodeURIComponent(filename));
+      setHistory(data || []);
+    } catch (err: any) {
+      console.error("Failed to fetch history:", err);
+    }
+  };
+
   useEffect(() => {
     fetchExecutions();
+    fetchHistory();
     const interval = setInterval(fetchExecutions, 10000);
     return () => clearInterval(interval);
   }, [filename]);
@@ -81,7 +96,7 @@ export default function CodeProject() {
       const parsed = YAML.parse(yamlContent);
       await api.submitExecution(parsed);
       toast.success("Workflow executed successfully!");
-      if (!showRuns) setShowRuns(true);
+      if (activePanel !== "runs") setActivePanel("runs");
       setTimeout(fetchExecutions, 1000); // refresh after a short delay
     } catch (err: any) {
       toast.error(`Execution failed: ${err.message || "Unknown error"}`);
@@ -258,14 +273,28 @@ export default function CodeProject() {
           </div>
           <div className="flex space-x-2">
             {!isNewWorkflow && (
-              <button
-                className={`flex space-x-1 items-center px-3 py-1.5 border text-sm font-medium rounded-md transition-colors ${showRuns ? "bg-gray-100 border-gray-300 text-gray-800" : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"}`}
-                onClick={() => setShowRuns(!showRuns)}
-                title="Toggle Runs"
-              >
-                <ClockIcon className="w-4 h-4 text-gray-500" />
-                <span>Runs</span>
-              </button>
+              <>
+                <button
+                  className={`flex space-x-1 items-center px-3 py-1.5 border text-sm font-medium rounded-md transition-colors ${activePanel === "runs" ? "bg-gray-100 border-gray-300 text-gray-800" : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"}`}
+                  onClick={() =>
+                    setActivePanel(activePanel === "runs" ? null : "runs")
+                  }
+                  title="Toggle Runs"
+                >
+                  <ClockIcon className="w-4 h-4 text-gray-500" />
+                  <span>Runs</span>
+                </button>
+                <button
+                  className={`flex space-x-1 items-center px-3 py-1.5 border text-sm font-medium rounded-md transition-colors ${activePanel === "history" ? "bg-gray-100 border-gray-300 text-gray-800" : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"}`}
+                  onClick={() =>
+                    setActivePanel(activePanel === "history" ? null : "history")
+                  }
+                  title="Toggle History"
+                >
+                  <ServerStackIcon className="w-4 h-4 text-gray-500" />
+                  <span>History</span>
+                </button>
+              </>
             )}
             {currentFilename && config?.experimentalCanvas && (
               <button
@@ -301,7 +330,7 @@ export default function CodeProject() {
         {/* Editor Area */}
         <div className="flex-1 flex overflow-hidden">
           <div
-            className={`relative ${showRuns ? "w-2/3 border-r border-gray-200" : "w-full"}`}
+            className={`relative ${activePanel ? "w-2/3 border-r border-gray-200" : "w-full"}`}
           >
             <div className="absolute inset-0 bg-white">
               <CodeEditor
@@ -314,7 +343,7 @@ export default function CodeProject() {
               />
             </div>
           </div>
-          {showRuns && (
+          {activePanel === "runs" && (
             <div className="w-1/3 bg-gray-50 overflow-y-auto flex flex-col">
               <div className="p-4 border-b border-gray-200 bg-white flex justify-between items-center sticky top-0 z-10">
                 <h3 className="text-sm font-semibold text-gray-700">
@@ -367,6 +396,54 @@ export default function CodeProject() {
                           {exe.status?.startedAt
                             ? new Date(exe.status.startedAt).toLocaleString()
                             : "N/A"}
+                        </span>
+                      </div>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+          )}
+          {activePanel === "history" && (
+            <div className="w-1/3 bg-gray-50 overflow-y-auto flex flex-col">
+              <div className="p-4 border-b border-gray-200 bg-white flex justify-between items-center sticky top-0 z-10">
+                <h3 className="text-sm font-semibold text-gray-700">
+                  Commit History
+                </h3>
+              </div>
+              <ul className="divide-y divide-gray-200">
+                {history.length === 0 ? (
+                  <li className="p-4 text-sm text-gray-500 text-center">
+                    No history available
+                  </li>
+                ) : (
+                  history.map((commit) => (
+                    <li
+                      key={commit.id}
+                      className="p-4 hover:bg-gray-100 transition-colors cursor-pointer"
+                      onClick={() =>
+                        navigate(
+                          `/history/${encodeURIComponent(filename || "")}`
+                        )
+                      }
+                    >
+                      <div className="flex flex-col mb-1">
+                        <span
+                          className="text-sm font-medium text-gray-900 truncate"
+                          title={commit.message}
+                        >
+                          {commit.title}
+                        </span>
+                        <span className="text-xs text-gray-500 mt-1">
+                          {commit.author_name}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs text-gray-400 mt-2">
+                        <span>
+                          {new Date(commit.committed_date).toLocaleString()}
+                        </span>
+                        <span className="font-mono bg-gray-200 px-1 py-0.5 rounded">
+                          {commit.short_id}
                         </span>
                       </div>
                     </li>
