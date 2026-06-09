@@ -66,6 +66,9 @@ The easiest way to run the service is using Docker.
 | `PORT` | The port the service runs on inside the container. | `3000` |
 | `ARGO_SERVER_URL` | URL of the Argo Server API (e.g. `https://argo-workflows...`). | - |
 | `LOG_VIEWER_URL` | Internal or external URL for the Loki Log Viewer API. | `https://hub-otc.eox.at/...` |
+| `LOKI_URL` | Internal URL for the Loki API. | `http://loki:3100` |
+| `LOKI_NAMESPACE_LABEL` | Label key for namespace in Loki. | `namespace` |
+| `ARGO_WORKFLOW_LABEL` | Label key for workflow name in Loki. | `workflows_argoproj_io_workflow` |
 | `ARGO_NAMESPACE` | Default namespace for workflows. | `default` |
 | `ARGO_TOLERATIONS` | JSON string of default tolerations to ingest on save. | - |
 

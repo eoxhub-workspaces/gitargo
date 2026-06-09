@@ -1143,7 +1143,9 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
             line.includes('Main container completed') ||
             line.includes('No output parameters') ||
             line.includes('No output artifacts') ||
-            line.includes('Capturing script output ignored');
+            line.includes('Capturing script output ignored') ||
+            // New noise patterns based on user feedback
+            line.match(/time=".*?" level=(info|debug) msg="(Alloc=.*|stopping progress monitor.*|Start loading input artifacts.*)"/);
 
           if (!isArgoNoise) {
             logs.push(line);

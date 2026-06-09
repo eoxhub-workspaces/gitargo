@@ -22,6 +22,7 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
   const [ephemeral, setEphemeral] = useState(false);
   const [ephemeralSize, setEphemeralSize] = useState("2Gi");
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     getConfig()
@@ -34,10 +35,32 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
       .catch(console.error);
   }, []);
 
+  const validateName = (val: string) => {
+    if (!val) return null;
+    const rfc1123Regex =
+      /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
+    if (!rfc1123Regex.test(val)) {
+      return 'Name must consist of lower case alphanumeric characters, "-" or ".", and must start and end with an alphanumeric character.';
+    }
+    return null;
+  };
+
+  const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value.replace(/\.ya?ml$/i, "");
+    setName(val);
+    setErrorMsg(validateName(val));
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     let finalName = name.trim();
     if (!finalName) return;
+
+    const validationError = validateName(finalName);
+    if (validationError) {
+      setErrorMsg(validationError);
+      return;
+    }
 
     // Ensure it always ends with .yaml and strip user-provided extensions
     finalName = finalName.replace(/\.ya?ml$/i, "");
@@ -77,18 +100,23 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
                     <input
                       type="text"
                       value={name}
-                      onChange={(e) =>
-                        setName(e.target.value.replace(/\.ya?ml$/i, ""))
-                      }
+                      onChange={handleNameChange}
                       placeholder="e.g. data-pipeline"
-                      className="shadow appearance-none border rounded-l w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                      className={`shadow appearance-none border rounded-l w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline ${errorMsg ? "border-red-500" : ""}`}
                       required
                       autoFocus
                     />
-                    <span className="bg-gray-100 border border-l-0 rounded-r px-3 py-2 text-gray-500 text-sm">
+                    <span
+                      className={`bg-gray-100 border border-l-0 rounded-r px-3 py-2 text-gray-500 text-sm ${errorMsg ? "border-red-500" : ""}`}
+                    >
                       .yaml
                     </span>
                   </div>
+                  {errorMsg && (
+                    <p className="text-red-500 text-xs italic mt-1">
+                      {errorMsg}
+                    </p>
+                  )}
                 </div>
                 <div className="mb-4">
                   <div className="flex items-center mb-2">

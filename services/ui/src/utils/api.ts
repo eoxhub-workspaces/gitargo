@@ -99,6 +99,8 @@ export interface WorkflowExecution {
   };
   status?: {
     phase: string;
+    message?: string;
+    conditions?: any[];
     startedAt: string;
     finishedAt?: string;
     nodes?: Record<string, any>;

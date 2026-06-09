@@ -121,7 +121,7 @@ const ExecutionsView: React.FC = () => {
 
   const fetchLogs = async (
     id: string,
-    type: "pod" | "workflow" = "pod",
+    type: "pod" | "workflow" | "overview" = "pod",
     query?: string,
     isPolling = false
   ) => {
@@ -131,6 +131,53 @@ const ExecutionsView: React.FC = () => {
         setLogs("");
       }
       setSelectedNodeId(id);
+
+      if (type === "overview") {
+        if (selectedExe) {
+          const overview = [];
+          overview.push(`Workflow: ${selectedExe.metadata.name}`);
+          overview.push(`Phase: ${selectedExe.status?.phase}`);
+          if (selectedExe.status?.message) {
+            overview.push(`Message: ${selectedExe.status.message}`);
+          }
+          if (selectedExe.status?.startedAt) {
+            overview.push(
+              `Started: ${new Date(selectedExe.status.startedAt).toLocaleString()}`
+            );
+          }
+          if (selectedExe.status?.finishedAt) {
+            overview.push(
+              `Finished: ${new Date(selectedExe.status.finishedAt).toLocaleString()}`
+            );
+          }
+
+          if (selectedExe.status?.conditions) {
+            overview.push("\nConditions:");
+            selectedExe.status.conditions.forEach((c: any) => {
+              overview.push(`- ${c.type}=${c.status}: ${c.message || ""}`);
+            });
+          }
+
+          // Check for common errors in nodes if workflow failed
+          if (
+            selectedExe.status?.phase === "Failed" ||
+            selectedExe.status?.phase === "Error"
+          ) {
+            const nodesWithErrors = Object.values(
+              selectedExe.status?.nodes || {}
+            ).filter((n: any) => n.phase === "Failed" || n.phase === "Error");
+            if (nodesWithErrors.length > 0) {
+              overview.push("\nNode Errors:");
+              nodesWithErrors.forEach((n: any) => {
+                overview.push(`- ${n.name}: ${n.message || "Unknown error"}`);
+              });
+            }
+          }
+
+          setLogs(overview.join("\n"));
+        }
+        return;
+      }
 
       let startTime: string | undefined;
       let endTime: string | undefined;
@@ -365,35 +412,91 @@ const ExecutionsView: React.FC = () => {
               </div>
               <div className="flex-1 overflow-y-auto">
                 <ul className="divide-y divide-gray-100">
-                  {Object.values(selectedExe.status?.nodes || {}).map(
-                    (node: any) => (
-                      <li
-                        key={node.id}
-                        className="p-3 hover:bg-gray-50 transition-colors"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-2">
-                            {getStatusIcon(node.phase, "h-4 w-4")}
-                            <span className="text-sm font-medium text-gray-700 truncate max-w-[200px]">
-                              {node.name}
-                            </span>
-                            <span className="text-[10px] text-gray-400 font-mono">
-                              ({node.type})
-                            </span>
+                  <li
+                    className={`p-3 hover:bg-gray-50 transition-colors cursor-pointer ${selectedNodeId === "workflow-overview" ? "bg-blue-50" : ""}`}
+                    onClick={() => fetchLogs("workflow-overview", "overview")}
+                  >
+                    <div className="flex items-center space-x-2">
+                      <CommandLineIcon className="h-4 w-4 text-blue-500" />
+                      <span className="text-sm font-bold text-gray-700">
+                        Workflow Overview
+                      </span>
+                    </div>
+                  </li>
+                  {(() => {
+                    const nodes = selectedExe.status?.nodes || {};
+                    const rootNode = Object.values(nodes).find(
+                      (n: any) => n.name === selectedExe.metadata.name
+                    );
+                    if (!rootNode) return null;
+
+                    const orderedNodes: any[] = [];
+                    const seen = new Set();
+
+                    const traverse = (id: string, depth: number) => {
+                      if (seen.has(id)) return;
+                      seen.add(id);
+                      const node = nodes[id];
+                      if (!node) return;
+                      orderedNodes.push({ ...node, depth });
+                      if (node.children) {
+                        node.children.forEach((childId: string) =>
+                          traverse(childId, depth + 1)
+                        );
+                      }
+                    };
+
+                    traverse((rootNode as any).id, 0);
+
+                    return orderedNodes.map((node: any) => {
+                      const cleanName = node.name.startsWith(
+                        selectedExe.metadata.name
+                      )
+                        ? node.name === selectedExe.metadata.name
+                          ? "Workflow Root"
+                          : node.name
+                              .substring(selectedExe.metadata.name.length)
+                              .replace(/^[.-]/, "")
+                        : node.name;
+
+                      return (
+                        <li
+                          key={node.id}
+                          className={`p-3 hover:bg-gray-50 transition-colors cursor-pointer ${selectedNodeId === node.id ? "bg-blue-50" : ""}`}
+                          style={{
+                            paddingLeft: `${node.depth * 1.5 + 0.75}rem`
+                          }}
+                          onClick={() =>
+                            node.type === "Pod" && fetchLogs(node.id)
+                          }
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-2">
+                              {getStatusIcon(node.phase, "h-4 w-4")}
+                              <span className="text-sm font-medium text-gray-700 truncate max-w-[200px]">
+                                {cleanName}
+                              </span>
+                              <span className="text-[10px] text-gray-400 font-mono">
+                                ({node.type})
+                              </span>
+                            </div>
+                            {node.type === "Pod" && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  fetchLogs(node.id);
+                                }}
+                                className="p-1 rounded hover:bg-gray-200 text-gray-500 transition-colors"
+                                title="View Logs"
+                              >
+                                <CommandLineIcon className="h-4 w-4" />
+                              </button>
+                            )}
                           </div>
-                          {node.type === "Pod" && (
-                            <button
-                              onClick={() => fetchLogs(node.id)}
-                              className="p-1 rounded hover:bg-gray-200 text-gray-500 transition-colors"
-                              title="View Logs"
-                            >
-                              <CommandLineIcon className="h-4 w-4" />
-                            </button>
-                          )}
-                        </div>
-                      </li>
-                    )
-                  )}
+                        </li>
+                      );
+                    });
+                  })()}
                 </ul>
               </div>
             </div>
