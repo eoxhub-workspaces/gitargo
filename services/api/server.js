@@ -1099,57 +1099,114 @@ apiRouter.get("/logs/values/:label", async (req, res, next) => {
 apiRouter.get("/logs/:id", async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { type, start_time, end_time, query } = req.query;
-    const label = type === 'workflow' ? ARGO_WORKFLOW_LABEL : 'pod';
-
+    const { type, start_time, end_time, query, namespace, workflow } = req.query;
+    const ns = namespace || NAMESPACE;
+    
     const startNs = toLokiTimestamp(start_time || new Date(Date.now() - 3600000 * 24).toISOString());
     const endNs = end_time ? toLokiTimestamp(end_time) : null;
 
-    let logql = `{${NAMESPACE_LABEL}="${NAMESPACE}", ${label}="${id}"}`;
+    let logql = "";
+    if (type === 'workflow') {
+      logql = `{${NAMESPACE_LABEL}="${ns}", ${ARGO_WORKFLOW_LABEL}="${id}"}`;
+    } else {
+      // For pods, some Loki setups use 'k8s_pod_name' instead of 'pod'. 
+      // If we have the workflow name, we can also use that label combined with a regex search as a fallback.
+      logql = `{${NAMESPACE_LABEL}="${ns}", pod="${id}"}`;
+    }
+
     if (query) {
       logql += ` |= "${query}"`;
     }
 
     const config = getLokiConfig(req, LOKI_URL);
-    config.params = {
-      query: logql,
-      limit: 1000,
-      start: startNs
-    };
-    if (endNs) config.params.end = endNs;
-
-    console.log(`Fetching logs from Loki: ${LOKI_URL}/loki/api/v1/query_range?query=${logql}`);
-    const resp = await axios.get(`${LOKI_URL}/loki/api/v1/query_range`, config);
     
-    let logs = [];
-    if (resp.data.data && resp.data.data.result && resp.data.data.result.length > 0) {
-      for (const stream of resp.data.data.result) {
-        for (const val of stream.values) {
-          let line = val[1];
-          
-          // Clean CRI-O / Docker format: logtag="F" message="..."
-          const messageMatch = line.match(/logtag="[A-Z]" message="(.*)"/);
-          if (messageMatch) {
-            line = messageMatch[1];
-          }
+    // Helper function to fetch and parse logs
+    const fetchAndParse = async (queryStr) => {
+      config.params = { query: queryStr, limit: 1000, start: startNs };
+      if (endNs) config.params.end = endNs;
+      
+      console.log(`Fetching logs from Loki: ${LOKI_URL}/loki/api/v1/query_range?query=${queryStr}`);
+      let resp;
+      try {
+        resp = await axios.get(`${LOKI_URL}/loki/api/v1/query_range`, config);
+      } catch (err) {
+        console.error("Loki query failed:", err.message);
+        return [];
+      }
+      
+      let parsedLogs = [];
+      let totalLines = 0;
+      let filteredLines = 0;
 
-          // Filter out Argo Executor noise
-          const isArgoNoise = 
-            line.includes('argo=true') || 
-            line.includes('Workflow Executor') ||
-            line.includes('Using executor retry strategy') ||
-            line.includes('Executor initialized') ||
-            line.includes('Starting deadline monitor') ||
-            line.includes('Main container completed') ||
-            line.includes('No output parameters') ||
-            line.includes('No output artifacts') ||
-            line.includes('Capturing script output ignored') ||
-            // New noise patterns based on user feedback
-            line.match(/time=".*?" level=(info|debug) msg="(Alloc=.*|stopping progress monitor.*|Start loading input artifacts.*)"/);
+      if (resp.data.data && resp.data.data.result && resp.data.data.result.length > 0) {
+        for (const stream of resp.data.data.result) {
+          for (const val of stream.values) {
+            totalLines++;
+            let line = val[1];
+            console.debug(`[DEBUG] Raw Loki line: ${line}`);
+            
+            // 1. Extract inner message from CRI-O format
+            const criMatch = line.match(/logtag="[A-Z]"\s+message="(.*)"/);
+            if (criMatch) {
+              line = criMatch[1];
+              line = line.replace(/\\"/g, '"');
+              console.debug(`[DEBUG] After CRI-O unwrap: ${line}`);
+            }
 
-          if (!isArgoNoise) {
-            logs.push(line);
+            // 2. Filter out Argo internal logs.
+            // Be careful: only filter if it looks like SYSTEM argo noise
+            const isArgoSystemLog = 
+              (line.startsWith('time="') && line.includes('level=info') && 
+              (line.includes('msg="Alloc=') || line.includes('msg="starting progress monitor') || 
+               line.includes('msg="Starting deadline monitor') || line.includes('msg="Executor initialized') ||
+               line.includes('msg="Main container completed') || line.includes('msg="No output artifacts')));
+
+            if (isArgoSystemLog || line.includes('argo=true')) {
+              console.debug(`[DEBUG] Filtering as Argo noise: ${line}`);
+              filteredLines++;
+              continue;
+            }
+
+            // 3. Try to extract payload from generic logrus format if it's our own log
+            // Example: time="..." level=info msg="User Message"
+            const msgMatch = line.match(/msg="(.*)"/);
+            if (msgMatch && line.includes('level=')) {
+                console.debug(`[DEBUG] Extracting msg payload: ${msgMatch[1]}`);
+                line = msgMatch[1];
+            }
+
+            parsedLogs.push(line);
           }
+        }
+      }
+      
+      if (totalLines > 0) {
+         console.log(`Parsed ${parsedLogs.length} logs from ${totalLines} total lines.`);
+      }
+      return parsedLogs;
+    };
+
+    let logs = await fetchAndParse(logql);
+
+    // Fallbacks for pod log fetching if the standard `pod` label isn't used by their Promtail
+    if (logs.length === 0 && type !== 'workflow') {
+      console.log(`No logs found with pod label. Attempting fallback labels for pod ${id}...`);
+      logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", k8s_pod_name="${id}"}`);
+      if (logs.length === 0) {
+        logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", kubernetes_pod_name="${id}"}`);
+      }
+      
+      // If the node ID is something like `wf-12345` but the actual pod is `wf-task-12345`
+      if (logs.length === 0) {
+        const idParts = id.split('-');
+        const hash = idParts[idParts.length - 1]; // Assume the last part is the unique hash
+        
+        console.log(`Attempting regex matching on POD LABEL for ID ending in ${hash}`);
+        // Instead of searching the text stream (|= "hash"), we use a regex label matcher (=~ ".*hash.*")
+        // This targets the pod label itself, returning ALL lines for that pod, regardless of content.
+        logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", pod=~".*${hash}.*"}`);
+        if (logs.length === 0) {
+            logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", k8s_pod_name=~".*${hash}.*"}`);
         }
       }
     }

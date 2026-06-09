@@ -133,13 +133,14 @@ export const submitExecution = async (
 
 export const getLogs = async (
   id: string,
-  type: "pod" | "workflow" = "pod",
+  type: "pod" | "workflow" | "overview" = "pod",
   query?: string,
   startTime?: string,
-  endTime?: string
+  endTime?: string,
+  workflow?: string
 ): Promise<string> => {
   const response = await api.get(`/logs/${id}`, {
-    params: { type, query, start_time: startTime, end_time: endTime }
+    params: { type, query, start_time: startTime, end_time: endTime, workflow }
   });
   return response.data;
 };

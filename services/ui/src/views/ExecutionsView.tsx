@@ -191,21 +191,29 @@ const ExecutionsView: React.FC = () => {
         }
       }
 
-      // Buffer start time by 5 minutes to account for clock skew
+      // Buffer start time by 1 hour to account for clock skew and DAGs
       if (startTime) {
         const dt = new Date(startTime);
-        dt.setMinutes(dt.getMinutes() - 5);
+        dt.setHours(dt.getHours() - 1);
         startTime = dt.toISOString();
       }
 
-      // Buffer end time by 5 minutes if it exists
+      // Buffer end time by 1 hour if it exists
       if (endTime) {
         const dt = new Date(endTime);
-        dt.setMinutes(dt.getMinutes() + 5);
+        dt.setHours(dt.getHours() + 1);
         endTime = dt.toISOString();
       }
 
-      const data = await getLogs(id, type, query, startTime, endTime);
+      const workflowName = selectedExe?.metadata.name;
+      const data = await getLogs(
+        id,
+        type,
+        query,
+        startTime,
+        endTime,
+        workflowName
+      );
       setLogs(data);
     } catch (err: any) {
       if (!isPolling) setLogs("Failed to fetch logs: " + err.message);
@@ -522,21 +530,53 @@ const ExecutionsView: React.FC = () => {
                   {logsLoading && <Spinner className="w-4 h-4 text-blue-500" />}
                 </div>
               </div>
-              <div className="flex-1 p-4 font-mono text-xs text-green-400 overflow-y-auto whitespace-pre-wrap min-h-0">
+              <div className="flex-1 p-4 font-mono text-xs overflow-y-auto whitespace-pre-wrap min-h-0">
                 {logsLoading ? (
                   <div className="flex items-center space-x-2 text-gray-500">
                     <Spinner className="w-3 h-3" />
                     <span>Fetching logs...</span>
                   </div>
                 ) : logs ? (
-                  logs
+                  <div className="flex flex-col">
+                    {logs.split("\n").map((line, idx) => {
+                      const isSystem = [
+                        "Starting Workflow Executor",
+                        "Using executor retry strategy",
+                        "Start loading input artifacts",
+                        "No Script output reference",
+                        "Capturing script output ignored",
+                        "No output parameters",
+                        "No output artifacts",
+                        "stopping progress monitor",
+                        "Deadline monitor stopped",
+                        "Starting deadline monitor",
+                        "Main container completed",
+                        "sub-process exited",
+                        "Alloc=",
+                        "Executor initialized"
+                      ].some((phrase) => line.includes(phrase));
+
+                      return (
+                        <span
+                          key={idx}
+                          className={
+                            isSystem ? "text-gray-500" : "text-green-400"
+                          }
+                        >
+                          {line}
+                        </span>
+                      );
+                    })}
+                  </div>
                 ) : selectedNodeId ? (
                   <div className="text-gray-500 italic">
                     No logs found for this node. They may have been rotated or
                     expired.
                   </div>
                 ) : (
-                  "Select a pod node to view logs."
+                  <div className="text-gray-500">
+                    Select a pod node to view logs.
+                  </div>
                 )}
               </div>
             </div>
