@@ -6,6 +6,8 @@ import Project from "./components/Project";
 import CodeProject from "./components/CodeProject";
 import ListView from "./views/ListView";
 import HistoryView from "./views/HistoryView";
+import ExecutionsView from "./views/ExecutionsView";
+import MainLayout from "./components/MainLayout";
 
 import { lightTheme } from "./utils/theme";
 import { ThemeProvider } from "@mui/material";
@@ -53,19 +55,22 @@ export default function App() {
   return (
     <ThemeProvider theme={lightTheme}>
       <Toaster />
-      <Routes>
-        <Route path="/" element={<ListView />} />
-        <Route path="/new/:mode" element={<ModeDispatcher />} />
-        <Route path="/edit/:mode/:filename" element={<ModeDispatcher />} />
-        <Route path="/history/:filename" element={<HistoryView />} />
-        <Route path="/workflows" element={<Navigate to="/" replace />} />
-        {/* Legacy routes fallback */}
-        <Route path="/new" element={<Navigate to="/new/code" replace />} />
-        <Route
-          path="/edit/:filename"
-          element={<Navigate to="/edit/code/:filename" replace />}
-        />
-      </Routes>
+      <MainLayout>
+        <Routes>
+          <Route path="/" element={<ListView />} />
+          <Route path="/executions" element={<ExecutionsView />} />
+          <Route path="/new/:mode" element={<ModeDispatcher />} />
+          <Route path="/edit/:mode/:filename" element={<ModeDispatcher />} />
+          <Route path="/history/:filename" element={<HistoryView />} />
+          <Route path="/workflows" element={<Navigate to="/" replace />} />
+          {/* Legacy routes fallback */}
+          <Route path="/new" element={<Navigate to="/new/code" replace />} />
+          <Route
+            path="/edit/:filename"
+            element={<Navigate to="/edit/code/:filename" replace />}
+          />
+        </Routes>
+      </MainLayout>
     </ThemeProvider>
   );
 }

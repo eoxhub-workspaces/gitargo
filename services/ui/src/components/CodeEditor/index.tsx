@@ -64,11 +64,11 @@ const CodeEditor = (props: ICodeEditorProps) => {
   };
 
   return (
-    <div className="pt-9 pb-2" style={{ height }}>
+    <div className="w-full h-full" style={{ height }}>
       <Editor
         height={typeof height === "number" ? `${height}px` : height}
         language={language}
-        theme="vs-dark"
+        theme="vs-light"
         value={data}
         onChange={handleEditorChange}
         options={{

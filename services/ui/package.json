@@ -22,6 +22,8 @@
     "@testing-library/react": "^14.3.1",
     "@testing-library/user-event": "^14.5.2",
     "@uiw/react-codemirror": "^4.23.0",
+    "ajv": "^8.20.0",
+    "ajv-keywords": "^5.1.0",
     "axios": "^1.7.2",
     "d3": "^7.3.0",
     "formik": "^2.4.6",

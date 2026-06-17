@@ -107,16 +107,18 @@ const CodeBox = () => {
         </button>
       </div>
 
-      <CodeEditor
-        data={formattedCode}
-        language={language}
-        onChange={(value) => {
-          setFormattedCode(value);
-        }}
-        disabled={false}
-        lineWrapping={false}
-        height={height - 64}
-      />
+      <div className="pt-9 pb-2 h-full">
+        <CodeEditor
+          data={formattedCode}
+          language={language}
+          onChange={(value) => {
+            setFormattedCode(value);
+          }}
+          disabled={false}
+          lineWrapping={false}
+          height={height - 64}
+        />
+      </div>
     </>
   );
 };

@@ -6,17 +6,27 @@ As optional experimental feature it also has canvas rendering, for visual workfl
 
 ## Features
 
-- **GitLab Integration**: Direct synchronization with GitLab. Every save is a commit.
 - **Workflow Browser**: List and search all workflow definitions in your repository.
+- **Workflow Monitoring**: Live tracking of Argo Workflow executions.
+- **Log Viewer**: Integrated log viewing via Loki proxy.
+- **GitLab Integration**: Direct synchronization with GitLab. Every save is a commit.
 - **Commit History**: View the history of changes for every workflow file directly in the UI.
+- **Authentication**: Session-based token verification utilizing Kubernetes Service Account tokens or proxy-injected cookies.
 - **Visual Workflow Editor**: Experimental - Build complex Argo Workflows using a graphical canvas.
+- **Automatic Ingestion**: User-confirmed injection of default K8s properties (tolerations, etc.) during save.
 - **Docker Ready**: Fully containerized and ready for deployment.
 
 ## Architecture
 
 The project consists of two main components:
-1.  **Frontend (React)**: A modified version of `visual-argo-workflows` that handles the graphical editing and YAML generation.
-2.  **Backend (Node.js/Express)**: A secure proxy that communicates with the GitLab API using a private token, preventing sensitive credentials from being exposed to the browser.
+1.  **Frontend (React)**: A modified version of `visual-argo-workflows` that handles the graphical editing, monitoring dashboards, and YAML generation.
+2.  **Backend (Node.js/Express)**: A proxy that communicates with the GitLab API and Kubernetes API. It handles token extraction for authentication and attributes commits to the authenticated user.
+
+## Monitoring & Tracking
+
+GitArgo provides two ways to track workflow executions:
+1.  **Kubernetes API (Primary)**: If Kubernetes credentials are provided, GitArgo fetches live workflow status, node trees, and pod information directly from the cluster.
+2.  **Loki Fallback**: If Kubernetes access is unavailable, GitArgo automatically falls back to querying the configured Log Viewer (Loki) for workflow labels. This allows monitoring historical and active executions even without direct cluster access.
 
 ## Getting Started
 
@@ -30,7 +40,7 @@ The easiest way to run the service is using Docker.
 
 1.  **Build the image**:
     ```bash
-    docker build -t argo-manager .
+    docker build -t gitargo .
     ```
 
 2.  **Run the container**:
@@ -40,7 +50,8 @@ The easiest way to run the service is using Docker.
       -e GITLAB_PROJECT_ID="your_project_id" \
       -e GITLAB_URL="https://gitlab.com" \
       -e GITLAB_WORKFLOWS_PATH="workflows" \
-      argo-manager
+      -e LOG_VIEWER_URL="http://logviewer:8080/search" \
+      gitargo
     ```
 
 ### Configuration (Environment Variables)
@@ -53,6 +64,17 @@ The easiest way to run the service is using Docker.
 | `GITLAB_BRANCH` | The branch where workflows are stored. | `main` |
 | `GITLAB_WORKFLOWS_PATH` | The subdirectory in the repo containing `.yaml` files. | `.` (Root) |
 | `PORT` | The port the service runs on inside the container. | `3000` |
+| `ARGO_SERVER_URL` | URL of the Argo Server API (e.g. `https://argo-workflows...`). | - |
+| `LOG_VIEWER_URL` | Internal or external URL for the Loki Log Viewer API. | `https://hub-otc.eox.at/...` |
+| `LOKI_URL` | Internal URL for the Loki API. | `http://loki:3100` |
+| `LOKI_NAMESPACE_LABEL` | Label key for namespace in Loki. | `namespace` |
+| `ARGO_WORKFLOW_LABEL` | Label key for workflow name in Loki. | `workflows_argoproj_io_workflow` |
+| `ARGO_NAMESPACE` | Default namespace for workflows. | `default` |
+| `ARGO_TOLERATIONS` | JSON string of default tolerations to ingest on save. | - |
+
+## How it Works: Automatic Ingestion
+
+When saving a workflow, the UI will prompt the user if they want to "ingest defaults". If confirmed, the backend automatically injects infrastructure-specific properties (tolerations, service accounts, node selectors) defined in the environment variables into the YAML before committing to GitLab. This ensures workflows are optimized for the target environment without requiring manual user configuration.
 
 ## How it Works: Visual State
 
@@ -64,9 +86,28 @@ To maintain the visual layout without requiring a separate database, this tool u
 ## Development
 
 If you want to run the components separately for development:
-## Development
 
-### Backend
+### Rapid Deployment Script
+
+For testing changes rapidly in a Kubernetes environment without a full image rebuild, a helper script is provided:
+
+```bash
+# Push current backend/frontend code directly to the running pod and restart the server
+./push.sh <namespace>
+```
+
+**Note for Hot-Reloading:**
+To ensure the server picks up backend changes without the container being wiped (which happens on a full container restart), your development pod should be running with a shell loop. You can achieve this by adding a `command` override to your Kubernetes deployment manifest:
+
+```yaml
+spec:
+  containers:
+  - name: gitargo
+    # ...
+    command: ["sh", "-c", "while true; do node server.js; sleep 1; done"]
+```
+
+If you only change UI files in `services/ui/src`, no restart is needed; the changes will be visible as soon as the script finishes copying.
 ```bash
 cd services/api
 npm install
@@ -100,4 +141,3 @@ npm run lint:fix
 ```
 
 ## License
-

@@ -1,6 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Dictionary, omit } from "lodash";
-import { PlusIcon, CloudArrowUpIcon } from "@heroicons/react/20/solid";
+import {
+  PlusIcon,
+  CloudArrowUpIcon,
+  PlayIcon
+} from "@heroicons/react/20/solid";
 import {
   ITemplateNode,
   INodeItem,
@@ -39,6 +43,7 @@ import toast from "react-hot-toast";
 import * as api from "../../utils/api";
 import generateSteppedManifest from "../../utils/generators/step";
 import { validateK8sYaml } from "../../utils/k8sValidation";
+import { DefaultIngestionModal } from "../modals/DefaultIngestionModal";
 
 export default function Project() {
   const { height } = useWindowDimensions();
@@ -55,6 +60,10 @@ export default function Project() {
   const stateConnectionsRef = useRef<[[string, string]] | []>();
   const baseYamlRef = useRef<any>(null);
   const [showModalCreateTemplate, setShowModalCreateTemplate] = useState(false);
+  const [showIngestionModal, setShowIngestionModal] = useState(false);
+  const [runAfterSaveAction, setRunAfterSaveAction] = useState(false);
+  const [pendingManifest, setPendingManifest] = useState<any>(null);
+  const [pendingSyncToken, setPendingSyncToken] = useState<string | null>(null);
   const [templateToEdit, setTemplateToEdit] = useState<ITemplateNode | null>(
     null
   );
@@ -88,14 +97,13 @@ export default function Project() {
 
   const isNewWorkflow = !filename && !!initialName;
 
-  const handleSave = async () => {
+  const handleSaveClick = async (runAfterSave = false) => {
     const name = currentFilename;
     if (!name) {
       toast.error("Filename is required.");
       return;
     }
 
-    const saveToast = toast.loading("Saving workflow...");
     try {
       const visualState = {
         nodes,
@@ -127,23 +135,142 @@ export default function Project() {
         initialName,
         options
       );
-      const yamlContent = YAML.stringify(manifest);
 
+      const yamlContent = YAML.stringify(manifest);
       try {
         validateK8sYaml(yamlContent);
       } catch (e: any) {
-        toast.error(`Validation Error: ${e.message}`, { duration: 5000 });
+        toast.error(`Validation Error: ${e.message}`, {
+          duration: 5000
+        });
         return;
       }
 
-      if (!isNewWorkflow) {
-        await api.updateWorkflow(name, yamlContent, `Update ${name}`);
-      } else {
-        await api.createWorkflow(name, yamlContent, `Create ${name}`);
-        navigate(`/edit/canvas/${encodeURIComponent(name)}`, { replace: true });
+      const isCron = manifest.kind === "CronWorkflow";
+      const spec = isCron ? manifest.spec?.workflowSpec : manifest.spec;
+      const annotations = manifest.metadata?.annotations || {};
+
+      const ignoreDefaults =
+        annotations["gitargo.eox.at/ignore-defaults"] === "true";
+      const hasServiceAccount = !!spec?.serviceAccountName;
+      const hasTolerations = spec?.tolerations && spec.tolerations.length > 0;
+
+      const syncToken = Date.now().toString();
+
+      if (!ignoreDefaults && (!hasServiceAccount || !hasTolerations)) {
+        setRunAfterSaveAction(runAfterSave);
+        setPendingManifest(manifest);
+        setPendingSyncToken(syncToken);
+        setShowIngestionModal(true);
+        return;
       }
 
-      toast.success("Workflow saved successfully!", { id: saveToast });
+      executeSave(false, manifest, syncToken, runAfterSave);
+    } catch (error: any) {
+      toast.error(`Save Preparation Failed: ${error.message || "Unknown"}`);
+      console.error(error);
+    }
+  };
+
+  const handleIngestionConfirm = () => {
+    executeSave(true, pendingManifest, pendingSyncToken, runAfterSaveAction);
+  };
+
+  const handleIngestionDecline = (rememberChoice: boolean) => {
+    const manifestToSave = pendingManifest;
+    if (rememberChoice && manifestToSave) {
+      if (!manifestToSave.metadata) manifestToSave.metadata = {};
+      if (!manifestToSave.metadata.annotations)
+        manifestToSave.metadata.annotations = {};
+      manifestToSave.metadata.annotations["gitargo.eox.at/ignore-defaults"] =
+        "true";
+    }
+    executeSave(false, manifestToSave, pendingSyncToken, runAfterSaveAction);
+  };
+
+  const executeSave = async (
+    applyDefaults: boolean,
+    manifest: any,
+    syncToken: string | null,
+    runAfterSave = false
+  ) => {
+    const name = currentFilename;
+    if (!name || !manifest) return;
+
+    const saveToast = toast.loading(
+      runAfterSave ? "Saving and preparing run..." : "Saving workflow..."
+    );
+
+    try {
+      if (runAfterSave && syncToken) {
+        if (!manifest.metadata) manifest.metadata = {};
+        if (!manifest.metadata.annotations) manifest.metadata.annotations = {};
+        manifest.metadata.annotations["gitargo/sync-token"] = syncToken;
+      }
+
+      const yamlContent = YAML.stringify(manifest);
+
+      if (!isNewWorkflow) {
+        await api.updateWorkflow(
+          name,
+          yamlContent,
+          `Update ${name}`,
+          applyDefaults
+        );
+      } else {
+        await api.createWorkflow(
+          name,
+          yamlContent,
+          `Create ${name}`,
+          applyDefaults
+        );
+        setCurrentFilename(name);
+      }
+
+      setShowIngestionModal(false);
+
+      if (runAfterSave && syncToken) {
+        toast.loading("Waiting for GitOps reconciliation...", {
+          id: saveToast
+        });
+
+        let synced = false;
+        let attempts = 0;
+        const maxAttempts = 30; // 30 seconds
+
+        while (!synced && attempts < maxAttempts) {
+          attempts++;
+          await new Promise((r) => setTimeout(r, 1000));
+          try {
+            const status = await api.getSyncStatus(name, syncToken);
+            if (status.synced) {
+              synced = true;
+              break;
+            }
+          } catch (e) {
+            console.warn("Sync status check failed, retrying...", e);
+          }
+        }
+
+        if (synced) {
+          toast.loading("Submitting workflow...", { id: saveToast });
+          await api.submitExecution(manifest);
+          toast.success("Workflow saved and submitted!", { id: saveToast });
+          navigate("/executions");
+        } else {
+          toast.error(
+            "Workflow saved but GitOps reconciliation timed out. You may need to run it manually.",
+            { id: saveToast, duration: 7000 }
+          );
+        }
+      } else {
+        toast.success("Workflow saved successfully!", { id: saveToast });
+        if (isNewWorkflow) {
+          navigate(`/edit/canvas/${encodeURIComponent(name)}`, {
+            replace: true
+          });
+        }
+      }
     } catch (error: any) {
       const msg =
         error.response?.data?.message ||
@@ -151,6 +278,7 @@ export default function Project() {
         "Failed to save workflow";
       toast.error(`Save Failed: ${msg}`, { id: saveToast, duration: 5000 });
       console.error(error);
+      setShowIngestionModal(false);
     }
   };
 
@@ -611,6 +739,13 @@ export default function Project() {
         />
       ) : null}
 
+      {showIngestionModal && (
+        <DefaultIngestionModal
+          onConfirm={handleIngestionConfirm}
+          onDecline={handleIngestionDecline}
+        />
+      )}
+
       <div className="flex flex-col flex-1">
         <Header name={currentFilename} />
 
@@ -686,10 +821,18 @@ export default function Project() {
                   <button
                     className="flex space-x-1 btn-util"
                     type="button"
-                    onClick={handleSave}
+                    onClick={() => handleSaveClick(false)}
                   >
                     <CloudArrowUpIcon className="w-4" />
                     <span>Save</span>
+                  </button>
+                  <button
+                    className="flex space-x-1 btn-util bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
+                    type="button"
+                    onClick={() => handleSaveClick(true)}
+                  >
+                    <PlayIcon className="w-4" />
+                    <span>Save & Run</span>
                   </button>
                 </div>
               </div>
