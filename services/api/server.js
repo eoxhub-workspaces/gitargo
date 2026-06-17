@@ -6,6 +6,9 @@ const path = require('path');
 const fs = require('fs');
 const YAML = require('yaml');
 const k8s = require('@kubernetes/client-node');
+const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+const tar = require('tar-stream');
+const zlib = require('zlib');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1219,6 +1222,213 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
   } catch (error) {
     console.error(`Error fetching logs for ${req.params.id}:`, error.message);
     res.status(500).send("Error fetching logs from Loki.");
+  }
+});
+
+/**
+ * GET /api/artifacts/:workflow/:nodeId/:artifactName
+ * Fetches artifacts directly from the backing S3 repository.
+ */
+apiRouter.get("/artifacts/:workflow/:nodeId/:artifactName", async (req, res, next) => {
+  try {
+    const { workflow, nodeId, artifactName } = req.params;
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+
+    // 1. Fetch the workflow object from Kubernetes to find the artifact definition
+    const wfResponse = await customObjectsApi.getNamespacedCustomObject(
+      "argoproj.io",
+      "v1alpha1",
+      namespace,
+      "workflows",
+      workflow
+    );
+    const wf = wfResponse.body;
+
+    const node = wf.status?.nodes?.[nodeId];
+    if (!node) {
+      return res.status(404).json({ message: "Node not found in workflow status." });
+    }
+
+    // Attempt to find the artifact in outputs first, then inputs
+    let artifact = node.outputs?.artifacts?.find(a => a.name === artifactName);
+    if (!artifact) {
+      artifact = node.inputs?.artifacts?.find(a => a.name === artifactName);
+    }
+
+    if (!artifact) {
+      return res.status(404).json({ message: "Artifact not found in node outputs or inputs." });
+    }
+
+    // Input artifacts might just have 'name' and lack the full 's3' definition 
+    // if they are passed down from a parent or another step.
+    // However, Argo typically resolves the full storage path in the `status.nodes[id].inputs.artifacts[x].s3` 
+    // field during execution. If it doesn't, we will fall back to the workflow's default artifactRepository.
+    
+    let s3Config = artifact.s3;
+
+    if (!s3Config) {
+      // Try to get default artifact repository from workflow spec
+      const defaultRepo = wf.spec?.artifactRepositoryRef;
+      if (defaultRepo) {
+         // It's complex to resolve configmap references here without full Argo Controller logic.
+         // We will rely on our global environment fallbacks if the specific artifact lacks s3 info.
+         s3Config = {}; 
+      } else {
+         s3Config = {};
+      }
+    }
+
+    // Ensure we have an S3 key to fetch. If it's not on the artifact, we can't proceed.
+    if (!s3Config.key) {
+       // Input artifacts from other steps usually have their resolved key populated by Argo.
+       // If it's missing, it might not be supported yet by this direct method.
+       return res.status(501).json({ 
+         message: "Artifact S3 key is missing. This might be a pass-through artifact not fully resolved in the status." 
+       });
+    }
+
+    // 2. Resolve S3 configuration (Artifact definition overrides global env vars)
+    const endpoint = s3Config.endpoint || process.env.AWS_ENDPOINT_URL || process.env.S3_ENDPOINT;
+    const bucket = s3Config.bucket || process.env.BUCKET_NAME || process.env.S3_BUCKET;
+    const region = s3Config.region || process.env.AWS_REGION || process.env.S3_REGION || "eu-nl";
+    let accessKey = process.env.AWS_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY;
+    let secretKey = process.env.AWS_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY;
+    
+    // Determine if connection should be insecure. If URL starts with https, it's secure.
+    let insecure = false;
+    if (s3Config.insecure !== undefined) {
+      insecure = s3Config.insecure;
+    } else if (endpoint && endpoint.startsWith('http://')) {
+      insecure = true;
+    } else if (process.env.S3_SECURE === "false") {
+      insecure = true;
+    }
+
+    if (!endpoint || !bucket) {
+      return res.status(500).json({ message: "S3 endpoint or bucket not configured globally or in the artifact." });
+    }
+
+    // 3. Extract credentials from K8s secrets if defined in the artifact
+    const coreV1Api = kc.makeApiClient(k8s.CoreV1Api);
+    if (s3Config.accessKeySecret) {
+      try {
+        const secretRes = await coreV1Api.readNamespacedSecret(s3Config.accessKeySecret.name, namespace);
+        if (secretRes.body.data && secretRes.body.data[s3Config.accessKeySecret.key]) {
+          accessKey = Buffer.from(secretRes.body.data[s3Config.accessKeySecret.key], 'base64').toString('utf8');
+        }
+      } catch (err) {
+        console.warn(`Failed to read accessKeySecret ${s3Config.accessKeySecret.name}: ${err.message}`);
+      }
+    }
+    
+    if (s3Config.secretKeySecret) {
+      try {
+        const secretRes = await coreV1Api.readNamespacedSecret(s3Config.secretKeySecret.name, namespace);
+        if (secretRes.body.data && secretRes.body.data[s3Config.secretKeySecret.key]) {
+          secretKey = Buffer.from(secretRes.body.data[s3Config.secretKeySecret.key], 'base64').toString('utf8');
+        }
+      } catch (err) {
+        console.warn(`Failed to read secretKeySecret ${s3Config.secretKeySecret.name}: ${err.message}`);
+      }
+    }
+
+    if (!accessKey || !secretKey) {
+      return res.status(500).json({ message: "S3 credentials missing. Ensure global env vars or K8s secrets are configured." });
+    }
+
+    // 4. Connect to S3
+    let endpointUrl = endpoint;
+    // If the endpoint doesn't have a protocol, prepend one based on the insecure flag
+    if (!endpointUrl.startsWith('http://') && !endpointUrl.startsWith('https://')) {
+      endpointUrl = (insecure ? 'http://' : 'https://') + endpointUrl;
+    }
+
+    const s3Client = new S3Client({
+      region,
+      endpoint: endpointUrl,
+      credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
+      forcePathStyle: true // Recommended for MinIO and many on-prem S3 providers
+    });
+
+    console.log(`Fetching artifact ${artifact.s3.key} from s3://${bucket} at ${endpointUrl}`);
+
+    const command = new GetObjectCommand({
+      Bucket: bucket,
+      Key: artifact.s3.key
+    });
+
+    const s3Response = await s3Client.send(command);
+
+    // 5. Unpack .tgz stream on the fly if needed
+    if (artifact.s3.key.endsWith('.tgz') || artifact.s3.key.endsWith('.tar.gz')) {
+      const extract = tar.extract();
+      let fileFound = false;
+
+      // Ensure we clean up if the client disconnects
+      req.on('close', () => {
+         extract.destroy();
+      });
+
+      extract.on('entry', (header, stream, nextStream) => {
+        // Just extract and send the first file found (since an artifact is usually a single file or directory)
+        if (!fileFound && header.type === 'file') {
+          fileFound = true;
+          
+          // Basic content-type detection based on filename
+          let contentType = 'application/octet-stream';
+          const ext = header.name.split('.').pop().toLowerCase();
+          const mimeTypes = {
+            'txt': 'text/plain', 'log': 'text/plain', 'md': 'text/markdown',
+            'json': 'application/json', 'csv': 'text/csv', 'yaml': 'text/yaml', 'yml': 'text/yaml',
+            'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+            'gif': 'image/gif', 'svg': 'image/svg+xml', 'webp': 'image/webp'
+          };
+          if (mimeTypes[ext]) contentType = mimeTypes[ext];
+
+          res.setHeader('Content-Type', contentType);
+          res.setHeader('Content-Disposition', `inline; filename="${header.name.split('/').pop()}"`);
+          
+          stream.pipe(res);
+          stream.on('end', () => {
+             // Do not process further files once we found one, to avoid writing to a closed response
+             extract.destroy();
+          });
+        } else {
+          stream.on('end', nextStream);
+          stream.resume(); // drain the stream
+        }
+      });
+
+      extract.on('finish', () => {
+        if (!fileFound && !res.headersSent) {
+          res.status(404).json({ message: "No files found in artifact archive." });
+        }
+      });
+
+      extract.on('error', (err) => {
+        console.error("Tar extraction error:", err);
+        if (!res.headersSent) res.status(500).json({ message: "Error extracting artifact archive." });
+      });
+
+      s3Response.Body.pipe(zlib.createGunzip()).pipe(extract);
+
+    } else {
+      // Stream raw file directly
+      res.setHeader('Content-Type', s3Response.ContentType || 'application/octet-stream');
+      const filename = artifact.s3.key.split('/').pop();
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      s3Response.Body.pipe(res);
+    }
+
+  } catch (error) {
+    console.error(`Error fetching artifact ${req.params.artifactName} for node ${req.params.nodeId}:`, error.message);
+    if (!res.headersSent) {
+      if (error.name === 'NoSuchKey') {
+        res.status(404).json({ message: "Artifact key not found in S3 bucket." });
+      } else {
+        res.status(500).json({ message: "Failed to fetch artifact from storage.", error: error.message });
+      }
+    }
   }
 });
 

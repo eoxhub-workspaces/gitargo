@@ -15,6 +15,7 @@ import * as api from "../../utils/api";
 import { useTitle } from "../../hooks";
 import Header from "../Project/Header";
 import CodeEditor from "../CodeEditor";
+import { DefaultIngestionModal } from "../modals/DefaultIngestionModal";
 
 export default function CodeProject() {
   const { filename } = useParams<{ filename?: string }>();
@@ -38,6 +39,7 @@ export default function CodeProject() {
   const [activePanel, setActivePanel] = useState<"runs" | "history" | null>(
     filename ? "runs" : null
   );
+  const [showIngestionModal, setShowIngestionModal] = useState(false);
 
   useTitle([currentFilename || "New workflow", "Code Mode"].join(" | "));
 
@@ -90,19 +92,6 @@ export default function CodeProject() {
     return () => clearInterval(interval);
   }, [filename]);
 
-  const handleSaveAndRun = async () => {
-    await handleSave();
-    try {
-      const parsed = YAML.parse(yamlContent);
-      await api.submitExecution(parsed);
-      toast.success("Workflow executed successfully!");
-      if (activePanel !== "runs") setActivePanel("runs");
-      setTimeout(fetchExecutions, 1000); // refresh after a short delay
-    } catch (err: any) {
-      toast.error(`Execution failed: ${err.message || "Unknown error"}`);
-    }
-  };
-
   useEffect(() => {
     const init = async () => {
       try {
@@ -110,90 +99,44 @@ export default function CodeProject() {
         setConfig(appConfig);
 
         if (filename) {
-          const content = await api.getWorkflow(filename);
+          const content = await api.getWorkflow(decodeURIComponent(filename));
           setYamlContent(content);
-          setCurrentFilename(filename);
-        } else {
-          const logicalName = initialName
-            ? initialName.replace(/\.ya?ml$/i, "")
-            : "workflow-name";
-
-          const profileData = initialProfile
-            ? appConfig.profiles[initialProfile]
-            : null;
-
-          const isCron = initialKind === "CronWorkflow";
-
-          const baseSpec = {
-            entrypoint: "main",
-            templates: [
-              {
-                name: "main",
-                container: {
-                  image: "alpine:latest",
-                  command: ["sh", "-c"],
-                  args: ["echo Hello World"]
-                }
-              }
-            ]
-          };
-
-          const workflow: any = {
-            apiVersion: "argoproj.io/v1alpha1",
-            kind: initialKind,
-            metadata: {
-              name: logicalName,
-              generateName: `${logicalName}-`
-            },
-            spec: isCron
-              ? {
-                  schedule: "* * * * *",
-                  workflowSpec: baseSpec
-                }
-              : baseSpec
-          };
-
-          const targetSpec = isCron
-            ? workflow.spec.workflowSpec
-            : workflow.spec;
-
-          if (profileData) {
-            targetSpec.templates[0].container.resources = profileData.resources;
-            if (profileData.tolerations) {
-              targetSpec.tolerations = profileData.tolerations;
-            }
+        } else if (initialName) {
+          let baseYaml = `apiVersion: argoproj.io/v1alpha1
+kind: ${initialKind}
+metadata:
+  name: ${initialName}
+spec:
+  entrypoint: main
+  templates:
+    - name: main
+      steps: []
+`;
+          if (initialKind === "CronWorkflow") {
+            baseYaml = `apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: ${initialName}
+spec:
+  schedule: "* * * * *"
+  workflowSpec:
+    entrypoint: main
+    templates:
+      - name: main
+        steps: []
+`;
           }
 
-          if (initialEphemeral) {
-            const vol = {
-              ...appConfig.ephemeralVolume,
-              storage: initialEphemeralSize
-            };
-            targetSpec.volumeClaimTemplates = [
-              {
-                metadata: { name: vol.name },
-                spec: {
-                  accessModes: ["ReadWriteOnce"],
-                  resources: { requests: { storage: vol.storage } },
-                  storageClassName: vol.storageClassName
-                }
-              }
-            ];
-            targetSpec.templates[0].container.volumeMounts = [
-              { name: vol.name, mountPath: vol.mountPath }
-            ];
-          }
-
-          setYamlContent(YAML.stringify(workflow));
-          setCurrentFilename(initialName);
+          setYamlContent(baseYaml);
         }
-      } catch (error) {
-        toast.error("Failed to initialize workflow");
-        console.error(error);
+      } catch (err) {
+        toast.error("Failed to load workflow or configuration");
+        console.error(err);
       } finally {
         setLoading(false);
       }
     };
+
     init();
   }, [
     filename,
@@ -204,7 +147,13 @@ export default function CodeProject() {
     initialEphemeralSize
   ]);
 
-  const handleSave = async () => {
+  const [runAfterSaveAction, setRunAfterSaveAction] = useState(false);
+
+  const handleSaveAndRunClick = () => {
+    handleSaveClick(true);
+  };
+
+  const handleSaveClick = async (runAfterSave = false) => {
     const name = currentFilename;
     if (!name) {
       toast.error("Filename is required.");
@@ -212,39 +161,77 @@ export default function CodeProject() {
     }
 
     try {
-      // Validate for Kustomize and general Kubernetes correctness
       validateK8sYaml(yamlContent);
     } catch (e: any) {
       toast.error(`Validation Error: ${e.message}`, { duration: 5000 });
       return;
     }
 
+    try {
+      const parsed = YAML.parse(yamlContent);
+      const isCron = parsed.kind === "CronWorkflow";
+      const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
+      const annotations = parsed.metadata?.annotations || {};
+
+      const ignoreDefaults =
+        annotations["gitargo.eox.at/ignore-defaults"] === "true";
+      const hasServiceAccount = !!spec?.serviceAccountName;
+      const hasTolerations = spec?.tolerations && spec.tolerations.length > 0;
+
+      if (!ignoreDefaults && (!hasServiceAccount || !hasTolerations)) {
+        setRunAfterSaveAction(runAfterSave);
+        setShowIngestionModal(true);
+        return;
+      }
+
+      executeSave(false, yamlContent, runAfterSave);
+    } catch (e) {
+      executeSave(false, yamlContent, runAfterSave);
+    }
+  };
+
+  const executeSave = async (
+    applyDefaults: boolean,
+    contentToSave: string,
+    runAfterSave = false
+  ) => {
+    const name = currentFilename;
+    if (!name) return;
+
     const saveToast = toast.loading("Saving workflow...");
     try {
-      const shouldApplyDefaults = window.confirm(
-        "Would you like to automatically ingest defaults (resource profiles, tolerations, etc.) into this workflow?"
-      );
-
       if (!isNewWorkflow) {
         await api.updateWorkflow(
           name,
-          yamlContent,
+          contentToSave,
           `Update ${name} via Code Editor`,
-          shouldApplyDefaults
+          applyDefaults
         );
       } else {
         await api.createWorkflow(
           name,
-          yamlContent,
+          contentToSave,
           `Create ${name} via Code Editor`,
-          shouldApplyDefaults
+          applyDefaults
         );
         setCurrentFilename(name);
-        // Switch to the edit route for the new file
         navigate(`/edit/code/${encodeURIComponent(name)}`, { replace: true });
       }
 
       toast.success("Workflow saved successfully!", { id: saveToast });
+      setShowIngestionModal(false);
+
+      if (runAfterSave) {
+        try {
+          const parsed = YAML.parse(contentToSave);
+          await api.submitExecution(parsed);
+          toast.success("Workflow executed successfully!");
+          if (activePanel !== "runs") setActivePanel("runs");
+          setTimeout(fetchExecutions, 1000);
+        } catch (err: any) {
+          toast.error(`Execution failed: ${err.message || "Unknown error"}`);
+        }
+      }
     } catch (error: any) {
       const msg =
         error.response?.data?.message ||
@@ -252,7 +239,29 @@ export default function CodeProject() {
         "Failed to save workflow";
       toast.error(`Save Failed: ${msg}`, { id: saveToast, duration: 5000 });
       console.error(error);
+      setShowIngestionModal(false);
     }
+  };
+
+  const handleIngestionConfirm = () => {
+    executeSave(true, yamlContent, runAfterSaveAction);
+  };
+
+  const handleIngestionDecline = (rememberChoice: boolean) => {
+    let finalContent = yamlContent;
+    if (rememberChoice) {
+      try {
+        const parsed = YAML.parse(yamlContent);
+        if (!parsed.metadata) parsed.metadata = {};
+        if (!parsed.metadata.annotations) parsed.metadata.annotations = {};
+        parsed.metadata.annotations["gitargo.eox.at/ignore-defaults"] = "true";
+        finalContent = YAML.stringify(parsed);
+        setYamlContent(finalContent); // Update editor
+      } catch (e) {
+        console.error("Failed to add annotation", e);
+      }
+    }
+    executeSave(false, finalContent, runAfterSaveAction);
   };
 
   if (loading) {
@@ -312,14 +321,14 @@ export default function CodeProject() {
             )}
             <button
               className="flex space-x-1 items-center px-4 py-1.5 border border-transparent text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 border-gray-300 focus:outline-none transition-colors"
-              onClick={handleSave}
+              onClick={() => handleSaveClick()}
             >
               <CloudArrowUpIcon className="w-4 h-4" />
               <span>Save</span>
             </button>
             <button
               className="flex space-x-1 items-center px-4 py-1.5 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none transition-colors"
-              onClick={handleSaveAndRun}
+              onClick={handleSaveAndRunClick}
             >
               <PlayIcon className="w-4 h-4" />
               <span>Save & Run</span>
@@ -454,6 +463,12 @@ export default function CodeProject() {
           )}
         </div>
       </div>
+      {showIngestionModal && (
+        <DefaultIngestionModal
+          onConfirm={handleIngestionConfirm}
+          onDecline={handleIngestionDecline}
+        />
+      )}
     </div>
   );
 }

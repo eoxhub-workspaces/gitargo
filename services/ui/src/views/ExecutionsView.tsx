@@ -14,7 +14,11 @@ import {
   ArrowPathIcon,
   CommandLineIcon,
   ChevronRightIcon,
-  TrashIcon
+  TrashIcon,
+  DocumentIcon,
+  PhotoIcon,
+  DocumentTextIcon,
+  ArrowDownTrayIcon
 } from "@heroicons/react/24/outline";
 
 const ExecutionsView: React.FC = () => {
@@ -29,6 +33,15 @@ const ExecutionsView: React.FC = () => {
   const [logsLoading, setLogsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedArtifact, setSelectedArtifact] = useState<{
+    nodeId: string;
+    name: string;
+    workflowName: string;
+    fileNameForDetection?: string;
+    type?: string;
+  } | null>(null);
+  const [artifactContent, setArtifactContent] = useState<string | null>(null);
+  const [artifactLoading, setArtifactLoading] = useState(false);
 
   const queryParams = useMemo(
     () => new URLSearchParams(location.search),
@@ -36,6 +49,66 @@ const ExecutionsView: React.FC = () => {
   );
   const cronFilter = queryParams.get("cron");
   const workflowFilter = queryParams.get("workflow");
+
+  const getArtifactUrl = (
+    workflowName: string,
+    nodeId: string,
+    artifactName: string
+  ) => {
+    const isDev = process.env.NODE_ENV === "development";
+    const basePath = (window as any).BASE_PATH || "";
+    const apiBase = isDev ? "http://localhost:3000/api" : `${basePath}/api`;
+    return `${apiBase}/artifacts/${workflowName}/${nodeId}/${artifactName}`;
+  };
+
+  const handleArtifactClick = async (
+    workflowName: string,
+    nodeId: string,
+    artifactName: string,
+    fileNameForDetection: string
+  ) => {
+    setSelectedArtifact({
+      workflowName,
+      nodeId,
+      name: artifactName,
+      fileNameForDetection
+    });
+    setSelectedNodeId(null);
+    setLogs("");
+
+    // Determine if it's likely a text file to preview using the underlying file path/key
+    const isText = /\.(txt|log|json|yaml|yml|csv|md)$/i.test(
+      fileNameForDetection
+    );
+    const isImage = /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(
+      fileNameForDetection
+    );
+
+    if (isText) {
+      setArtifactLoading(true);
+      setArtifactContent(null);
+      try {
+        const url = getArtifactUrl(workflowName, nodeId, artifactName);
+        const response = await fetch(url);
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.message || "Failed to fetch artifact");
+        }
+        const text = await response.text();
+        setArtifactContent(text);
+      } catch (err: any) {
+        setArtifactContent(`Error: ${err.message}`);
+      } finally {
+        setArtifactLoading(false);
+      }
+    } else if (isImage) {
+      setArtifactContent(null); // Will use <img> tag with URL
+    } else {
+      setArtifactContent(
+        "Preview not available for this file type. Use the download button."
+      );
+    }
+  };
 
   const handleDelete = async (name: string) => {
     if (
@@ -129,6 +202,8 @@ const ExecutionsView: React.FC = () => {
       if (!isPolling) {
         setLogsLoading(true);
         setLogs("");
+        setSelectedArtifact(null);
+        setArtifactContent(null);
       }
       setSelectedNodeId(id);
 
@@ -467,41 +542,135 @@ const ExecutionsView: React.FC = () => {
                               .replace(/^[.-]/, "")
                         : node.name;
 
+                      const artifacts = [
+                        ...(node.inputs?.artifacts || []).map((a: any) => ({
+                          ...a,
+                          _type: "input"
+                        })),
+                        ...(node.outputs?.artifacts || []).map((a: any) => ({
+                          ...a,
+                          _type: "output"
+                        }))
+                      ];
+
                       return (
-                        <li
-                          key={node.id}
-                          className={`p-3 hover:bg-gray-50 transition-colors cursor-pointer ${selectedNodeId === node.id ? "bg-blue-50" : ""}`}
-                          style={{
-                            paddingLeft: `${node.depth * 1.5 + 0.75}rem`
-                          }}
-                          onClick={() =>
-                            node.type === "Pod" && fetchLogs(node.id)
-                          }
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-2">
-                              {getStatusIcon(node.phase, "h-4 w-4")}
-                              <span className="text-sm font-medium text-gray-700 truncate max-w-[200px]">
-                                {cleanName}
-                              </span>
-                              <span className="text-[10px] text-gray-400 font-mono">
-                                ({node.type})
-                              </span>
+                        <React.Fragment key={node.id}>
+                          <li
+                            className={`p-3 hover:bg-gray-50 transition-colors cursor-pointer ${selectedNodeId === node.id ? "bg-blue-50" : ""}`}
+                            style={{
+                              paddingLeft: `${node.depth * 1.5 + 0.75}rem`
+                            }}
+                            onClick={() =>
+                              node.type === "Pod" && fetchLogs(node.id)
+                            }
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center space-x-2">
+                                {getStatusIcon(node.phase, "h-4 w-4")}
+                                <span className="text-sm font-medium text-gray-700 truncate max-w-[200px]">
+                                  {cleanName}
+                                </span>
+                                <span className="text-[10px] text-gray-400 font-mono">
+                                  ({node.type})
+                                </span>
+                              </div>
+                              {node.type === "Pod" && (
+                                <div className="flex space-x-1">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      fetchLogs(node.id);
+                                    }}
+                                    className="p-1 rounded hover:bg-gray-200 text-gray-500 transition-colors"
+                                    title="View Logs"
+                                  >
+                                    <CommandLineIcon className="h-4 w-4" />
+                                  </button>
+                                </div>
+                              )}
                             </div>
-                            {node.type === "Pod" && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  fetchLogs(node.id);
+                          </li>
+                          {artifacts.map((art: any, idx: number) => {
+                            const fileNameForDetection =
+                              art.path ||
+                              (art.s3 && art.s3.key) ||
+                              (art.gcs && art.gcs.key) ||
+                              art.name;
+
+                            const isImage =
+                              /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(
+                                fileNameForDetection
+                              );
+                            const isText =
+                              /\.(txt|log|json|yaml|yml|csv|md)$/i.test(
+                                fileNameForDetection
+                              );
+
+                            return (
+                              <li
+                                key={`${node.id}-art-${idx}`}
+                                className={`p-2 hover:bg-gray-50 transition-colors cursor-pointer border-l-2 border-transparent`}
+                                style={{
+                                  paddingLeft: `${(node.depth + 1) * 1.5 + 0.75}rem`
                                 }}
-                                className="p-1 rounded hover:bg-gray-200 text-gray-500 transition-colors"
-                                title="View Logs"
+                                onClick={() =>
+                                  handleArtifactClick(
+                                    selectedExe.metadata.name,
+                                    node.id,
+                                    art.name,
+                                    fileNameForDetection
+                                  )
+                                }
                               >
-                                <CommandLineIcon className="h-4 w-4" />
-                              </button>
-                            )}
-                          </div>
-                        </li>
+                                <div className="flex items-center justify-between group">
+                                  <div className="flex items-center space-x-2">
+                                    {isImage ? (
+                                      <PhotoIcon className="h-3.5 w-3.5 text-purple-500" />
+                                    ) : isText ? (
+                                      <DocumentTextIcon className="h-3.5 w-3.5 text-blue-500" />
+                                    ) : (
+                                      <DocumentIcon className="h-3.5 w-3.5 text-gray-400" />
+                                    )}
+                                    <div className="flex flex-col">
+                                      <span
+                                        className="text-xs text-gray-600 truncate max-w-[150px]"
+                                        title={art.name}
+                                      >
+                                        {art.name}
+                                      </span>
+                                      {fileNameForDetection !== art.name && (
+                                        <span
+                                          className="text-[9px] text-gray-400 truncate max-w-[150px]"
+                                          title={fileNameForDetection}
+                                        >
+                                          {fileNameForDetection
+                                            .split("/")
+                                            .pop()}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span className="text-[9px] px-1 bg-gray-100 text-gray-500 rounded uppercase">
+                                      {art._type}
+                                    </span>
+                                  </div>
+                                  <a
+                                    href={getArtifactUrl(
+                                      selectedExe.metadata.name,
+                                      node.id,
+                                      art.name
+                                    )}
+                                    download={art.name}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600 opacity-0 group-hover:opacity-100 transition-all"
+                                    title="Download"
+                                  >
+                                    <ArrowDownTrayIcon className="h-3.5 w-3.5" />
+                                  </a>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </React.Fragment>
                       );
                     });
                   })()}
@@ -509,35 +678,106 @@ const ExecutionsView: React.FC = () => {
               </div>
             </div>
 
-            {/* Logs Panel */}
+            {/* Logs / Artifact Panel */}
             <div className="bg-[#1e1e1e] rounded-lg overflow-hidden flex flex-col shadow-lg border border-gray-800 min-h-0">
               <div className="p-4 bg-gray-900 border-b border-gray-800 font-medium text-gray-300 flex justify-between items-center flex-shrink-0">
                 <div className="flex items-center space-x-2">
-                  <CommandLineIcon className="h-4 w-4" />
-                  <span>Logs</span>
+                  {selectedArtifact ? (
+                    <>
+                      <DocumentIcon className="h-4 w-4 text-indigo-400" />
+                      <span>Artifact Preview: {selectedArtifact.name}</span>
+                    </>
+                  ) : (
+                    <>
+                      <CommandLineIcon className="h-4 w-4" />
+                      <span>Logs</span>
+                    </>
+                  )}
                 </div>
                 <div className="flex items-center space-x-2">
-                  <form onSubmit={handleLogSearch} className="relative">
-                    <input
-                      type="text"
-                      value={logQuery}
-                      onChange={(e) => setLogQuery(e.target.value)}
-                      placeholder="Filter logs..."
-                      className="bg-gray-800 border border-gray-700 text-gray-300 text-xs rounded px-2 py-1 focus:outline-none focus:border-blue-500 w-32 md:w-48"
-                    />
-                    <button type="submit" className="hidden"></button>
-                  </form>
-                  {logsLoading && <Spinner className="w-4 h-4 text-blue-500" />}
+                  {!selectedArtifact && (
+                    <form onSubmit={handleLogSearch} className="relative">
+                      <input
+                        type="text"
+                        value={logQuery}
+                        onChange={(e) => setLogQuery(e.target.value)}
+                        placeholder="Filter logs..."
+                        className="bg-gray-800 border border-gray-700 text-gray-300 text-xs rounded px-2 py-1 focus:outline-none focus:border-blue-500 w-32 md:w-48"
+                      />
+                      <button type="submit" className="hidden"></button>
+                    </form>
+                  )}
+                  {selectedArtifact && (
+                    <a
+                      href={getArtifactUrl(
+                        selectedArtifact.workflowName,
+                        selectedArtifact.nodeId,
+                        selectedArtifact.name
+                      )}
+                      download={selectedArtifact.name}
+                      className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded border border-gray-700 flex items-center transition-colors"
+                    >
+                      <ArrowDownTrayIcon className="h-3 w-3 mr-1" />
+                      Download
+                    </a>
+                  )}
+                  {(logsLoading || artifactLoading) && (
+                    <Spinner className="w-4 h-4 text-blue-500" />
+                  )}
                 </div>
               </div>
-              <div className="flex-1 p-4 font-mono text-xs overflow-y-auto whitespace-pre-wrap min-h-0">
-                {logsLoading ? (
+              <div className="flex-1 p-4 font-mono text-xs overflow-y-auto min-h-0">
+                {selectedArtifact ? (
+                  artifactLoading ? (
+                    <div className="flex items-center space-x-2 text-gray-500">
+                      <Spinner className="w-3 h-3" />
+                      <span>Loading artifact...</span>
+                    </div>
+                  ) : artifactContent ? (
+                    <div className="bg-[#111] p-4 rounded border border-gray-800 text-gray-300 overflow-x-auto whitespace-pre">
+                      {artifactContent}
+                    </div>
+                  ) : /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(
+                      selectedArtifact.fileNameForDetection || ""
+                    ) ? (
+                    <div className="flex flex-col items-center justify-center h-full bg-[#111] rounded border border-gray-800 p-4">
+                      <img
+                        src={getArtifactUrl(
+                          selectedArtifact.workflowName,
+                          selectedArtifact.nodeId,
+                          selectedArtifact.name
+                        )}
+                        alt={selectedArtifact.name}
+                        className="max-w-full max-h-full object-contain shadow-2xl"
+                      />
+                      <p className="mt-4 text-gray-500 text-[10px]">
+                        {selectedArtifact.name}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="text-gray-500 italic p-4 text-center">
+                      Preview not available for this file type.
+                      <br />
+                      <a
+                        href={getArtifactUrl(
+                          selectedArtifact.workflowName,
+                          selectedArtifact.nodeId,
+                          selectedArtifact.name
+                        )}
+                        download={selectedArtifact.name}
+                        className="text-blue-400 hover:underline mt-2 inline-block"
+                      >
+                        Download {selectedArtifact.name}
+                      </a>
+                    </div>
+                  )
+                ) : logsLoading ? (
                   <div className="flex items-center space-x-2 text-gray-500">
                     <Spinner className="w-3 h-3" />
                     <span>Fetching logs...</span>
                   </div>
                 ) : logs ? (
-                  <div className="flex flex-col">
+                  <div className="flex flex-col whitespace-pre-wrap">
                     {logs.split("\n").map((line, idx) => {
                       const isSystem = [
                         "Starting Workflow Executor",

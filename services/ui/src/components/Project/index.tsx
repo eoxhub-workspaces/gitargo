@@ -43,6 +43,7 @@ import toast from "react-hot-toast";
 import * as api from "../../utils/api";
 import generateSteppedManifest from "../../utils/generators/step";
 import { validateK8sYaml } from "../../utils/k8sValidation";
+import { DefaultIngestionModal } from "../modals/DefaultIngestionModal";
 
 export default function Project() {
   const { height } = useWindowDimensions();
@@ -59,6 +60,10 @@ export default function Project() {
   const stateConnectionsRef = useRef<[[string, string]] | []>();
   const baseYamlRef = useRef<any>(null);
   const [showModalCreateTemplate, setShowModalCreateTemplate] = useState(false);
+  const [showIngestionModal, setShowIngestionModal] = useState(false);
+  const [runAfterSaveAction, setRunAfterSaveAction] = useState(false);
+  const [pendingManifest, setPendingManifest] = useState<any>(null);
+  const [pendingSyncToken, setPendingSyncToken] = useState<string | null>(null);
   const [templateToEdit, setTemplateToEdit] = useState<ITemplateNode | null>(
     null
   );
@@ -92,16 +97,13 @@ export default function Project() {
 
   const isNewWorkflow = !filename && !!initialName;
 
-  const handleSave = async (runAfterSave = false) => {
+  const handleSaveClick = async (runAfterSave = false) => {
     const name = currentFilename;
     if (!name) {
       toast.error("Filename is required.");
       return;
     }
 
-    const saveToast = toast.loading(
-      runAfterSave ? "Saving and preparing run..." : "Saving workflow..."
-    );
     try {
       const visualState = {
         nodes,
@@ -134,9 +136,73 @@ export default function Project() {
         options
       );
 
-      // Inject sync token for reconciliation if running after save
+      const yamlContent = YAML.stringify(manifest);
+      try {
+        validateK8sYaml(yamlContent);
+      } catch (e: any) {
+        toast.error(`Validation Error: ${e.message}`, {
+          duration: 5000
+        });
+        return;
+      }
+
+      const isCron = manifest.kind === "CronWorkflow";
+      const spec = isCron ? manifest.spec?.workflowSpec : manifest.spec;
+      const annotations = manifest.metadata?.annotations || {};
+
+      const ignoreDefaults =
+        annotations["gitargo.eox.at/ignore-defaults"] === "true";
+      const hasServiceAccount = !!spec?.serviceAccountName;
+      const hasTolerations = spec?.tolerations && spec.tolerations.length > 0;
+
       const syncToken = Date.now().toString();
-      if (runAfterSave) {
+
+      if (!ignoreDefaults && (!hasServiceAccount || !hasTolerations)) {
+        setRunAfterSaveAction(runAfterSave);
+        setPendingManifest(manifest);
+        setPendingSyncToken(syncToken);
+        setShowIngestionModal(true);
+        return;
+      }
+
+      executeSave(false, manifest, syncToken, runAfterSave);
+    } catch (error: any) {
+      toast.error(`Save Preparation Failed: ${error.message || "Unknown"}`);
+      console.error(error);
+    }
+  };
+
+  const handleIngestionConfirm = () => {
+    executeSave(true, pendingManifest, pendingSyncToken, runAfterSaveAction);
+  };
+
+  const handleIngestionDecline = (rememberChoice: boolean) => {
+    const manifestToSave = pendingManifest;
+    if (rememberChoice && manifestToSave) {
+      if (!manifestToSave.metadata) manifestToSave.metadata = {};
+      if (!manifestToSave.metadata.annotations)
+        manifestToSave.metadata.annotations = {};
+      manifestToSave.metadata.annotations["gitargo.eox.at/ignore-defaults"] =
+        "true";
+    }
+    executeSave(false, manifestToSave, pendingSyncToken, runAfterSaveAction);
+  };
+
+  const executeSave = async (
+    applyDefaults: boolean,
+    manifest: any,
+    syncToken: string | null,
+    runAfterSave = false
+  ) => {
+    const name = currentFilename;
+    if (!name || !manifest) return;
+
+    const saveToast = toast.loading(
+      runAfterSave ? "Saving and preparing run..." : "Saving workflow..."
+    );
+
+    try {
+      if (runAfterSave && syncToken) {
         if (!manifest.metadata) manifest.metadata = {};
         if (!manifest.metadata.annotations) manifest.metadata.annotations = {};
         manifest.metadata.annotations["gitargo/sync-token"] = syncToken;
@@ -144,45 +210,30 @@ export default function Project() {
 
       const yamlContent = YAML.stringify(manifest);
 
-      try {
-        validateK8sYaml(yamlContent);
-      } catch (e: any) {
-        toast.error(`Validation Error: ${e.message}`, {
-          duration: 5000,
-          id: saveToast
-        });
-        return;
-      }
-
-      const shouldApplyDefaults = window.confirm(
-        "Would you like to automatically ingest defaults (resource profiles, tolerations, etc.) into this workflow?"
-      );
-
       if (!isNewWorkflow) {
         await api.updateWorkflow(
           name,
           yamlContent,
           `Update ${name}`,
-          shouldApplyDefaults
+          applyDefaults
         );
       } else {
         await api.createWorkflow(
           name,
           yamlContent,
           `Create ${name}`,
-          shouldApplyDefaults
+          applyDefaults
         );
-        // We don't navigate yet if we're running after save,
-        // but we update the currentFilename so polling works.
         setCurrentFilename(name);
       }
 
-      if (runAfterSave) {
+      setShowIngestionModal(false);
+
+      if (runAfterSave && syncToken) {
         toast.loading("Waiting for GitOps reconciliation...", {
           id: saveToast
         });
 
-        // Polling for sync status
         let synced = false;
         let attempts = 0;
         const maxAttempts = 30; // 30 seconds
@@ -227,6 +278,7 @@ export default function Project() {
         "Failed to save workflow";
       toast.error(`Save Failed: ${msg}`, { id: saveToast, duration: 5000 });
       console.error(error);
+      setShowIngestionModal(false);
     }
   };
 
@@ -687,6 +739,13 @@ export default function Project() {
         />
       ) : null}
 
+      {showIngestionModal && (
+        <DefaultIngestionModal
+          onConfirm={handleIngestionConfirm}
+          onDecline={handleIngestionDecline}
+        />
+      )}
+
       <div className="flex flex-col flex-1">
         <Header name={currentFilename} />
 
@@ -762,7 +821,7 @@ export default function Project() {
                   <button
                     className="flex space-x-1 btn-util"
                     type="button"
-                    onClick={() => handleSave(false)}
+                    onClick={() => handleSaveClick(false)}
                   >
                     <CloudArrowUpIcon className="w-4" />
                     <span>Save</span>
@@ -770,7 +829,7 @@ export default function Project() {
                   <button
                     className="flex space-x-1 btn-util bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100"
                     type="button"
-                    onClick={() => handleSave(true)}
+                    onClick={() => handleSaveClick(true)}
                   >
                     <PlayIcon className="w-4" />
                     <span>Save & Run</span>
