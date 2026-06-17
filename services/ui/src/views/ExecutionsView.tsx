@@ -67,6 +67,29 @@ const ExecutionsView: React.FC = () => {
     artifactName: string,
     fileNameForDetection: string
   ) => {
+    // Determine if it's likely a text file to preview using the underlying file path/key
+    const isText = /\.(txt|log|json|yaml|yml|csv|md)$/i.test(
+      fileNameForDetection
+    );
+    const isImage = /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(
+      fileNameForDetection
+    );
+
+    // If it's not a known text or image format, trigger a direct download
+    if (!isText && !isImage) {
+      const url = getArtifactUrl(workflowName, nodeId, artifactName);
+      // Create a temporary anchor to force download
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = artifactName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      // We don't update selectedArtifact so the preview panel doesn't open
+      return;
+    }
+
     setSelectedArtifact({
       workflowName,
       nodeId,
@@ -75,14 +98,6 @@ const ExecutionsView: React.FC = () => {
     });
     setSelectedNodeId(null);
     setLogs("");
-
-    // Determine if it's likely a text file to preview using the underlying file path/key
-    const isText = /\.(txt|log|json|yaml|yml|csv|md)$/i.test(
-      fileNameForDetection
-    );
-    const isImage = /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(
-      fileNameForDetection
-    );
 
     if (isText) {
       setArtifactLoading(true);
@@ -94,7 +109,20 @@ const ExecutionsView: React.FC = () => {
           const errData = await response.json().catch(() => ({}));
           throw new Error(errData.message || "Failed to fetch artifact");
         }
-        const text = await response.text();
+
+        // For text files, we want to prevent massive files from crashing the browser tab.
+        // We'll grab the response as a blob first to check size.
+        const blob = await response.blob();
+
+        // 5MB limit for inline text preview
+        if (blob.size > 5 * 1024 * 1024) {
+          setArtifactContent(
+            `File is too large (${(blob.size / 1024 / 1024).toFixed(2)} MB) to preview inline.\nPlease use the download button.`
+          );
+          return;
+        }
+
+        const text = await blob.text();
         setArtifactContent(text);
       } catch (err: any) {
         setArtifactContent(`Error: ${err.message}`);
@@ -103,10 +131,6 @@ const ExecutionsView: React.FC = () => {
       }
     } else if (isImage) {
       setArtifactContent(null); // Will use <img> tag with URL
-    } else {
-      setArtifactContent(
-        "Preview not available for this file type. Use the download button."
-      );
     }
   };
 
