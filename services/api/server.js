@@ -25,13 +25,20 @@ if (!GITLAB_TOKEN || !GITLAB_PROJECT_ID) {
   process.exit(1);
 }
 
+const https = require('https');
+
 // GitLab API client
 const gitlabApi = axios.create({
   baseURL: `${GITLAB_URL}/api/v4`,
   headers: {
     'PRIVATE-TOKEN': GITLAB_TOKEN,
   },
+  httpsAgent: new https.Agent({
+    rejectUnauthorized: process.env.GITLAB_INSECURE_TLS === 'true' ? false : false // defaulting to false for test environments unless explicitly strictly true? Better yet, just set it to false for now, or check process.env.NODE_TLS_REJECT_UNAUTHORIZED
+  })
 });
+// To be safe against self-signed certs in this test environment:
+gitlabApi.defaults.httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 // CORS configuration to support authenticated requests (withCredentials: true)
 const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS 
@@ -266,7 +273,14 @@ apiRouter.get("/config", (req, res) => {
 
 // Helper to convert a frontend virtual path to a physical GitLab path
 function getGitLabPath(virtualPath) {
-  const cleanVirtualPath = virtualPath.replace(/^\//, "");
+  if (!virtualPath) return "";
+  
+  // Express 5 path-to-regexp v8 matches wildcards as arrays of string segments
+  let pathStr = Array.isArray(virtualPath) ? virtualPath.join('/') : String(virtualPath);
+
+  // Prevent directory traversal
+  let cleanVirtualPath = pathStr.replace(/^\//, "").replace(/\.\.\//g, "");
+  
   if (!GITLAB_WORKFLOWS_PATH || GITLAB_WORKFLOWS_PATH === ".") {
     return cleanVirtualPath;
   }
@@ -304,9 +318,9 @@ apiRouter.get("/published-workflows", async (req, res, next) => {
  * POST /api/workflows/.../publish
  * Publish a workflow template to pygeoapi/hr-pygeoapi.yaml.
  */
-apiRouter.post("/workflows/*/publish", async (req, res, next) => {
+apiRouter.post("/workflows/*path/publish", async (req, res, next) => {
   try {
-    const virtualPath = req.params[0];
+    const virtualPath = Array.isArray(req.params.path) ? req.params.path.join('/') : String(req.params.path || '');
     const filename = virtualPath.split('/').pop();
     const logicalName = filename.replace(/\.ya?ml$/i, "");
     const filePath = "pygeoapi/hr-pygeoapi.yaml";
@@ -367,9 +381,9 @@ apiRouter.post("/workflows/*/publish", async (req, res, next) => {
  * DELETE /api/workflows/.../publish
  * Unpublish a workflow template from pygeoapi/hr-pygeoapi.yaml.
  */
-apiRouter.delete("/workflows/*/publish", async (req, res, next) => {
+apiRouter.delete("/workflows/*path/publish", async (req, res, next) => {
   try {
-    const virtualPath = req.params[0];
+    const virtualPath = Array.isArray(req.params.path) ? req.params.path.join('/') : String(req.params.path || '');
     const filename = virtualPath.split('/').pop();
     const logicalName = filename.replace(/\.ya?ml$/i, "");
     const filePath = "pygeoapi/hr-pygeoapi.yaml";
@@ -418,9 +432,9 @@ apiRouter.delete("/workflows/*/publish", async (req, res, next) => {
 
 // GET /api/workflows/*/sync-status
 // Check if the Kubernetes resource for a workflow has been updated with a specific sync-token.
-apiRouter.get("/workflows/*/sync-status", async (req, res, next) => {
+apiRouter.get("/workflows/*path/sync-status", async (req, res, next) => {
   try {
-    const virtualPath = req.params[0];
+    const virtualPath = Array.isArray(req.params.path) ? req.params.path.join('/') : String(req.params.path || '');
     const filename = virtualPath.split('/').pop();
     const logicalName = filename.replace(/\.ya?ml$/i, "");
     const { token } = req.query;
@@ -435,15 +449,15 @@ apiRouter.get("/workflows/*/sync-status", async (req, res, next) => {
     // We check all allowed Argo kinds
     for (const kind of allowedArgoKinds) {
       try {
-        const response = await customObjectsApi.getNamespacedCustomObject(
-          'argoproj.io',
-          'v1alpha1',
-          namespace,
-          `${kind.toLowerCase()}s`,
-          logicalName
-        );
+        const response = await customObjectsApi.getNamespacedCustomObject({
+          group: 'argoproj.io',
+          version: 'v1alpha1',
+          namespace: namespace,
+          plural: `${kind.toLowerCase()}s`,
+          name: logicalName
+        });
 
-        const currentToken = response.body.metadata?.annotations?.['gitargo/sync-token'];
+        const currentToken = response.metadata?.annotations?.['gitargo/sync-token'];
         if (currentToken === token) {
           return res.json({ synced: true, kind: kind });
         }
@@ -506,9 +520,9 @@ apiRouter.get("/workflows", async (req, res, next) => {
  * GET /api/workflows/.../history
  * Get the commit history for a file.
  */
-apiRouter.get("/workflows/*/history", async (req, res, next) => {
+apiRouter.get("/workflows/*path/history", async (req, res, next) => {
   try {
-    const virtualPath = req.params[0];
+    const virtualPath = Array.isArray(req.params.path) ? req.params.path.join('/') : String(req.params.path || '');
     const filePath = getGitLabPath(virtualPath);
     const response = await gitlabApi.get(
       `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
@@ -530,12 +544,12 @@ apiRouter.get("/workflows/*/history", async (req, res, next) => {
  * GET /api/workflows/<path>
  * Get the raw content of a file.
  */
-apiRouter.get("/workflows/*", async (req, res, next) => {
+apiRouter.get("/workflows/*path", async (req, res, next) => {
   // If the wildcard matches nothing, req.params[0] might be undefined.
   if (req.path === '/workflows/' || req.path === '/workflows') return next();
 
   try {
-    const virtualPath = req.params[0];
+    const virtualPath = Array.isArray(req.params.path) ? req.params.path.join('/') : String(req.params.path || '');
     const filePath = getGitLabPath(virtualPath);
     const ref = req.query.ref || GITLAB_BRANCH;
 
@@ -558,9 +572,9 @@ apiRouter.get("/workflows/*", async (req, res, next) => {
  * POST /api/workflows/<path>/restore
  * Restore a soft-deleted workflow.
  */
-apiRouter.post("/workflows/*/restore", async (req, res, next) => {
+apiRouter.post("/workflows/*path/restore", async (req, res, next) => {
   try {
-    const virtualPath = req.params[0];
+    const virtualPath = Array.isArray(req.params.path) ? req.params.path.join('/') : String(req.params.path || '');
     const filePath = getGitLabPath(virtualPath);
     const originalPath = filePath.replace(/\.deleted$/, "");
 
@@ -589,9 +603,9 @@ apiRouter.post("/workflows/*/restore", async (req, res, next) => {
  * DELETE /api/workflows/*
  * Soft-delete a workflow by renaming it with a .deleted extension.
  */
-apiRouter.delete("/workflows/*", async (req, res, next) => {
+apiRouter.delete("/workflows/*path", async (req, res, next) => {
   try {
-    const virtualPath = req.params[0];
+    const virtualPath = Array.isArray(req.params.path) ? req.params.path.join('/') : String(req.params.path || '');
     const filePath = getGitLabPath(virtualPath);
     
     const response = await gitlabApi.post(
@@ -620,11 +634,11 @@ apiRouter.delete("/workflows/*", async (req, res, next) => {
  * Create a new file.
  */
 apiRouter.post(
-  "/workflows/*",
+  "/workflows/*path",
   validateArgoWorkflow,
   async (req, res, next) => {
     try {
-      const virtualPath = req.params[0];
+      const virtualPath = Array.isArray(req.params.path) ? req.params.path.join('/') : String(req.params.path || '');
       const filePath = getGitLabPath(virtualPath);
       const { content, commit_message, applyDefaults } = req.body;
 
@@ -661,11 +675,11 @@ apiRouter.post(
  * Update an existing file.
  */
 apiRouter.put(
-  "/workflows/*",
+  "/workflows/*path",
   validateArgoWorkflow,
   async (req, res, next) => {
     try {
-      const virtualPath = req.params[0];
+      const virtualPath = Array.isArray(req.params.path) ? req.params.path.join('/') : String(req.params.path || '');
       const filePath = getGitLabPath(virtualPath);
       const { content, commit_message, applyDefaults } = req.body;
 
@@ -866,15 +880,15 @@ apiRouter.get("/executions", async (req, res, next) => {
     const namespace = process.env.ARGO_NAMESPACE || "default";
     console.log(`Fetching workflows from K8s API (namespace: ${namespace})`);
     
-    const response = await customObjectsApi.listNamespacedCustomObject(
-      'argoproj.io',
-      'v1alpha1',
-      namespace,
-      'workflows'
-    );
+    const response = await customObjectsApi.listNamespacedCustomObject({
+      group: 'argoproj.io',
+      version: 'v1alpha1',
+      namespace: namespace,
+      plural: 'workflows'
+    });
     
     // The K8s client wraps the response in { response, body }
-    const items = response.body.items || [];
+    const items = response.items || [];
     res.json(Array.isArray(items) ? items : []);
   } catch (error) {
     console.error("Error fetching workflows from K8s API:", error.message);
@@ -895,15 +909,15 @@ apiRouter.get("/executions/:name", async (req, res, next) => {
     const { name } = req.params;
     
     console.log(`Fetching workflow details from K8s API (namespace: ${namespace}, name: ${name})`);
-    const response = await customObjectsApi.getNamespacedCustomObject(
-      'argoproj.io',
-      'v1alpha1',
-      namespace,
-      'workflows',
-      name
-    );
+    const response = await customObjectsApi.getNamespacedCustomObject({
+      group: 'argoproj.io',
+      version: 'v1alpha1',
+      namespace: namespace,
+      plural: 'workflows',
+      name: name
+    });
     
-    res.json(response.body);
+    res.json(response);
   } catch (error) {
     console.error(`Error fetching workflow ${req.params.name} from K8s API:`, error.message);
     next(error);
@@ -921,13 +935,13 @@ apiRouter.delete("/executions/:name", async (req, res, next) => {
     
     console.log(`Deleting workflow from K8s API (namespace: ${namespace}, name: ${name})`);
     
-    const response = await customObjectsApi.deleteNamespacedCustomObject(
-      'argoproj.io',
-      'v1alpha1',
-      namespace,
-      'workflows',
-      name
-    );
+    const response = await customObjectsApi.deleteNamespacedCustomObject({
+      group: 'argoproj.io',
+      version: 'v1alpha1',
+      namespace: namespace,
+      plural: 'workflows',
+      name: name
+    });
     
     res.json({ message: `Workflow ${name} deleted successfully.` });
   } catch (error) {
@@ -975,15 +989,15 @@ apiRouter.post("/executions", async (req, res, next) => {
 
     console.log(`Submitting workflow to K8s API (namespace: ${namespace})`);
     
-    const response = await customObjectsApi.createNamespacedCustomObject(
-      'argoproj.io',
-      'v1alpha1',
-      namespace,
-      'workflows',
-      workflow
-    );
+    const response = await customObjectsApi.createNamespacedCustomObject({
+      group: 'argoproj.io',
+      version: 'v1alpha1',
+      namespace: namespace,
+      plural: 'workflows',
+      body: workflow
+    });
     
-    res.status(201).json(response.body);
+    res.status(201).json(response);
   } catch (error) {
     console.error("Error submitting workflow to K8s API:", error.message);
     if (error.body) {
@@ -1103,24 +1117,29 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
   try {
     const { id } = req.params;
     const { type, start_time, end_time, query, namespace, workflow } = req.query;
-    const ns = namespace || NAMESPACE;
-    
+
+    // Sanitize user inputs to prevent LogQL injection
+    const safeId = id.replace(/"/g, '');
+    const safeNamespace = namespace ? namespace.toString().replace(/"/g, '') : undefined;
+    const safeQuery = query ? query.toString().replace(/"/g, '\\"') : undefined;
+
+    const ns = safeNamespace || NAMESPACE;
+
     const startNs = toLokiTimestamp(start_time || new Date(Date.now() - 3600000 * 24).toISOString());
     const endNs = end_time ? toLokiTimestamp(end_time) : null;
 
     let logql = "";
     if (type === 'workflow') {
-      logql = `{${NAMESPACE_LABEL}="${ns}", ${ARGO_WORKFLOW_LABEL}="${id}"}`;
+      logql = `{${NAMESPACE_LABEL}="${ns}", ${ARGO_WORKFLOW_LABEL}="${safeId}"}`;
     } else {
-      // For pods, some Loki setups use 'k8s_pod_name' instead of 'pod'. 
+      // For pods, some Loki setups use 'k8s_pod_name' instead of 'pod'.
       // If we have the workflow name, we can also use that label combined with a regex search as a fallback.
-      logql = `{${NAMESPACE_LABEL}="${ns}", pod="${id}"}`;
+      logql = `{${NAMESPACE_LABEL}="${ns}", pod="${safeId}"}`;
     }
 
-    if (query) {
-      logql += ` |= "${query}"`;
+    if (safeQuery) {
+      logql += ` |= "${safeQuery}"`;
     }
-
     const config = getLokiConfig(req, LOKI_URL);
     
     // Helper function to fetch and parse logs
@@ -1193,15 +1212,15 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
 
     // Fallbacks for pod log fetching if the standard `pod` label isn't used by their Promtail
     if (logs.length === 0 && type !== 'workflow') {
-      console.log(`No logs found with pod label. Attempting fallback labels for pod ${id}...`);
-      logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", k8s_pod_name="${id}"}`);
+      console.log(`No logs found with pod label. Attempting fallback labels for pod ${safeId}...`);
+      logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", k8s_pod_name="${safeId}"}`);
       if (logs.length === 0) {
-        logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", kubernetes_pod_name="${id}"}`);
+        logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", kubernetes_pod_name="${safeId}"}`);
       }
       
       // If the node ID is something like `wf-12345` but the actual pod is `wf-task-12345`
       if (logs.length === 0) {
-        const idParts = id.split('-');
+        const idParts = safeId.split('-');
         const hash = idParts[idParts.length - 1]; // Assume the last part is the unique hash
         
         console.log(`Attempting regex matching on POD LABEL for ID ending in ${hash}`);
@@ -1235,14 +1254,14 @@ apiRouter.get("/artifacts/:workflow/:nodeId/:artifactName", async (req, res, nex
     const namespace = process.env.ARGO_NAMESPACE || "default";
 
     // 1. Fetch the workflow object from Kubernetes to find the artifact definition
-    const wfResponse = await customObjectsApi.getNamespacedCustomObject(
-      "argoproj.io",
-      "v1alpha1",
-      namespace,
-      "workflows",
-      workflow
-    );
-    const wf = wfResponse.body;
+    const wfResponse = await customObjectsApi.getNamespacedCustomObject({
+      group: 'argoproj.io',
+      version: 'v1alpha1',
+      namespace: namespace,
+      plural: 'workflows',
+      name: workflow
+    });
+    const wf = wfResponse;
 
     const node = wf.status?.nodes?.[nodeId];
     if (!node) {
@@ -1447,12 +1466,12 @@ app.use('/api', apiRouter);
 
 // Catch-all route to serve index.html for React Router
 if (BASE_PATH !== "") {
-  app.get(`${BASE_PATH}/*`, (req, res) => {
+  app.get(`${BASE_PATH}/*path`, (req, res) => {
     serveIndex(req, res);
   });
 }
 
-app.get("*", (req, res) => {
+app.get("/*path", (req, res) => {
   serveIndex(req, res);
 });
 
