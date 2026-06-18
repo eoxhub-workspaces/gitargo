@@ -1,6 +1,6 @@
 {
   "name": "gitargo-root",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "scripts": {
     "start": "concurrently \"npm run start:api\" \"npm run start:ui\"",
