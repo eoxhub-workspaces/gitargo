@@ -112,7 +112,7 @@ const HistoryView: React.FC = () => {
               <ul className="-mb-8">
                 {history.map((commit, commitIdx) => (
                   <li key={commit.id}>
-                    <div className="relative pb-8">
+                    <div className="relative pb-4">
                       {commitIdx !== history.length - 1 ? (
                         <span
                           className="absolute top-4 left-4 -ml-px h-full w-0.5 bg-gray-200"

@@ -118,7 +118,7 @@ kind: CronWorkflow
 metadata:
   name: ${initialName}
 spec:
-  schedule: "* * * * *"
+  schedule: "0 0 * * *"
   workflowSpec:
     entrypoint: main
     templates:
@@ -370,14 +370,7 @@ spec:
                       key={exe.metadata.name}
                       className="p-4 hover:bg-gray-100 transition-colors cursor-pointer"
                       onClick={() =>
-                        navigate(
-                          `/executions?workflow=${decodeURIComponent(
-                            filename || ""
-                          )
-                            .split("/")
-                            .pop()
-                            ?.replace(/\.ya?ml$/i, "")}`
-                        )
+                        navigate(`/executions?run=${exe.metadata.name}`)
                       }
                     >
                       <div className="flex justify-between items-start mb-1">

@@ -49,6 +49,10 @@ const ExecutionsView: React.FC = () => {
   );
   const cronFilter = queryParams.get("cron");
   const workflowFilter = queryParams.get("workflow");
+  const runFilter = queryParams.get("run");
+
+  const [uiWorkflowFilter, setUiWorkflowFilter] = useState<string>("");
+  const [uiPhaseFilter, setUiPhaseFilter] = useState<string>("");
 
   const getArtifactUrl = (
     workflowName: string,
@@ -173,6 +177,10 @@ const ExecutionsView: React.FC = () => {
           (e) => e.metadata.name === selectedExe.metadata.name
         );
         if (updated) setSelectedExe(updated);
+      } else if (runFilter) {
+        // If runFilter is present in URL and we don't have a selected exe, select it
+        const target = data.find((e) => e.metadata.name === runFilter);
+        if (target) setSelectedExe(target);
       }
     } catch (err: any) {
       setError(err.message || "Failed to fetch executions");
@@ -180,6 +188,7 @@ const ExecutionsView: React.FC = () => {
       setLoading(false);
     }
   };
+
   const filteredExecutions = useMemo(() => {
     let result = executions;
     if (cronFilter) {
@@ -199,6 +208,21 @@ const ExecutionsView: React.FC = () => {
           exe.metadata.name.startsWith(`${workflowFilter}-`)
       );
     }
+    if (uiWorkflowFilter) {
+      result = result.filter((exe) => {
+        const templateName =
+          exe.metadata.labels?.["workflows.argoproj.io/workflow-template"];
+        if (templateName === uiWorkflowFilter) return true;
+        // Fallback for names if labels missing
+        return exe.metadata.name.startsWith(`${uiWorkflowFilter}-`);
+      });
+    }
+    if (uiPhaseFilter) {
+      result = result.filter(
+        (exe) => (exe.status?.phase || "Pending") === uiPhaseFilter
+      );
+    }
+
     // Sort by creationTimestamp descending (newest first)
     return [...result].sort((a, b) => {
       return (
@@ -206,13 +230,34 @@ const ExecutionsView: React.FC = () => {
         new Date(a.metadata.creationTimestamp).getTime()
       );
     });
-  }, [executions, cronFilter, workflowFilter]);
+  }, [executions, cronFilter, workflowFilter, uiWorkflowFilter, uiPhaseFilter]);
+
+  const uniqueWorkflowNames = useMemo(() => {
+    const names = new Set<string>();
+    executions.forEach((exe) => {
+      const templateName =
+        exe.metadata.labels?.["workflows.argoproj.io/workflow-template"];
+      if (templateName) {
+        names.add(templateName);
+      } else {
+        // Guess template name by removing random suffix
+        const parts = exe.metadata.name.split("-");
+        if (parts.length > 1) {
+          parts.pop();
+          names.add(parts.join("-"));
+        } else {
+          names.add(exe.metadata.name);
+        }
+      }
+    });
+    return Array.from(names).sort();
+  }, [executions]);
 
   useEffect(() => {
     fetchExecutions();
     const interval = setInterval(fetchExecutions, 10000); // Refresh every 10s
     return () => clearInterval(interval);
-  }, [selectedExe?.metadata.name]);
+  }, [selectedExe?.metadata.name, runFilter]);
 
   const [logQuery, setLogQuery] = useState("");
 
@@ -378,7 +423,7 @@ const ExecutionsView: React.FC = () => {
   if (error) return <div className="p-8 text-red-500 text-center">{error}</div>;
 
   return (
-    <div className="p-8 max-w-7xl mx-auto h-screen flex flex-col overflow-hidden">
+    <div className="p-8 max-w-7xl mx-auto h-[calc(100vh-4rem)] flex flex-col overflow-hidden">
       <div className="flex justify-between items-center mb-6 flex-shrink-0">
         <h1 className="text-2xl font-bold text-[#004170]">
           {selectedExe
@@ -418,6 +463,45 @@ const ExecutionsView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {!selectedExe && (
+        <div className="flex space-x-4 mb-4 flex-shrink-0 bg-gray-50 p-4 rounded-md border border-gray-200">
+          <div className="flex flex-col">
+            <label className="text-xs text-gray-500 font-medium mb-1">
+              Source Workflow
+            </label>
+            <select
+              value={uiWorkflowFilter}
+              onChange={(e) => setUiWorkflowFilter(e.target.value)}
+              className="border border-gray-300 text-sm rounded px-3 py-1.5 focus:outline-none focus:border-[#004170] bg-white min-w-[200px]"
+            >
+              <option value="">All Workflows</option>
+              {uniqueWorkflowNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col">
+            <label className="text-xs text-gray-500 font-medium mb-1">
+              Status
+            </label>
+            <select
+              value={uiPhaseFilter}
+              onChange={(e) => setUiPhaseFilter(e.target.value)}
+              className="border border-gray-300 text-sm rounded px-3 py-1.5 focus:outline-none focus:border-[#004170] bg-white min-w-[150px]"
+            >
+              <option value="">All Statuses</option>
+              <option value="Succeeded">Succeeded</option>
+              <option value="Running">Running</option>
+              <option value="Failed">Failed</option>
+              <option value="Error">Error</option>
+              <option value="Pending">Pending</option>
+            </select>
+          </div>
+        </div>
+      )}
 
       {!selectedExe ? (
         <div className="bg-white shadow overflow-y-auto sm:rounded-md border border-gray-200 flex-1">
@@ -480,7 +564,7 @@ const ExecutionsView: React.FC = () => {
           </ul>
         </div>
       ) : (
-        <div className="flex flex-col flex-1 space-y-6 overflow-hidden min-h-0">
+        <div className="flex flex-col flex-1 space-y-6 overflow-hidden min-h-0 pb-4">
           <div className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm flex-shrink-0">
             <div className="flex justify-between items-start">
               <div>
@@ -511,9 +595,9 @@ const ExecutionsView: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0">
+          <div className="flex-1 flex overflow-hidden min-h-0 space-x-6 pb-2">
             {/* Steps List */}
-            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col shadow-sm min-h-0">
+            <div className="w-1/3 bg-white border border-gray-200 rounded-lg overflow-hidden flex flex-col shadow-sm min-h-0">
               <div className="p-4 bg-gray-50 border-b border-gray-200 font-medium text-gray-700 flex-shrink-0">
                 Nodes / Steps
               </div>
@@ -703,7 +787,7 @@ const ExecutionsView: React.FC = () => {
             </div>
 
             {/* Logs / Artifact Panel */}
-            <div className="bg-[#1e1e1e] rounded-lg overflow-hidden flex flex-col shadow-lg border border-gray-800 min-h-0">
+            <div className="w-2/3 bg-[#1e1e1e] rounded-lg overflow-hidden flex flex-col shadow-lg border border-gray-800 min-h-0">
               <div className="p-4 bg-gray-900 border-b border-gray-800 font-medium text-gray-300 flex justify-between items-center flex-shrink-0">
                 <div className="flex items-center space-x-2">
                   {selectedArtifact ? (
@@ -765,15 +849,26 @@ const ExecutionsView: React.FC = () => {
                       selectedArtifact.fileNameForDetection || ""
                     ) ? (
                     <div className="flex flex-col items-center justify-center h-full bg-[#111] rounded border border-gray-800 p-4">
-                      <img
-                        src={getArtifactUrl(
-                          selectedArtifact.workflowName,
-                          selectedArtifact.nodeId,
-                          selectedArtifact.name
-                        )}
-                        alt={selectedArtifact.name}
-                        className="max-w-full max-h-full object-contain shadow-2xl"
-                      />
+                      <div
+                        className="relative border border-gray-600 bg-white"
+                        style={{
+                          backgroundImage:
+                            "linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%)",
+                          backgroundSize: "20px 20px",
+                          backgroundPosition:
+                            "0 0, 0 10px, 10px -10px, -10px 0px"
+                        }}
+                      >
+                        <img
+                          src={getArtifactUrl(
+                            selectedArtifact.workflowName,
+                            selectedArtifact.nodeId,
+                            selectedArtifact.name
+                          )}
+                          alt={selectedArtifact.name}
+                          className="max-w-full max-h-full object-contain shadow-2xl min-w-[50px] min-h-[50px]"
+                        />
+                      </div>
                       <p className="mt-4 text-gray-500 text-[10px]">
                         {selectedArtifact.name}
                       </p>
