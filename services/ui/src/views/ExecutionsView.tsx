@@ -1,10 +1,12 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { useLocation } from "react-router-dom";
+import toast from "react-hot-toast";
 import {
   getExecutions,
   WorkflowExecution,
   getLogs,
-  deleteExecution
+  deleteExecution,
+  terminateExecution
 } from "../utils/api";
 import Spinner from "../components/global/Spinner";
 import {
@@ -15,6 +17,7 @@ import {
   CommandLineIcon,
   ChevronRightIcon,
   TrashIcon,
+  StopIcon,
   DocumentIcon,
   PhotoIcon,
   DocumentTextIcon,
@@ -154,6 +157,22 @@ const ExecutionsView: React.FC = () => {
       alert(`Failed to delete: ${err.message || "Unknown error"}`);
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const handleTerminate = async (name: string) => {
+    if (
+      !window.confirm(
+        `Are you sure you want to terminate workflow run ${name}?`
+      )
+    )
+      return;
+    try {
+      await terminateExecution(name);
+      toast.success(`Workflow ${name} termination requested.`);
+      await fetchExecutions();
+    } catch (err: any) {
+      toast.error(`Failed to terminate: ${err.message || "Unknown error"}`);
     }
   };
 
@@ -507,52 +526,73 @@ const ExecutionsView: React.FC = () => {
         <div className="bg-white shadow overflow-y-auto sm:rounded-md border border-gray-200 flex-1">
           <ul className="divide-y divide-gray-200">
             {filteredExecutions.map((exe) => (
-              <li key={exe.metadata.name} onClick={() => setSelectedExe(exe)}>
-                <div className="px-4 py-4 sm:px-6 hover:bg-gray-50 cursor-pointer">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      {getStatusIcon(exe.status?.phase || "Pending")}
-                      <p className="text-sm font-medium text-[#004170] truncate">
-                        {exe.metadata.name}
-                      </p>
+              <li key={exe.metadata.name}>
+                <div
+                  className="px-6 py-4 flex items-center justify-between hover:bg-[#f8fbfc] transition-colors cursor-pointer"
+                  onClick={() => setSelectedExe(exe)}
+                >
+                  <div className="flex items-center min-w-0 flex-1">
+                    <div className="flex-shrink-0">
+                      {getStatusIcon(exe.status?.phase || "Pending", "h-8 w-8")}
                     </div>
-                    <div className="ml-2 flex-shrink-0 flex items-center space-x-2">
-                      <p
-                        className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                          exe.status?.phase === "Succeeded"
-                            ? "bg-green-100 text-green-800"
-                            : exe.status?.phase === "Running"
-                              ? "bg-blue-100 text-blue-800"
-                              : exe.status?.phase === "Failed"
-                                ? "bg-red-100 text-red-800"
-                                : "bg-gray-100 text-gray-800"
-                        }`}
-                      >
-                        {exe.status?.phase || "Pending"}
-                      </p>
-                      <ChevronRightIcon className="h-5 w-5 text-gray-400" />
+                    <div className="ml-4 flex-1">
+                      <div className="flex items-center space-x-2">
+                        <p className="text-sm font-medium text-[#004170] truncate">
+                          {exe.metadata.name}
+                        </p>
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium border ${
+                            exe.status?.phase === "Succeeded"
+                              ? "bg-green-100 text-green-800 border-green-200"
+                              : exe.status?.phase === "Running"
+                                ? "bg-blue-100 text-blue-800 border-blue-200"
+                                : exe.status?.phase === "Failed" ||
+                                    exe.status?.phase === "Error"
+                                  ? "bg-red-100 text-red-800 border-red-200"
+                                  : "bg-gray-100 text-gray-800 border-gray-200"
+                          }`}
+                        >
+                          {exe.status?.phase || "Pending"}
+                        </span>
+                      </div>
+                      <div className="flex items-center mt-1 space-x-4">
+                        <p className="flex items-center text-xs text-gray-500">
+                          <ClockIcon className="flex-shrink-0 mr-1.5 h-3.5 w-3.5 text-gray-400" />
+                          Created:{" "}
+                          {new Date(
+                            exe.metadata.creationTimestamp
+                          ).toLocaleString()}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                  <div className="mt-2 flex items-center justify-between sm:mt-0">
-                    <p className="flex items-center text-sm text-gray-500">
-                      <ClockIcon className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" />
-                      Created{" "}
-                      {new Date(
-                        exe.metadata.creationTimestamp
-                      ).toLocaleString()}
-                    </p>
+                  <div className="ml-4 flex-shrink-0 flex items-center space-x-2">
+                    {exe.status?.phase === "Running" && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleTerminate(exe.metadata.name);
+                        }}
+                        className="inline-flex items-center px-3 py-1.5 border border-orange-300 shadow-sm text-xs font-medium rounded text-orange-700 bg-white hover:bg-orange-50 transition-colors z-10"
+                        title="Terminate Workflow"
+                      >
+                        <StopIcon className="h-4 w-4" aria-hidden="true" />
+                        <span className="sr-only">Terminate</span>
+                      </button>
+                    )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         handleDelete(exe.metadata.name);
                       }}
                       disabled={isDeleting}
-                      className="ml-4 inline-flex items-center px-3 py-1.5 border border-red-300 shadow-sm text-xs font-medium rounded text-red-700 bg-white hover:bg-red-50 transition-colors z-10"
+                      className="inline-flex items-center px-3 py-1.5 border border-red-300 shadow-sm text-xs font-medium rounded text-red-700 bg-white hover:bg-red-50 transition-colors z-10"
                       title="Delete Execution"
                     >
-                      <TrashIcon className="h-4 w-4" />
+                      <TrashIcon className="h-4 w-4" aria-hidden="true" />
+                      <span className="sr-only">Delete</span>
                     </button>
-                  </div>{" "}
+                  </div>
                 </div>
               </li>
             ))}
@@ -578,19 +618,40 @@ const ExecutionsView: React.FC = () => {
                   Namespace: {selectedExe.metadata.namespace}
                 </p>
               </div>
-              <div className="text-right text-xs text-gray-400">
-                <p>
-                  Started:{" "}
-                  {new Date(
-                    selectedExe.status?.startedAt || ""
-                  ).toLocaleString()}
-                </p>
-                {selectedExe.status?.finishedAt && (
+              <div className="flex flex-col items-end space-y-2">
+                <div className="text-right text-xs text-gray-400">
                   <p>
-                    Finished:{" "}
-                    {new Date(selectedExe.status.finishedAt).toLocaleString()}
+                    Started:{" "}
+                    {new Date(
+                      selectedExe.status?.startedAt || ""
+                    ).toLocaleString()}
                   </p>
-                )}
+                  {selectedExe.status?.finishedAt && (
+                    <p>
+                      Finished:{" "}
+                      {new Date(selectedExe.status.finishedAt).toLocaleString()}
+                    </p>
+                  )}
+                </div>
+                <div className="flex space-x-2">
+                  {selectedExe.status?.phase === "Running" && (
+                    <button
+                      onClick={() => handleTerminate(selectedExe.metadata.name)}
+                      className="inline-flex items-center px-2.5 py-1.5 border border-transparent shadow-sm text-xs font-medium rounded text-white bg-orange-600 hover:bg-orange-700 focus:outline-none transition-colors"
+                    >
+                      <StopIcon className="h-4 w-4 mr-1" aria-hidden="true" />
+                      Terminate
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleDelete(selectedExe.metadata.name)}
+                    disabled={isDeleting}
+                    className="inline-flex items-center px-2.5 py-1.5 border border-red-300 shadow-sm text-xs font-medium rounded text-red-700 bg-white hover:bg-red-50 focus:outline-none transition-colors"
+                  >
+                    <TrashIcon className="h-4 w-4 mr-1" aria-hidden="true" />
+                    Delete
+                  </button>
+                </div>
               </div>
             </div>
           </div>

@@ -955,6 +955,46 @@ apiRouter.delete("/executions/:name", async (req, res, next) => {
 });
 
 /**
+ * POST /api/executions/:name/terminate
+ * Terminate a specific Argo Workflow via Kubernetes API by patching its spec.
+ */
+apiRouter.post("/executions/:name/terminate", async (req, res, next) => {
+  try {
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+    const { name } = req.params;
+    
+    console.log(`Terminating workflow from K8s API (namespace: ${namespace}, name: ${name})`);
+    
+    // To terminate an Argo workflow, we patch the spec to include `shutdown: Terminate`
+    const patch = [{
+      op: "replace",
+      path: "/spec/shutdown",
+      value: "Terminate"
+    }];
+
+    const options = { headers: { 'Content-Type': 'application/json-patch+json' } };
+    
+    const response = await customObjectsApi.patchNamespacedCustomObject({
+      group: 'argoproj.io',
+      version: 'v1alpha1',
+      namespace: namespace,
+      plural: 'workflows',
+      name: name,
+      body: patch
+    }, undefined, undefined, undefined, options);
+    
+    res.json({ message: `Workflow ${name} termination requested.` });
+  } catch (error) {
+    console.error(`Error terminating workflow ${req.params.name} from K8s API:`, error.message);
+    if (error.body) {
+      console.error(`K8s API Error Body:`, error.body);
+      return res.status(error.statusCode || 500).json(error.body);
+    }
+    next(error);
+  }
+});
+
+/**
  * POST /api/executions
  * Submit a new Argo Workflow directly via Kubernetes API
  */

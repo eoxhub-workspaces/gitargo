@@ -235,14 +235,14 @@ const ListView: React.FC = () => {
     viewTab === "active" ? activeWorkflows : deletedWorkflows;
 
   return (
-    <div className="flex flex-col flex-1 min-h-screen bg-gray-50">
+    <div className="flex flex-col h-[calc(100vh-4rem)] bg-gray-50 overflow-hidden">
       {newModalMode && (
         <NewWorkflowModal
           onClose={() => setNewModalMode(null)}
           onSubmit={handleCreateNew}
         />
       )}
-      <header className="bg-white border-b border-gray-200 px-8 py-4 flex justify-between items-center sticky top-0 z-10 shadow-sm">
+      <header className="bg-white border-b border-gray-200 px-8 py-4 flex justify-between items-center flex-shrink-0 z-10 shadow-sm">
         <div>
           <h1 className="text-2xl font-bold text-[#004170]">Workflows</h1>
           <p className="text-sm text-gray-500">Manage your Argo Workflows</p>
@@ -273,8 +273,8 @@ const ListView: React.FC = () => {
         </div>
       </header>
 
-      <main className="p-8 max-w-7xl mx-auto w-full">
-        <div className="mb-6 border-b border-gray-200">
+      <div className="flex flex-col flex-1 overflow-hidden p-8 max-w-7xl mx-auto w-full">
+        <div className="mb-6 border-b border-gray-200 flex-shrink-0">
           <nav className="-mb-px flex space-x-8" aria-label="Tabs">
             <button
               onClick={() => setViewTab("active")}
@@ -300,11 +300,11 @@ const ListView: React.FC = () => {
         </div>
 
         {loading ? (
-          <div className="flex justify-center items-center h-64">
+          <div className="flex justify-center items-center h-64 flex-shrink-0">
             <Spinner className="text-[#004170]" />
           </div>
         ) : error ? (
-          <div className="bg-red-50 border-l-4 border-red-400 p-4">
+          <div className="bg-red-50 border-l-4 border-red-400 p-4 flex-shrink-0">
             <div className="flex">
               <div className="flex-shrink-0">
                 <svg
@@ -325,7 +325,7 @@ const ListView: React.FC = () => {
             </div>
           </div>
         ) : displayedWorkflows.length === 0 ? (
-          <div className="text-center py-12 bg-white rounded-lg border-2 border-dashed border-gray-300">
+          <div className="text-center py-12 bg-white rounded-lg border-2 border-dashed border-gray-300 flex-shrink-0">
             <DocumentIcon className="mx-auto h-12 w-12 text-gray-400" />
             <h3 className="mt-2 text-sm font-medium text-gray-900">
               No {viewTab} workflows found
@@ -358,252 +358,255 @@ const ListView: React.FC = () => {
             )}
           </div>
         ) : (
-          <div className="bg-white shadow overflow-visible rounded-md border border-gray-200">
-            <ul className="divide-y divide-gray-200">
-              {displayedWorkflows.map((workflow) => (
-                <li
-                  key={workflow.path}
-                  className="first:rounded-t-md last:rounded-b-md"
-                >
-                  <div
-                    onClick={() => {
-                      if (viewTab === "active") {
-                        navigate(
-                          `/edit/code/${encodeURIComponent(workflow.path)}`
-                        );
-                      }
-                    }}
-                    className={`px-6 py-4 flex items-center justify-between hover:bg-[#f8fbfc] transition-colors ${viewTab === "deleted" ? "opacity-70" : "cursor-pointer"}`}
+          <div className="flex-1 overflow-y-auto pb-32">
+            <div className="bg-white shadow rounded-md border border-gray-200 mb-8">
+              <ul className="divide-y divide-gray-200">
+                {displayedWorkflows.map((workflow) => (
+                  <li
+                    key={workflow.path}
+                    className="first:rounded-t-md last:rounded-b-md"
                   >
-                    <div className="flex items-center min-w-0 flex-1">
-                      <div className="flex-shrink-0">
-                        <DocumentIcon className="h-8 w-8 text-[#004170]" />
-                      </div>
-                      <div className="ml-4 flex-1">
-                        <div className="flex items-center space-x-2">
-                          <p
-                            className={`text-sm font-medium truncate ${viewTab === "deleted" ? "text-gray-500 line-through" : "text-[#004170]"}`}
-                          >
-                            {workflow.name.replace(/\.deleted$/, "")}
-                          </p>
-                          {metadata[workflow.path]?.isParsing && (
-                            <Spinner className="w-3 h-3 text-gray-400" />
-                          )}
-                          {!metadata[workflow.path]?.isParsing &&
-                            metadata[workflow.path]?.kind && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800 border border-blue-200">
-                                {metadata[workflow.path].kind}
-                              </span>
-                            )}
-                          {!metadata[workflow.path]?.isParsing &&
-                            metadata[workflow.path]?.schedule && (
-                              <span
-                                className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800 border border-green-200"
-                                title="Cron Schedule"
-                              >
-                                <ClockIcon className="w-3 h-3 mr-1" />
-                                {metadata[workflow.path].schedule}
-                              </span>
-                            )}
-                        </div>
-                        <p className="text-xs text-gray-500 truncate mt-1">
-                          {workflow.path.replace(/\.deleted$/, "")}
-                          {!metadata[workflow.path]?.isParsing &&
-                            metadata[workflow.path]?.entrypoint && (
-                              <>
-                                <span className="mx-2 text-gray-300">|</span>
-                                <span title="Entrypoint">
-                                  Entrypoint:{" "}
-                                  <span className="font-mono text-[10px] bg-gray-100 px-1 py-0.5 rounded border border-gray-200">
-                                    {metadata[workflow.path].entrypoint}
-                                  </span>
-                                </span>
-                              </>
-                            )}
-                        </p>
-                      </div>
-                    </div>
                     <div
-                      className="ml-4 flex-shrink-0 flex items-center space-x-2"
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={() => {
+                        if (viewTab === "active") {
+                          navigate(
+                            `/edit/code/${encodeURIComponent(workflow.path)}`
+                          );
+                        }
+                      }}
+                      className={`px-6 py-4 flex items-center justify-between hover:bg-[#f8fbfc] transition-colors ${viewTab === "deleted" ? "opacity-70" : "cursor-pointer"}`}
                     >
-                      {viewTab === "active" ? (
-                        <>
-                          <button
-                            onClick={() => handleExecute(workflow.path)}
-                            className="inline-flex items-center px-3 py-1.5 border border-blue-300 shadow-sm text-xs font-medium rounded text-blue-700 bg-white hover:bg-blue-50 transition-colors"
-                            title="Execute Workflow"
-                          >
-                            <PlayIcon className="h-4 w-4 mr-1.5" />
-                            Execute
-                          </button>
-
-                          <div className="relative action-dropdown-container">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenDropdownId(
-                                  openDropdownId === workflow.path
-                                    ? null
-                                    : workflow.path
-                                );
-                              }}
-                              className="p-1.5 border border-gray-300 shadow-sm rounded text-gray-600 bg-white hover:bg-gray-50 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#004170]"
-                              title="More Actions"
+                      <div className="flex items-center min-w-0 flex-1">
+                        <div className="flex-shrink-0">
+                          <DocumentIcon className="h-8 w-8 text-[#004170]" />
+                        </div>
+                        <div className="ml-4 flex-1">
+                          <div className="flex items-center space-x-2">
+                            <p
+                              className={`text-sm font-medium truncate ${viewTab === "deleted" ? "text-gray-500 line-through" : "text-[#004170]"}`}
                             >
-                              <EllipsisVerticalIcon className="h-4 w-4" />
+                              {workflow.name.replace(/\.deleted$/, "")}
+                            </p>
+                            {metadata[workflow.path]?.isParsing && (
+                              <Spinner className="w-3 h-3 text-gray-400" />
+                            )}
+                            {!metadata[workflow.path]?.isParsing &&
+                              metadata[workflow.path]?.kind && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800 border border-blue-200">
+                                  {metadata[workflow.path].kind}
+                                </span>
+                              )}
+                            {!metadata[workflow.path]?.isParsing &&
+                              metadata[workflow.path]?.schedule && (
+                                <span
+                                  className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800 border border-green-200"
+                                  title="Cron Schedule"
+                                >
+                                  <ClockIcon className="w-3 h-3 mr-1" />
+                                  {metadata[workflow.path].schedule}
+                                </span>
+                              )}
+                          </div>
+                          <p className="text-xs text-gray-500 truncate mt-1">
+                            {workflow.path.replace(/\.deleted$/, "")}
+                            {!metadata[workflow.path]?.isParsing &&
+                              metadata[workflow.path]?.entrypoint && (
+                                <>
+                                  <span className="mx-2 text-gray-300">|</span>
+                                  <span title="Entrypoint">
+                                    Entrypoint:{" "}
+                                    <span className="font-mono text-[10px] bg-gray-100 px-1 py-0.5 rounded border border-gray-200">
+                                      {metadata[workflow.path].entrypoint}
+                                    </span>
+                                  </span>
+                                </>
+                              )}
+                          </p>
+                        </div>
+                      </div>
+                      <div
+                        className="ml-4 flex-shrink-0 flex items-center space-x-2"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {viewTab === "active" ? (
+                          <>
+                            <button
+                              onClick={() => handleExecute(workflow.path)}
+                              className="inline-flex items-center px-3 py-1.5 border border-blue-300 shadow-sm text-xs font-medium rounded text-blue-700 bg-white hover:bg-blue-50 transition-colors"
+                              title="Execute Workflow"
+                            >
+                              <PlayIcon className="h-4 w-4 mr-1.5" />
+                              Execute
                             </button>
 
-                            {openDropdownId === workflow.path && (
-                              <div className="origin-top-right absolute right-0 mt-2 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-50">
-                                <div
-                                  className="py-1"
-                                  role="menu"
-                                  aria-orientation="vertical"
-                                >
-                                  <Link
-                                    to={`/executions?workflow=${workflow.path
-                                      .split("/")
-                                      .pop()
-                                      ?.replace(/\.ya?ml$/i, "")}`}
-                                    className="group flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900"
-                                    role="menuitem"
-                                    onClick={() => setOpenDropdownId(null)}
-                                  >
-                                    <ClockIcon className="mr-3 h-5 w-5 text-gray-400 group-hover:text-gray-500" />
-                                    Runs
-                                  </Link>
+                            <div className="relative action-dropdown-container">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenDropdownId(
+                                    openDropdownId === workflow.path
+                                      ? null
+                                      : workflow.path
+                                  );
+                                }}
+                                className="p-1.5 border border-gray-300 shadow-sm rounded text-gray-600 bg-white hover:bg-gray-50 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#004170]"
+                                title="More Actions"
+                              >
+                                <EllipsisVerticalIcon className="h-4 w-4" />
+                              </button>
 
-                                  <Link
-                                    to={`/history/${encodeURIComponent(workflow.path)}`}
-                                    className="group flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900"
-                                    role="menuitem"
-                                    onClick={() => setOpenDropdownId(null)}
+                              {openDropdownId === workflow.path && (
+                                <div className="origin-top-right absolute right-0 mt-2 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-50">
+                                  <div
+                                    className="py-1"
+                                    role="menu"
+                                    aria-orientation="vertical"
                                   >
-                                    <ServerStackIcon className="mr-3 h-5 w-5 text-gray-400 group-hover:text-gray-500" />
-                                    History
-                                  </Link>
-
-                                  {config?.experimentalCanvas && (
                                     <Link
-                                      to={`/edit/canvas/${encodeURIComponent(workflow.path)}`}
+                                      to={`/executions?workflow=${workflow.path
+                                        .split("/")
+                                        .pop()
+                                        ?.replace(/\.ya?ml$/i, "")}`}
                                       className="group flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900"
                                       role="menuitem"
                                       onClick={() => setOpenDropdownId(null)}
                                     >
-                                      <Squares2X2Icon className="mr-3 h-5 w-5 text-gray-400 group-hover:text-[#0078b4]" />
-                                      Canvas Edit
+                                      <ClockIcon className="mr-3 h-5 w-5 text-gray-400 group-hover:text-gray-500" />
+                                      Runs
                                     </Link>
-                                  )}
 
-                                  {config?.allowPublishing &&
-                                    metadata[workflow.path]?.kind ===
-                                      "WorkflowTemplate" && (
-                                      <button
-                                        onClick={(e) => {
-                                          e.preventDefault();
-                                          e.stopPropagation();
-                                          const logicalName = workflow.path
-                                            .split("/")
-                                            .pop()
-                                            ?.replace(/\.ya?ml$/i, "");
-                                          if (
-                                            publishedWorkflows.includes(
-                                              logicalName || ""
-                                            )
-                                          ) {
-                                            handleUnpublish(workflow.path);
-                                          } else {
-                                            const meta =
-                                              metadata[workflow.path];
-                                            if (!meta?.hasExecute) {
-                                              toast.error(
-                                                "Templates must have an 'execute' entrypoint to be published."
-                                              );
-                                              return;
+                                    <Link
+                                      to={`/history/${encodeURIComponent(workflow.path)}`}
+                                      className="group flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+                                      role="menuitem"
+                                      onClick={() => setOpenDropdownId(null)}
+                                    >
+                                      <ServerStackIcon className="mr-3 h-5 w-5 text-gray-400 group-hover:text-gray-500" />
+                                      History
+                                    </Link>
+
+                                    {config?.experimentalCanvas && (
+                                      <Link
+                                        to={`/edit/canvas/${encodeURIComponent(workflow.path)}`}
+                                        className="group flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+                                        role="menuitem"
+                                        onClick={() => setOpenDropdownId(null)}
+                                      >
+                                        <Squares2X2Icon className="mr-3 h-5 w-5 text-gray-400 group-hover:text-[#0078b4]" />
+                                        Canvas Edit
+                                      </Link>
+                                    )}
+
+                                    {config?.allowPublishing &&
+                                      metadata[workflow.path]?.kind ===
+                                        "WorkflowTemplate" && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            const logicalName = workflow.path
+                                              .split("/")
+                                              .pop()
+                                              ?.replace(/\.ya?ml$/i, "");
+                                            if (
+                                              publishedWorkflows.includes(
+                                                logicalName || ""
+                                              )
+                                            ) {
+                                              handleUnpublish(workflow.path);
+                                            } else {
+                                              const meta =
+                                                metadata[workflow.path];
+                                              if (!meta?.hasExecute) {
+                                                toast.error(
+                                                  "Templates must have an 'execute' entrypoint to be published."
+                                                );
+                                                return;
+                                              }
+                                              handlePublish(workflow.path);
                                             }
-                                            handlePublish(workflow.path);
+                                            setOpenDropdownId(null);
+                                          }}
+                                          disabled={
+                                            publishing[workflow.path] ||
+                                            (!metadata[workflow.path]
+                                              ?.hasExecute &&
+                                              !publishedWorkflows.includes(
+                                                workflow.path
+                                                  .split("/")
+                                                  .pop()
+                                                  ?.replace(/\.ya?ml$/i, "") ||
+                                                  ""
+                                              ))
                                           }
-                                          setOpenDropdownId(null);
-                                        }}
-                                        disabled={
-                                          publishing[workflow.path] ||
-                                          (!metadata[workflow.path]
-                                            ?.hasExecute &&
+                                          className={`w-full group flex items-center px-4 py-2 text-sm ${
+                                            !metadata[workflow.path]
+                                              ?.hasExecute &&
                                             !publishedWorkflows.includes(
                                               workflow.path
                                                 .split("/")
                                                 .pop()
                                                 ?.replace(/\.ya?ml$/i, "") || ""
-                                            ))
-                                        }
-                                        className={`w-full group flex items-center px-4 py-2 text-sm ${
-                                          !metadata[workflow.path]
-                                            ?.hasExecute &&
-                                          !publishedWorkflows.includes(
-                                            workflow.path
-                                              .split("/")
-                                              .pop()
-                                              ?.replace(/\.ya?ml$/i, "") || ""
-                                          )
-                                            ? "text-gray-400 cursor-not-allowed"
-                                            : "text-gray-700 hover:bg-gray-100 hover:text-gray-900"
-                                        }`}
-                                        role="menuitem"
-                                      >
-                                        {publishing[workflow.path] ? (
-                                          <ArrowPathIcon className="mr-3 h-5 w-5 animate-spin text-gray-400" />
-                                        ) : publishedWorkflows.includes(
-                                            workflow.path
-                                              .split("/")
-                                              .pop()
-                                              ?.replace(/\.ya?ml$/i, "") || ""
-                                          ) ? (
-                                          <>
-                                            <CloudArrowDownIcon className="mr-3 h-5 w-5 text-orange-400 group-hover:text-orange-500" />
-                                            Unpublish
-                                          </>
-                                        ) : (
-                                          <>
-                                            <CloudArrowUpIcon className="mr-3 h-5 w-5 text-green-400 group-hover:text-green-500" />
-                                            Publish
-                                          </>
-                                        )}
-                                      </button>
-                                    )}
+                                            )
+                                              ? "text-gray-400 cursor-not-allowed"
+                                              : "text-gray-700 hover:bg-gray-100 hover:text-gray-900"
+                                          }`}
+                                          role="menuitem"
+                                        >
+                                          {publishing[workflow.path] ? (
+                                            <ArrowPathIcon className="mr-3 h-5 w-5 animate-spin text-gray-400" />
+                                          ) : publishedWorkflows.includes(
+                                              workflow.path
+                                                .split("/")
+                                                .pop()
+                                                ?.replace(/\.ya?ml$/i, "") || ""
+                                            ) ? (
+                                            <>
+                                              <CloudArrowDownIcon className="mr-3 h-5 w-5 text-orange-400 group-hover:text-orange-500" />
+                                              Unpublish
+                                            </>
+                                          ) : (
+                                            <>
+                                              <CloudArrowUpIcon className="mr-3 h-5 w-5 text-green-400 group-hover:text-green-500" />
+                                              Publish
+                                            </>
+                                          )}
+                                        </button>
+                                      )}
+                                  </div>
                                 </div>
-                              </div>
-                            )}
-                          </div>
+                              )}
+                            </div>
 
-                          <button
-                            onClick={() => handleDelete(workflow.path)}
-                            className="inline-flex items-center px-3 py-1.5 border border-red-300 shadow-sm text-xs font-medium rounded text-red-700 bg-white hover:bg-red-50 transition-colors"
-                            title="Delete"
-                          >
-                            <TrashIcon className="h-4 w-4" />
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => handleRestore(workflow.path)}
-                            className="inline-flex items-center px-3 py-1.5 border border-green-300 shadow-sm text-xs font-medium rounded text-green-700 bg-white hover:bg-green-50 transition-colors"
-                            title="Restore"
-                          >
-                            <ArrowUturnLeftIcon className="-ml-0.5 mr-1 h-4 w-4" />
-                            Restore
-                          </button>
-                        </>
-                      )}
+                            <button
+                              onClick={() => handleDelete(workflow.path)}
+                              className="inline-flex items-center px-3 py-1.5 border border-red-300 shadow-sm text-xs font-medium rounded text-red-700 bg-white hover:bg-red-50 transition-colors"
+                              title="Delete"
+                            >
+                              <TrashIcon className="h-4 w-4" />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => handleRestore(workflow.path)}
+                              className="inline-flex items-center px-3 py-1.5 border border-green-300 shadow-sm text-xs font-medium rounded text-green-700 bg-white hover:bg-green-50 transition-colors"
+                              title="Restore"
+                            >
+                              <ArrowUturnLeftIcon className="-ml-0.5 mr-1 h-4 w-4" />
+                              Restore
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         )}
-      </main>
+      </div>
     </div>
   );
 };

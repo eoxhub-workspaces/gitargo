@@ -124,6 +124,10 @@ export const deleteExecution = async (name: string): Promise<void> => {
   await api.delete(`/executions/${name}`);
 };
 
+export const terminateExecution = async (name: string): Promise<void> => {
+  await api.post(`/executions/${name}/terminate`);
+};
+
 export const submitExecution = async (
   workflow: any
 ): Promise<WorkflowExecution> => {

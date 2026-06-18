@@ -54,13 +54,18 @@ export default function CodeProject() {
         .pop()
         ?.replace(/\.ya?ml$/i, "");
 
-      const filtered = data.filter(
-        (exe) =>
-          (exe.metadata.labels &&
-            exe.metadata.labels["workflows.argoproj.io/workflow-template"] ===
-              logicalName) ||
+      const filtered = data.filter((exe) => {
+        const tplLabel =
+          exe.metadata.labels?.["workflows.argoproj.io/workflow-template"];
+        const cronLabel =
+          exe.metadata.labels?.["workflows.argoproj.io/cron-workflow"];
+
+        return (
+          tplLabel === logicalName ||
+          cronLabel === logicalName ||
           exe.metadata.name.startsWith(`${logicalName}-`)
-      );
+        );
+      });
 
       // Sort newest first
       filtered.sort(
@@ -102,28 +107,35 @@ export default function CodeProject() {
           const content = await api.getWorkflow(decodeURIComponent(filename));
           setYamlContent(content);
         } else if (initialName) {
+          const logicalInitialName = initialName.replace(/\.ya?ml$/i, "");
           let baseYaml = `apiVersion: argoproj.io/v1alpha1
 kind: ${initialKind}
 metadata:
-  name: ${initialName}
+  name: ${logicalInitialName}
 spec:
   entrypoint: main
   templates:
     - name: main
-      steps: []
+      container:
+        image: alpine:latest
+        command: [sh, -c]
+        args: ["echo Hello World"]
 `;
           if (initialKind === "CronWorkflow") {
             baseYaml = `apiVersion: argoproj.io/v1alpha1
 kind: CronWorkflow
 metadata:
-  name: ${initialName}
+  name: ${logicalInitialName}
 spec:
   schedule: "0 0 * * *"
   workflowSpec:
     entrypoint: main
     templates:
       - name: main
-        steps: []
+        container:
+          image: alpine:latest
+          command: [sh, -c]
+          args: ["echo Hello World"]
 `;
           }
 
@@ -223,7 +235,27 @@ spec:
 
       if (runAfterSave) {
         try {
-          const parsed = YAML.parse(contentToSave);
+          let parsed = YAML.parse(contentToSave);
+
+          // If it's a CronWorkflow, we must extract the workflowSpec to run it immediately
+          if (parsed.kind === "CronWorkflow") {
+            parsed = {
+              apiVersion: parsed.apiVersion || "argoproj.io/v1alpha1",
+              kind: "Workflow",
+              metadata: {
+                generateName: (parsed.metadata.name || "cron") + "-",
+                namespace: parsed.metadata.namespace,
+                labels: {
+                  ...parsed.metadata.labels,
+                  "workflows.argoproj.io/cron-workflow": parsed.metadata.name,
+                  "workflows.argoproj.io/workflow-template":
+                    parsed.metadata.name // Add this so it shows up in normal workflow lists too
+                }
+              },
+              spec: parsed.spec?.workflowSpec || {}
+            };
+          }
+
           await api.submitExecution(parsed);
           toast.success("Workflow executed successfully!");
           if (activePanel !== "runs") setActivePanel("runs");
