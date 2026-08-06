@@ -283,7 +283,7 @@ const ListView: React.FC = () => {
       <header className="bg-white border-b border-gray-200 px-8 py-4 flex justify-between items-center flex-shrink-0 z-10 shadow-sm">
         <div>
           <h1 className="text-2xl font-bold text-[#004170]">Workflows</h1>
-          <p className="text-sm text-gray-500">Manage your Argo Workflows</p>
+          <p className="text-sm text-gray-500">Lalala your Argo Workflows</p>
         </div>
         <div className="flex space-x-2">
           <button

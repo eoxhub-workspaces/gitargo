@@ -417,6 +417,10 @@ export default function CodeProject() {
             if (selectedProfileData.nodeSelector) {
               spec.nodeSelector = selectedProfileData.nodeSelector;
             }
+            // Affinity
+            if (selectedProfileData.affinity) {
+              spec.affinity = selectedProfileData.affinity;
+            }
           }
 
           // 3. Create main template
