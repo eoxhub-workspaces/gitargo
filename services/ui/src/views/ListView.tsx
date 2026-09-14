@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import YAML from "yaml";
+import { formatK8sError } from "../utils";
 import {
   getWorkflows,
   getWorkflow,
@@ -93,7 +94,12 @@ const ListView: React.FC = () => {
       setExecutingWorkflow(null);
       navigate("/executions");
     } catch (err: any) {
-      toast.error(`Failed to submit: ${err.message}`, { id: executeToast });
+      const serverMsg =
+        err.response?.data?.message || err.message || "Unknown error";
+      toast.error(`Failed to submit: ${formatK8sError(serverMsg)}`, {
+        id: executeToast,
+        duration: 8000
+      });
     }
   };
 
@@ -190,7 +196,11 @@ const ListView: React.FC = () => {
         }
       });
     } catch (err: any) {
-      setError(err.message || "Failed to fetch workflows");
+      const serverMessage =
+        err.response?.data?.message ||
+        err.message ||
+        "Failed to fetch workflows";
+      setError(serverMessage);
     } finally {
       setLoading(false);
     }
@@ -283,7 +293,7 @@ const ListView: React.FC = () => {
       <header className="bg-white border-b border-gray-200 px-8 py-4 flex justify-between items-center flex-shrink-0 z-10 shadow-sm">
         <div>
           <h1 className="text-2xl font-bold text-[#004170]">Workflows</h1>
-          <p className="text-sm text-gray-500">Manage your Argo Workflows</p>
+          <p className="text-sm text-gray-500">Lalala your Argo Workflows</p>
         </div>
         <div className="flex space-x-2">
           <button

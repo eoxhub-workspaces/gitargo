@@ -813,7 +813,7 @@ function injectDefaults(content, virtualPath) {
     const spec = isCron ? parsed.spec.workflowSpec : parsed.spec;
 
     if (spec) {
-      if (ARGO_SERVICE_ACCOUNT && !spec.serviceAccountName) {
+      if (ARGO_SERVICE_ACCOUNT && !spec.serviceAccountName && !spec.serviceAccount) {
         spec.serviceAccountName = ARGO_SERVICE_ACCOUNT;
       }
 
@@ -903,6 +903,19 @@ try {
 
 const customObjectsApi = kc.makeApiClient(k8s.CustomObjectsApi);
 
+// Helper to safely parse and forward K8s API error bodies as real JSON objects (avoiding string double-encoding)
+const sendK8sError = (res, error) => {
+  let parsedBody = error.body;
+  if (typeof error.body === "string") {
+    try {
+      parsedBody = JSON.parse(error.body);
+    } catch (e) {
+      parsedBody = { message: error.body };
+    }
+  }
+  return res.status(error.statusCode || 500).json(parsedBody);
+};
+
 /**
  * GET /api/executions
  * List Argo Workflows directly via Kubernetes API using the official client
@@ -980,7 +993,7 @@ apiRouter.delete("/executions/:name", async (req, res, next) => {
     console.error(`Error deleting workflow ${req.params.name} from K8s API:`, error.message);
     if (error.body) {
       console.error(`K8s API Error Body:`, error.body);
-      return res.status(error.statusCode || 500).json(error.body);
+      return sendK8sError(res, error);
     }
     next(error);
   }
@@ -1020,7 +1033,7 @@ apiRouter.post("/executions/:name/terminate", async (req, res, next) => {
     console.error(`Error terminating workflow ${req.params.name} from K8s API:`, error.message);
     if (error.body) {
       console.error(`K8s API Error Body:`, error.body);
-      return res.status(error.statusCode || 500).json(error.body);
+      return sendK8sError(res, error);
     }
     next(error);
   }
@@ -1043,6 +1056,16 @@ apiRouter.post("/executions", async (req, res, next) => {
     workflow.metadata.namespace = namespace;
     workflow.kind = "Workflow";
     workflow.apiVersion = "argoproj.io/v1alpha1";
+
+    // Inject OIDC username label if present to resolve workflow variables like creator-preferred-username
+    if (req.user) {
+      const username = req.user.preferred_username || req.user.email || req.user.name || req.user.sub;
+      if (username) {
+        if (!workflow.metadata.labels) workflow.metadata.labels = {};
+        workflow.metadata.labels['workflows.argoproj.io/creator-preferred-username'] = username;
+        console.log(`[API EXECUTIONS] Injected workflows.argoproj.io/creator-preferred-username label: "${username}"`);
+      }
+    }
     
     delete workflow.metadata.resourceVersion;
     delete workflow.metadata.uid;
@@ -1074,7 +1097,7 @@ apiRouter.post("/executions", async (req, res, next) => {
     console.error("Error submitting workflow to K8s API:", error.message);
     if (error.body) {
       console.error(`K8s API Error Body:`, error.body);
-      return res.status(error.statusCode || 500).json(error.body);
+      return sendK8sError(res, error);
     }
     next(error);
   }
@@ -1200,34 +1223,59 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
 
     const ns = safeNamespace || NAMESPACE;
 
-    const startNs = toLokiTimestamp(start_time || new Date(Date.now() - 3600000 * 24).toISOString());
+    // Use 4 hours as a default temporal subset window instead of 24 hours for faster indexing
+    const startNs = toLokiTimestamp(start_time || new Date(Date.now() - 3600000 * 4).toISOString());
     const endNs = end_time ? toLokiTimestamp(end_time) : null;
 
     console.log(`[API LOGS] Computed Loki bounds: startNs="${startNs}" | endNs="${endNs || 'none'}"`);
+
+    let podName = safeId; // Default to the requested ID
+
+    // Resolve the actual pod name from K8s status if a workflow name is provided and we are querying a pod
+    if (type !== 'workflow' && workflow) {
+      try {
+        const wfResponse = await customObjectsApi.getNamespacedCustomObject({
+          group: 'argoproj.io',
+          version: 'v1alpha1',
+          namespace: ns,
+          plural: 'workflows',
+          name: workflow.toString()
+        });
+
+        const wfNode = wfResponse.status?.nodes?.[safeId] || wfResponse.body?.status?.nodes?.[safeId];
+        if (wfNode) {
+          const resolvedPodName = wfNode.podName || wfNode.id;
+          if (resolvedPodName) {
+            podName = resolvedPodName;
+          }
+        }
+      } catch (err) {
+        console.debug(`Failed to fetch workflow details from K8s for log podName resolution:`, err.message);
+      }
+    }
 
     let logql = "";
     if (type === 'workflow') {
       logql = `{${NAMESPACE_LABEL}="${ns}", ${ARGO_WORKFLOW_LABEL}="${safeId}"}`;
     } else {
       // For pods, some Loki setups use 'k8s_pod_name' instead of 'pod'.
-      // If we have the workflow name, we can also use that label combined with a regex search as a fallback.
-      logql = `{${NAMESPACE_LABEL}="${ns}", pod="${safeId}"}`;
+      logql = `{${NAMESPACE_LABEL}="${ns}", pod="${podName}"}`;
     }
 
     if (safeQuery) {
       logql += ` |= "${safeQuery}"`;
     }
-    const config = getLokiConfig(req, LOKI_URL);
     
-    // Helper function to fetch and parse logs
+    // Helper function to fetch and parse logs. Instantiates a fresh config object per-request to avoid race conditions.
     const fetchAndParse = async (queryStr) => {
-      config.params = { query: queryStr, limit: 1000, start: startNs };
-      if (endNs) config.params.end = endNs;
+      const queryConfig = getLokiConfig(req, LOKI_URL);
+      queryConfig.params = { query: queryStr, limit: 1000, start: startNs };
+      if (endNs) queryConfig.params.end = endNs;
       
       console.log(`Fetching logs from Loki: ${LOKI_URL}/loki/api/v1/query_range?query=${queryStr}`);
       let resp;
       try {
-        resp = await axios.get(`${LOKI_URL}/loki/api/v1/query_range`, config);
+        resp = await axios.get(`${LOKI_URL}/loki/api/v1/query_range`, queryConfig);
         if (resp.data) {
           const resultsCount = resp.data.data?.result?.length || 0;
           console.log(`[API LOGS] Loki response: status=${resp.status} | resultsCount=${resultsCount}`);
@@ -1258,13 +1306,23 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
 
             // 2. Filter out Argo internal logs.
             // Be careful: only filter if it looks like SYSTEM argo noise
+            const lineLower = line.toLowerCase();
             const isArgoSystemLog = 
-              (line.startsWith('time="') && line.includes('level=info') && 
-              (line.includes('msg="Alloc=') || line.includes('msg="starting progress monitor') || 
-               line.includes('msg="Starting deadline monitor') || line.includes('msg="Executor initialized') ||
-               line.includes('msg="Main container completed') || line.includes('msg="No output artifacts')));
+              lineLower.includes('level=info') && lineLower.includes('argo=true') && 
+              (lineLower.includes('msg="alloc=') || lineLower.includes('msg="starting progress monitor') || 
+               lineLower.includes('msg="starting deadline monitor') || lineLower.includes('msg="executor initialized') ||
+               lineLower.includes('msg="main container completed') || lineLower.includes('msg="no output artifacts') ||
+               lineLower.includes('msg="copying file') || lineLower.includes('msg="copying from container') ||
+               lineLower.includes('msg="staging artifact') || lineLower.includes('msg="saving output artifacts') ||
+               lineLower.includes('msg="no output parameters') || lineLower.includes('msg="no script output reference') ||
+               lineLower.includes('msg="deadline monitor stopped') || lineLower.includes('msg="no artifact sidecars to kill') ||
+               lineLower.includes('msg="successfully saved file') || lineLower.includes('msg="not deleting local artifact') ||
+               lineLower.includes('msg="save artifact') || lineLower.includes('msg="saving file to s3') ||
+               lineLower.includes('msg="creating minio client') || lineLower.includes('msg="s3 save') ||
+               lineLower.includes('msg="saving artifact') || lineLower.includes('msg="using executor retry strategy') ||
+               lineLower.includes('msg="part size not configured'));
 
-            if (isArgoSystemLog || line.includes('argo=true')) {
+            if (isArgoSystemLog) {
               console.debug(`[DEBUG] Filtering as Argo noise: ${line}`);
               filteredLines++;
               continue;
@@ -1299,43 +1357,78 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
 
     // Fallbacks for pod log fetching if the standard `pod` label isn't used by their Promtail
     if (logs.length === 0 && type !== 'workflow') {
-      console.log(`No logs found with pod label. Attempting fallback labels for pod ${safeId}...`);
-      logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", k8s_pod_name="${safeId}"}`);
-      if (logs.length === 0) {
-        logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", kubernetes_pod_name="${safeId}"}`);
-      }
+      console.log(`No logs found with pod label. Executing lean fallback queries in parallel...`);
       
-      // Global Fallbacks (without namespace label) in case namespace label is differently named (e.g. k8s_namespace)
-      if (logs.length === 0) {
-        console.log(`No logs found with namespace pod labels. Attempting global pod queries (without namespace)...`);
-        logs = await fetchAndParse(`{pod="${safeId}"}`);
-        if (logs.length === 0) {
-          logs = await fetchAndParse(`{k8s_pod_name="${safeId}"}`);
-        }
-        if (logs.length === 0) {
-          logs = await fetchAndParse(`{kubernetes_pod_name="${safeId}"}`);
+      const fallbackQueries = [
+        { key: 'ns_k8s_pod', query: `{${NAMESPACE_LABEL}="${ns}", k8s_pod_name="${podName}"}` },
+        { key: 'global_pod', query: `{pod="${podName}"}` },
+        { key: 'global_k8s_pod', query: `{k8s_pod_name="${podName}"}` }
+      ];
+
+      // Add original fallback with safeId if different from podName
+      if (podName !== safeId) {
+        fallbackQueries.push(
+          { key: 'ns_k8s_pod_id', query: `{${NAMESPACE_LABEL}="${ns}", k8s_pod_name="${safeId}"}` },
+          { key: 'global_pod_id', query: `{pod="${safeId}"}` },
+          { key: 'global_k8s_pod_id', query: `{k8s_pod_name="${safeId}"}` }
+        );
+      }
+
+      const fallbackPromises = fallbackQueries.map(async (q) => {
+        const resLogs = await fetchAndParse(q.query);
+        return { key: q.key, logs: resLogs };
+      });
+
+      const fallbackResults = await Promise.all(fallbackPromises);
+      
+      // Choose the first non-empty logs in order of priority (which matches the array order)
+      for (const q of fallbackQueries) {
+        const match = fallbackResults.find(r => r.key === q.key);
+        if (match && match.logs && match.logs.length > 0) {
+          logs = match.logs;
+          console.log(`[API LOGS] Fallback matched successfully via query key: ${q.key}`);
+          break;
         }
       }
-      
-      // If the node ID is something like `wf-12345` but the actual pod is `wf-task-12345`
+
+      // If still empty, execute regex searches as a final safety fallback
       if (logs.length === 0) {
         const idParts = safeId.split('-');
         const hash = idParts[idParts.length - 1]; // Assume the last part is the unique hash
         
-        console.log(`Attempting regex matching on POD LABEL for ID ending in ${hash}`);
-        // Instead of searching the text stream (|= "hash"), we use a regex label matcher (=~ ".*hash.*")
-        // This targets the pod label itself, returning ALL lines for that pod, regardless of content.
-        logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", pod=~".*${hash}.*"}`);
-        if (logs.length === 0) {
-            logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", k8s_pod_name=~".*${hash}.*"}`);
+        console.log(`[API LOGS] Attempting regex matching on POD LABEL for ID ending in ${hash} in parallel...`);
+        const regexQueries = [
+          { key: 'ns_regex_pod', query: `{${NAMESPACE_LABEL}="${ns}", pod=~".*${hash}.*"}` },
+          { key: 'ns_regex_k8s_pod', query: `{${NAMESPACE_LABEL}="${ns}", k8s_pod_name=~".*${hash}.*"}` },
+          { key: 'global_regex_pod', query: `{pod=~".*${hash}.*"}` },
+          { key: 'global_regex_k8s_pod', query: `{k8s_pod_name=~".*${hash}.*"}` }
+        ];
+
+        // Also add regex using podName hash if different
+        if (podName !== safeId) {
+          const podParts = podName.split('-');
+          const podHash = podParts[podParts.length - 1];
+          if (podHash !== hash) {
+            regexQueries.push(
+              { key: 'ns_regex_pod_name', query: `{${NAMESPACE_LABEL}="${ns}", pod=~".*${podHash}.*"}` },
+              { key: 'ns_regex_k8s_pod_name', query: `{${NAMESPACE_LABEL}="${ns}", k8s_pod_name=~".*${podHash}.*"}` }
+            );
+          }
         }
-        
-        // Global Regex Fallbacks
-        if (logs.length === 0) {
-          console.log(`No logs found with regex namespace pod labels. Attempting global regex pod queries (without namespace)...`);
-          logs = await fetchAndParse(`{pod=~".*${hash}.*"}`);
-          if (logs.length === 0) {
-            logs = await fetchAndParse(`{k8s_pod_name=~".*${hash}.*"}`);
+
+        const regexPromises = regexQueries.map(async (q) => {
+          const resLogs = await fetchAndParse(q.query);
+          return { key: q.key, logs: resLogs };
+        });
+
+        const regexResults = await Promise.all(regexPromises);
+
+        for (const q of regexQueries) {
+          const match = regexResults.find(r => r.key === q.key);
+          if (match && match.logs && match.logs.length > 0) {
+            logs = match.logs;
+            console.log(`[API LOGS] Regex fallback matched successfully via query key: ${q.key}`);
+            break;
           }
         }
       }
@@ -1344,6 +1437,7 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
     if (logs.length === 0) {
       console.log(`[API LOGS] No logs found across all labels and fallbacks for ID: "${id}"`);
       try {
+        const config = getLokiConfig(req, LOKI_URL);
         const labelsResp = await axios.get(`${LOKI_URL}/loki/api/v1/labels`, config);
         console.log(`[API LOGS] DIAGNOSTIC: All available Loki label keys in your cluster are:`, labelsResp.data.data || []);
       } catch (labelErr) {
@@ -1612,6 +1706,41 @@ app.use((err, req, res, next) => {
   }
 
   console.error(err.stack);
+
+  // Check if this error originated from the GitLab Axios client
+  const isGitLabError = err.config && (
+    err.config.headers?.['PRIVATE-TOKEN'] || 
+    (err.config.url && err.config.url.includes('/projects/')) ||
+    (err.config.baseURL && err.config.baseURL.includes('/api/v4'))
+  );
+
+  if (isGitLabError) {
+    let status = 502; // Use 502 Bad Gateway to signal backend integration failure
+    let customMessage = "An error occurred while communicating with GitLab.";
+
+    if (err.response) {
+      const gitlabStatus = err.response.status;
+      if (gitlabStatus === 401) {
+        customMessage = "GitLab Authentication Failed: The configured GITLAB_TOKEN is invalid, expired, or does not have access rights.";
+      } else if (gitlabStatus === 403) {
+        customMessage = "GitLab Access Forbidden: The configured GITLAB_TOKEN does not have permissions for the project/repository.";
+      } else if (gitlabStatus === 404) {
+        customMessage = `GitLab Resource Not Found: The configured GITLAB_PROJECT_ID ("${process.env.GITLAB_PROJECT_ID}") or branch ("${process.env.GITLAB_BRANCH}") could not be found.`;
+      } else {
+        customMessage = `GitLab Error (${gitlabStatus}): ${err.response.data?.message || err.response.data?.error || err.message}`;
+      }
+    } else if (err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED' || err.message.includes('getaddrinfo')) {
+      customMessage = `GitLab Unreachable: Failed to resolve or connect to GITLAB_URL ("${process.env.GITLAB_URL || 'https://gitlab.com'}"). Please check your network and configuration.`;
+    } else {
+      customMessage = `GitLab Connection Error: ${err.message}`;
+    }
+
+    return res.status(status).json({
+      message: customMessage,
+      originalStatus: err.response ? err.response.status : null
+    });
+  }
+
   const status = err.response ? err.response.status : 500;
   const message = err.response ? err.response.data : { message: err.message };
   res.status(status).json(message);

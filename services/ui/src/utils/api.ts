@@ -74,6 +74,7 @@ export interface AppConfig {
       resources: any;
       tolerations?: any[];
       nodeSelector?: Record<string, string>;
+      affinity?: any;
     }
   >;
   availableTolerations?: any[];

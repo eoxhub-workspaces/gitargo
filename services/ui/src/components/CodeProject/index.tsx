@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import toast from "react-hot-toast";
+import { formatK8sError } from "../../utils";
 import { validateK8sYaml } from "../../utils/k8sValidation";
 import {
   CloudArrowUpIcon,
@@ -26,6 +27,7 @@ const extractResourcesAndScheduling = (
 ): IResourcePlacementState => {
   if (!parsed) {
     return {
+      namespace: "",
       serviceAccount: "",
       cpuRequest: "",
       cpuLimit: "",
@@ -41,7 +43,8 @@ const extractResourcesAndScheduling = (
   const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
 
   const state: IResourcePlacementState = {
-    serviceAccount: spec?.serviceAccountName || "",
+    namespace: parsed.metadata?.namespace || "",
+    serviceAccount: spec?.serviceAccountName || spec?.serviceAccount || "",
     cpuRequest: "",
     cpuLimit: "",
     memoryRequest: "",
@@ -85,6 +88,15 @@ const injectResourcesAndScheduling = (
 ) => {
   if (!parsed) return parsed;
   const isCron = parsed.kind === "CronWorkflow";
+
+  // Inject Namespace
+  if (!parsed.metadata) parsed.metadata = {};
+  if (state.namespace) {
+    parsed.metadata.namespace = state.namespace;
+  } else {
+    delete parsed.metadata.namespace;
+  }
+
   if (!parsed.spec) parsed.spec = {};
 
   if (isCron && !parsed.spec.workflowSpec) {
@@ -92,11 +104,13 @@ const injectResourcesAndScheduling = (
   }
   const spec = isCron ? parsed.spec.workflowSpec : parsed.spec;
 
-  // 0. Inject ServiceAccountName
+  // 0. Inject ServiceAccountName and clean up deprecated serviceAccount
   if (state.serviceAccount) {
     spec.serviceAccountName = state.serviceAccount;
+    delete spec.serviceAccount;
   } else {
     delete spec.serviceAccountName;
+    delete spec.serviceAccount;
   }
 
   // 1. Inject global Tolerations
@@ -206,6 +220,7 @@ export default function CodeProject() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [schedulingState, setSchedulingState] =
     useState<IResourcePlacementState>({
+      namespace: "",
       serviceAccount: "",
       cpuRequest: "",
       cpuLimit: "",
@@ -232,10 +247,19 @@ export default function CodeProject() {
     if (!parsed) return false;
     const isCron = parsed.kind === "CronWorkflow";
     const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
+    const defaultNamespace = config?.defaults?.namespace || "default";
+
+    // 0. Namespace is missing or mismatched
+    const namespace = parsed.metadata?.namespace || "";
+    if (!namespace || namespace !== defaultNamespace) {
+      return true;
+    }
+
     const defaultServiceAccount = config?.defaults?.serviceAccount || "default";
 
     // 1. Service account is missing or mismatched
-    const serviceAccount = spec?.serviceAccountName || "";
+    const serviceAccount =
+      spec?.serviceAccountName || spec?.serviceAccount || "";
     if (!serviceAccount || serviceAccount !== defaultServiceAccount) {
       return true;
     }
@@ -417,6 +441,10 @@ export default function CodeProject() {
             if (selectedProfileData.nodeSelector) {
               spec.nodeSelector = selectedProfileData.nodeSelector;
             }
+            // Affinity
+            if (selectedProfileData.affinity) {
+              spec.affinity = selectedProfileData.affinity;
+            }
           }
 
           // 3. Create main template
@@ -466,8 +494,12 @@ export default function CodeProject() {
           setYamlContent(baseYaml);
           setOriginalYaml(baseYaml);
         }
-      } catch (err) {
-        toast.error("Failed to load workflow or configuration");
+      } catch (err: any) {
+        const msg =
+          err.response?.data?.message ||
+          err.message ||
+          "Failed to load workflow or configuration";
+        toast.error(msg, { duration: 6000 });
         console.error(err);
       } finally {
         setLoading(false);
@@ -580,8 +612,11 @@ export default function CodeProject() {
       if (activePanel !== "runs") setActivePanel("runs");
       setTimeout(fetchExecutions, 1000);
     } catch (error: any) {
-      toast.error(`Submission failed: ${error.message || "Unknown error"}`, {
-        id: submitToast
+      const serverMsg =
+        error.response?.data?.message || error.message || "Unknown error";
+      toast.error(`Submission failed: ${formatK8sError(serverMsg)}`, {
+        id: submitToast,
+        duration: 8000
       });
     }
   };
@@ -783,9 +818,18 @@ export default function CodeProject() {
                     <li
                       key={exe.metadata.name}
                       className="p-4 hover:bg-gray-100 transition-colors cursor-pointer"
-                      onClick={() =>
-                        navigate(`/executions?run=${exe.metadata.name}`)
-                      }
+                      onClick={() => {
+                        const targetFilename = filename || currentFilename;
+                        navigate(`/executions?run=${exe.metadata.name}`, {
+                          state: targetFilename
+                            ? {
+                                from: `/edit/${encodeURIComponent(
+                                  targetFilename
+                                )}`
+                              }
+                            : undefined
+                        });
+                      }}
                     >
                       <div className="flex justify-between items-start mb-1">
                         <span className="text-sm font-medium text-gray-900 truncate">
