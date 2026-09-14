@@ -138,6 +138,34 @@ npm run lint
 npm run lint:fix
 ```
 
+### Version Bumping
+
+To maintain consistency across the project, the version number is synchronized across three configuration files:
+1. Root `package.json`
+2. Backend `services/api/package.json`
+3. Frontend `services/ui/package.json`
+
+The most robust way to bump the version and generate standard Git release tags is:
+
+#### Standard Automated Bump:
+You can use standard npm version commands at the root of the project to bump all three files and tag your git repository in a single action:
+```bash
+# Bumps patch version (e.g. 0.3.0 -> 0.3.1) and creates a git tag
+npm version patch
+
+# Bumps minor version (e.g. 0.3.0 -> 0.4.0) and creates a git tag
+npm version minor
+```
+
+#### Manual Sync (Alternative):
+If you need to manually change the version, update the `"version"` field in all three `package.json` files to match exactly, then run the installs to synchronize the lockfiles:
+```bash
+# Sync root and subdirectory lockfiles
+npm install --no-audit
+cd services/api && npm install --no-audit
+cd ../ui && npm install --no-audit
+```
+
 ## Container Security (DevSecOps)
 
 This project strictly adheres to secure, enterprise-grade container standards:
@@ -158,5 +186,16 @@ The GitHub Actions workflow (`build-and-push.yaml`) automatically inspects the p
   * **Result**: Keeps `npm`, `npx`, and development tools fully active and pre-loaded. Perfect for rapid developer loops and hot-reload tasks.
 * **Production Tags (standard tags, e.g. `v0.2.1`)**: Builds targeting the hardened `production` stage in the `Dockerfile`.
   * **Result**: Permanently purges `npm` and `npx` directories, runs as unprivileged user `gitargo`, and passes Trivy audits with **0 vulnerabilities**.
+
+### Clean Container Rebuilds (Patching CVEs)
+
+If security scanners (like `Trivy`) report high or critical vulnerabilities in Alpine system libraries (such as OpenSSL `libcrypto3` or `libssl3` packages), you can resolve them instantly without modifying any source code.
+
+Because the `Dockerfile` is built with dynamic security upgrades (`RUN apk update && apk upgrade --no-cache`), simply run a **cache-free container rebuild** to pull down the latest patched OS library packages:
+
+```bash
+# Build the image from scratch, downloading the newest Alpine security updates
+docker build --no-cache -t gitargo:local .
+```
 
 ## License
