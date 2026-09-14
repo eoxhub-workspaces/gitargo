@@ -190,7 +190,11 @@ const ListView: React.FC = () => {
         }
       });
     } catch (err: any) {
-      setError(err.message || "Failed to fetch workflows");
+      const serverMessage =
+        err.response?.data?.message ||
+        err.message ||
+        "Failed to fetch workflows";
+      setError(serverMessage);
     } finally {
       setLoading(false);
     }

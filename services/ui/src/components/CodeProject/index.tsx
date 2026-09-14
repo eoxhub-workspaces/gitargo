@@ -26,6 +26,7 @@ const extractResourcesAndScheduling = (
 ): IResourcePlacementState => {
   if (!parsed) {
     return {
+      namespace: "",
       serviceAccount: "",
       cpuRequest: "",
       cpuLimit: "",
@@ -41,6 +42,7 @@ const extractResourcesAndScheduling = (
   const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
 
   const state: IResourcePlacementState = {
+    namespace: parsed.metadata?.namespace || "",
     serviceAccount: spec?.serviceAccountName || spec?.serviceAccount || "",
     cpuRequest: "",
     cpuLimit: "",
@@ -85,6 +87,15 @@ const injectResourcesAndScheduling = (
 ) => {
   if (!parsed) return parsed;
   const isCron = parsed.kind === "CronWorkflow";
+
+  // Inject Namespace
+  if (!parsed.metadata) parsed.metadata = {};
+  if (state.namespace) {
+    parsed.metadata.namespace = state.namespace;
+  } else {
+    delete parsed.metadata.namespace;
+  }
+
   if (!parsed.spec) parsed.spec = {};
 
   if (isCron && !parsed.spec.workflowSpec) {
@@ -208,6 +219,7 @@ export default function CodeProject() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [schedulingState, setSchedulingState] =
     useState<IResourcePlacementState>({
+      namespace: "",
       serviceAccount: "",
       cpuRequest: "",
       cpuLimit: "",
@@ -234,6 +246,14 @@ export default function CodeProject() {
     if (!parsed) return false;
     const isCron = parsed.kind === "CronWorkflow";
     const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
+    const defaultNamespace = config?.defaults?.namespace || "default";
+
+    // 0. Namespace is missing or mismatched
+    const namespace = parsed.metadata?.namespace || "";
+    if (!namespace || namespace !== defaultNamespace) {
+      return true;
+    }
+
     const defaultServiceAccount = config?.defaults?.serviceAccount || "default";
 
     // 1. Service account is missing or mismatched
@@ -473,8 +493,12 @@ export default function CodeProject() {
           setYamlContent(baseYaml);
           setOriginalYaml(baseYaml);
         }
-      } catch (err) {
-        toast.error("Failed to load workflow or configuration");
+      } catch (err: any) {
+        const msg =
+          err.response?.data?.message ||
+          err.message ||
+          "Failed to load workflow or configuration";
+        toast.error(msg, { duration: 6000 });
         console.error(err);
       } finally {
         setLoading(false);

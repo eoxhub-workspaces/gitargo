@@ -1628,6 +1628,41 @@ app.use((err, req, res, next) => {
   }
 
   console.error(err.stack);
+
+  // Check if this error originated from the GitLab Axios client
+  const isGitLabError = err.config && (
+    err.config.headers?.['PRIVATE-TOKEN'] || 
+    (err.config.url && err.config.url.includes('/projects/')) ||
+    (err.config.baseURL && err.config.baseURL.includes('/api/v4'))
+  );
+
+  if (isGitLabError) {
+    let status = 502; // Use 502 Bad Gateway to signal backend integration failure
+    let customMessage = "An error occurred while communicating with GitLab.";
+
+    if (err.response) {
+      const gitlabStatus = err.response.status;
+      if (gitlabStatus === 401) {
+        customMessage = "GitLab Authentication Failed: The configured GITLAB_TOKEN is invalid, expired, or does not have access rights.";
+      } else if (gitlabStatus === 403) {
+        customMessage = "GitLab Access Forbidden: The configured GITLAB_TOKEN does not have permissions for the project/repository.";
+      } else if (gitlabStatus === 404) {
+        customMessage = `GitLab Resource Not Found: The configured GITLAB_PROJECT_ID ("${process.env.GITLAB_PROJECT_ID}") or branch ("${process.env.GITLAB_BRANCH}") could not be found.`;
+      } else {
+        customMessage = `GitLab Error (${gitlabStatus}): ${err.response.data?.message || err.response.data?.error || err.message}`;
+      }
+    } else if (err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED' || err.message.includes('getaddrinfo')) {
+      customMessage = `GitLab Unreachable: Failed to resolve or connect to GITLAB_URL ("${process.env.GITLAB_URL || 'https://gitlab.com'}"). Please check your network and configuration.`;
+    } else {
+      customMessage = `GitLab Connection Error: ${err.message}`;
+    }
+
+    return res.status(status).json({
+      message: customMessage,
+      originalStatus: err.response ? err.response.status : null
+    });
+  }
+
   const status = err.response ? err.response.status : 500;
   const message = err.response ? err.response.data : { message: err.message };
   res.status(status).json(message);
