@@ -41,7 +41,7 @@ const extractResourcesAndScheduling = (
   const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
 
   const state: IResourcePlacementState = {
-    serviceAccount: spec?.serviceAccountName || "",
+    serviceAccount: spec?.serviceAccountName || spec?.serviceAccount || "",
     cpuRequest: "",
     cpuLimit: "",
     memoryRequest: "",
@@ -92,11 +92,13 @@ const injectResourcesAndScheduling = (
   }
   const spec = isCron ? parsed.spec.workflowSpec : parsed.spec;
 
-  // 0. Inject ServiceAccountName
+  // 0. Inject ServiceAccountName and clean up deprecated serviceAccount
   if (state.serviceAccount) {
     spec.serviceAccountName = state.serviceAccount;
+    delete spec.serviceAccount;
   } else {
     delete spec.serviceAccountName;
+    delete spec.serviceAccount;
   }
 
   // 1. Inject global Tolerations
@@ -235,7 +237,8 @@ export default function CodeProject() {
     const defaultServiceAccount = config?.defaults?.serviceAccount || "default";
 
     // 1. Service account is missing or mismatched
-    const serviceAccount = spec?.serviceAccountName || "";
+    const serviceAccount =
+      spec?.serviceAccountName || spec?.serviceAccount || "";
     if (!serviceAccount || serviceAccount !== defaultServiceAccount) {
       return true;
     }

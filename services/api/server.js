@@ -813,7 +813,7 @@ function injectDefaults(content, virtualPath) {
     const spec = isCron ? parsed.spec.workflowSpec : parsed.spec;
 
     if (spec) {
-      if (ARGO_SERVICE_ACCOUNT && !spec.serviceAccountName) {
+      if (ARGO_SERVICE_ACCOUNT && !spec.serviceAccountName && !spec.serviceAccount) {
         spec.serviceAccountName = ARGO_SERVICE_ACCOUNT;
       }
 
@@ -1217,17 +1217,17 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
     if (safeQuery) {
       logql += ` |= "${safeQuery}"`;
     }
-    const config = getLokiConfig(req, LOKI_URL);
     
-    // Helper function to fetch and parse logs
+    // Helper function to fetch and parse logs. Instantiates a fresh config object per-request to avoid race conditions.
     const fetchAndParse = async (queryStr) => {
-      config.params = { query: queryStr, limit: 1000, start: startNs };
-      if (endNs) config.params.end = endNs;
+      const queryConfig = getLokiConfig(req, LOKI_URL);
+      queryConfig.params = { query: queryStr, limit: 1000, start: startNs };
+      if (endNs) queryConfig.params.end = endNs;
       
       console.log(`Fetching logs from Loki: ${LOKI_URL}/loki/api/v1/query_range?query=${queryStr}`);
       let resp;
       try {
-        resp = await axios.get(`${LOKI_URL}/loki/api/v1/query_range`, config);
+        resp = await axios.get(`${LOKI_URL}/loki/api/v1/query_range`, queryConfig);
         if (resp.data) {
           const resultsCount = resp.data.data?.result?.length || 0;
           console.log(`[API LOGS] Loki response: status=${resp.status} | resultsCount=${resultsCount}`);
@@ -1299,43 +1299,59 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
 
     // Fallbacks for pod log fetching if the standard `pod` label isn't used by their Promtail
     if (logs.length === 0 && type !== 'workflow') {
-      console.log(`No logs found with pod label. Attempting fallback labels for pod ${safeId}...`);
-      logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", k8s_pod_name="${safeId}"}`);
-      if (logs.length === 0) {
-        logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", kubernetes_pod_name="${safeId}"}`);
-      }
+      console.log(`No logs found with pod label. Executing non-regex fallback queries in parallel...`);
       
-      // Global Fallbacks (without namespace label) in case namespace label is differently named (e.g. k8s_namespace)
-      if (logs.length === 0) {
-        console.log(`No logs found with namespace pod labels. Attempting global pod queries (without namespace)...`);
-        logs = await fetchAndParse(`{pod="${safeId}"}`);
-        if (logs.length === 0) {
-          logs = await fetchAndParse(`{k8s_pod_name="${safeId}"}`);
-        }
-        if (logs.length === 0) {
-          logs = await fetchAndParse(`{kubernetes_pod_name="${safeId}"}`);
+      const fallbackQueries = [
+        { key: 'ns_k8s_pod', query: `{${NAMESPACE_LABEL}="${ns}", k8s_pod_name="${safeId}"}` },
+        { key: 'ns_kube_pod', query: `{${NAMESPACE_LABEL}="${ns}", kubernetes_pod_name="${safeId}"}` },
+        { key: 'global_pod', query: `{pod="${safeId}"}` },
+        { key: 'global_k8s_pod', query: `{k8s_pod_name="${safeId}"}` },
+        { key: 'global_kube_pod', query: `{kubernetes_pod_name="${safeId}"}` }
+      ];
+
+      const fallbackPromises = fallbackQueries.map(async (q) => {
+        const resLogs = await fetchAndParse(q.query);
+        return { key: q.key, logs: resLogs };
+      });
+
+      const fallbackResults = await Promise.all(fallbackPromises);
+      
+      // Choose the first non-empty logs in order of priority (which matches the array order)
+      for (const q of fallbackQueries) {
+        const match = fallbackResults.find(r => r.key === q.key);
+        if (match && match.logs && match.logs.length > 0) {
+          logs = match.logs;
+          console.log(`[API LOGS] Fallback matched successfully via query key: ${q.key}`);
+          break;
         }
       }
-      
-      // If the node ID is something like `wf-12345` but the actual pod is `wf-task-12345`
+
+      // If still empty, try regex matchers in parallel
       if (logs.length === 0) {
         const idParts = safeId.split('-');
         const hash = idParts[idParts.length - 1]; // Assume the last part is the unique hash
         
-        console.log(`Attempting regex matching on POD LABEL for ID ending in ${hash}`);
-        // Instead of searching the text stream (|= "hash"), we use a regex label matcher (=~ ".*hash.*")
-        // This targets the pod label itself, returning ALL lines for that pod, regardless of content.
-        logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", pod=~".*${hash}.*"}`);
-        if (logs.length === 0) {
-            logs = await fetchAndParse(`{${NAMESPACE_LABEL}="${ns}", k8s_pod_name=~".*${hash}.*"}`);
-        }
-        
-        // Global Regex Fallbacks
-        if (logs.length === 0) {
-          console.log(`No logs found with regex namespace pod labels. Attempting global regex pod queries (without namespace)...`);
-          logs = await fetchAndParse(`{pod=~".*${hash}.*"}`);
-          if (logs.length === 0) {
-            logs = await fetchAndParse(`{k8s_pod_name=~".*${hash}.*"}`);
+        console.log(`Attempting regex matching on POD LABEL for ID ending in ${hash} in parallel...`);
+        const regexQueries = [
+          { key: 'ns_regex_pod', query: `{${NAMESPACE_LABEL}="${ns}", pod=~".*${hash}.*"}` },
+          { key: 'ns_regex_k8s_pod', query: `{${NAMESPACE_LABEL}="${ns}", k8s_pod_name=~".*${hash}.*"}` },
+          { key: 'global_regex_pod', query: `{pod=~".*${hash}.*"}` },
+          { key: 'global_regex_k8s_pod', query: `{k8s_pod_name=~".*${hash}.*"}` }
+        ];
+
+        const regexPromises = regexQueries.map(async (q) => {
+          const resLogs = await fetchAndParse(q.query);
+          return { key: q.key, logs: resLogs };
+        });
+
+        const regexResults = await Promise.all(regexPromises);
+
+        for (const q of regexQueries) {
+          const match = regexResults.find(r => r.key === q.key);
+          if (match && match.logs && match.logs.length > 0) {
+            logs = match.logs;
+            console.log(`[API LOGS] Regex fallback matched successfully via query key: ${q.key}`);
+            break;
           }
         }
       }
