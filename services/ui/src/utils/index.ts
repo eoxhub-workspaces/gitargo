@@ -189,3 +189,31 @@ export const filterGroups = (nodes: Dictionary<INodeItem>) => {
 export const getGroupPosition = (offsets: { top: number; left: number }) => {
   return { top: 20 + offsets.top, left: 20 + offsets.left };
 };
+
+export const formatK8sError = (msg: string): string => {
+  if (!msg) return "An unknown error occurred.";
+
+  // Strip technical admission webhook wrapper text
+  if (msg.includes("denied the request:")) {
+    const parts = msg.split("denied the request:");
+    let cleanMsg = parts[parts.length - 1].trim();
+
+    // Capitalize first letter
+    cleanMsg = cleanMsg.charAt(0).toUpperCase() + cleanMsg.slice(1);
+
+    // Map specific technical jargon to user-friendly messages
+    cleanMsg = cleanMsg
+      .replace(
+        /workspace cpu hour allowance exceeded/i,
+        "Workspace CPU hours limit exceeded"
+      )
+      .replace(/raise the nodeUsageLimits/i, "raise your usage limits");
+
+    return cleanMsg;
+  }
+
+  // General cleanups
+  return msg
+    .replace(/^admission webhook "[^"]+" denied the request:\s*/i, "")
+    .trim();
+};

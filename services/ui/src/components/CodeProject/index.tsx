@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import toast from "react-hot-toast";
+import { formatK8sError } from "../../utils";
 import { validateK8sYaml } from "../../utils/k8sValidation";
 import {
   CloudArrowUpIcon,
@@ -611,8 +612,11 @@ export default function CodeProject() {
       if (activePanel !== "runs") setActivePanel("runs");
       setTimeout(fetchExecutions, 1000);
     } catch (error: any) {
-      toast.error(`Submission failed: ${error.message || "Unknown error"}`, {
-        id: submitToast
+      const serverMsg =
+        error.response?.data?.message || error.message || "Unknown error";
+      toast.error(`Submission failed: ${formatK8sError(serverMsg)}`, {
+        id: submitToast,
+        duration: 8000
       });
     }
   };
@@ -814,9 +818,18 @@ export default function CodeProject() {
                     <li
                       key={exe.metadata.name}
                       className="p-4 hover:bg-gray-100 transition-colors cursor-pointer"
-                      onClick={() =>
-                        navigate(`/executions?run=${exe.metadata.name}`)
-                      }
+                      onClick={() => {
+                        const targetFilename = filename || currentFilename;
+                        navigate(`/executions?run=${exe.metadata.name}`, {
+                          state: targetFilename
+                            ? {
+                                from: `/edit/${encodeURIComponent(
+                                  targetFilename
+                                )}`
+                              }
+                            : undefined
+                        });
+                      }}
                     >
                       <div className="flex justify-between items-start mb-1">
                         <span className="text-sm font-medium text-gray-900 truncate">

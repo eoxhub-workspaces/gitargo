@@ -517,12 +517,18 @@ const ExecutionsView: React.FC = () => {
           {selectedExe && (
             <button
               onClick={() => {
-                setSelectedExe(null);
-                setLogs("");
-                setSelectedNodeId(null);
+                const fromPath = location.state?.from;
+                if (fromPath) {
+                  navigate(fromPath);
+                } else {
+                  setSelectedExe(null);
+                  setLogs("");
+                  setSelectedNodeId(null);
+                  navigate("/executions", { replace: true });
+                }
               }}
               className="p-2 rounded-full border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-colors shadow-sm bg-white"
-              title="Back to List"
+              title="Back"
             >
               <ChevronLeftIcon className="h-5 w-5 text-[#004170]" />
             </button>
@@ -1356,8 +1362,16 @@ const ExecutionsView: React.FC = () => {
                           "Main container completed",
                           "sub-process exited",
                           "Alloc=",
-                          "Executor initialized"
-                        ].some((phrase) => line.includes(phrase));
+                          "TotalAlloc",
+                          "Goroutines",
+                          "Executor initialized",
+                          "waiting for signals",
+                          "file signal handler",
+                          "context cancellation",
+                          "context canceled"
+                        ].some((phrase) =>
+                          line.toLowerCase().includes(phrase.toLowerCase())
+                        );
 
                         return (
                           <span

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import YAML from "yaml";
+import { formatK8sError } from "../utils";
 import {
   getWorkflows,
   getWorkflow,
@@ -93,7 +94,12 @@ const ListView: React.FC = () => {
       setExecutingWorkflow(null);
       navigate("/executions");
     } catch (err: any) {
-      toast.error(`Failed to submit: ${err.message}`, { id: executeToast });
+      const serverMsg =
+        err.response?.data?.message || err.message || "Unknown error";
+      toast.error(`Failed to submit: ${formatK8sError(serverMsg)}`, {
+        id: executeToast,
+        duration: 8000
+      });
     }
   };
 
