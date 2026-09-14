@@ -146,7 +146,7 @@ This project strictly adheres to secure, enterprise-grade container standards:
 * **No unnecessary files**: A `.dockerignore` policy is implemented in the repository to guarantee that local configuration are not added the context build or the published image.
 * **Local Scanning (Trivy)**: Image builds should be audited locally using Trivy before release:
   ```bash
-  docker build -t gitargo:local .
+  docker build --no-cache -t gitargo:local .
   trivy image --severity HIGH,CRITICAL gitargo:local
   ```
 * **Image Signing (Cosign)**: Container images are automatically signed inside the CI pipeline (`build-and-push.yaml`) using cryptographic keyless OIDC Cosign signing (`sigstore`).
