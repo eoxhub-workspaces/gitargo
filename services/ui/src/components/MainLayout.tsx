@@ -13,11 +13,15 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isExecutions = location.pathname.startsWith("/executions");
   const isResources = location.pathname.startsWith("/resources");
   const isApplications = location.pathname.startsWith("/applications");
-  
+
   const [config, setConfig] = useState<AppConfig | null>(null);
 
   useEffect(() => {
-    getConfig().then(setConfig).catch(err => console.error("Failed to load config in MainLayout", err));
+    getConfig()
+      .then(setConfig)
+      .catch((err) =>
+        console.error("Failed to load config in MainLayout", err)
+      );
   }, []);
 
   return (

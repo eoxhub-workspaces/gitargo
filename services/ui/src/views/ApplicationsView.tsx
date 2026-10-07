@@ -9,7 +9,7 @@ import {
   XMarkIcon,
   EyeIcon,
   ExclamationTriangleIcon,
-  CheckCircleIcon,
+  CheckCircleIcon
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import Editor from "@monaco-editor/react";
@@ -96,7 +96,9 @@ spec:
 
 const ApplicationsView: React.FC = () => {
   const [apps, setApps] = useState<Application[]>([]);
-  const [statuses, setStatuses] = useState<Record<string, ApplicationStatus>>({});
+  const [statuses, setStatuses] = useState<Record<string, ApplicationStatus>>(
+    {}
+  );
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -125,7 +127,7 @@ const ApplicationsView: React.FC = () => {
   const [formCpuReq, setFormCpuReq] = useState("0.1");
   const [formMemReq, setFormMemReq] = useState("0.5Gi");
   const [formIsPublic, setFormIsPublic] = useState(false);
-  
+
   // EOXHub service annotations
   const [annServiceName, setAnnServiceName] = useState("");
   const [annAllowAnon, setAnnAllowAnon] = useState(false);
@@ -135,7 +137,9 @@ const ApplicationsView: React.FC = () => {
   const [yamlDeployment, setYamlDeployment] = useState("");
   const [yamlService, setYamlService] = useState("");
   const [yamlIngress, setYamlIngress] = useState("");
-  const [activeYamlTab, setActiveYamlTab] = useState<"deployment" | "service" | "ingress">("deployment");
+  const [activeYamlTab, setActiveYamlTab] = useState<
+    "deployment" | "service" | "ingress"
+  >("deployment");
 
   const loadData = async () => {
     try {
@@ -208,7 +212,7 @@ const ApplicationsView: React.FC = () => {
     setYamlService(defaultServiceYaml("my-app"));
     setYamlIngress(defaultIngressYaml("my-app"));
     setActiveYamlTab("deployment");
-    
+
     setShowFormModal(true);
   };
 
@@ -227,7 +231,9 @@ const ApplicationsView: React.FC = () => {
       setShowFormModal(true);
       toast.dismiss(loadingToast);
     } catch (err: any) {
-      toast.error("Failed to load application configuration: " + err.message, { id: loadingToast });
+      toast.error("Failed to load application configuration: " + err.message, {
+        id: loadingToast
+      });
     }
   };
 
@@ -238,25 +244,39 @@ const ApplicationsView: React.FC = () => {
     try {
       const status = await getApplicationStatus(appName);
       setStatuses((prev) => ({ ...prev, [appName]: status }));
-    } catch (err) {}
+    } catch (err) {
+      console.warn("Failed to refresh status", err);
+    }
   };
 
   const handleDeleteApp = async (appName: string) => {
-    if (!window.confirm(`Are you sure you want to delete application "${appName}"? This deletes files from Git repository and tears down deployments.`)) {
+    if (
+      !window.confirm(
+        `Are you sure you want to delete application "${appName}"? This deletes files from Git repository and tears down deployments.`
+      )
+    ) {
       return;
     }
     const delToast = toast.loading(`Deleting application "${appName}"...`);
     try {
       await deleteApplication(appName);
-      toast.success(`Application "${appName}" deleted successfully.`, { id: delToast });
+      toast.success(`Application "${appName}" deleted successfully.`, {
+        id: delToast
+      });
       loadData();
     } catch (err: any) {
-      toast.error(`Failed to delete application: ${err.message}`, { id: delToast });
+      toast.error(`Failed to delete application: ${err.message}`, {
+        id: delToast
+      });
     }
   };
 
   const handlePodRestart = async (podName: string) => {
-    if (!window.confirm(`Are you sure you want to restart (delete) pod "${podName}"?`)) {
+    if (
+      !window.confirm(
+        `Are you sure you want to restart (delete) pod "${podName}"?`
+      )
+    ) {
       return;
     }
     const restartToast = toast.loading(`Restarting pod "${podName}"...`);
@@ -268,10 +288,14 @@ const ApplicationsView: React.FC = () => {
         try {
           const status = await getApplicationStatus(selectedAppName);
           setStatuses((prev) => ({ ...prev, [selectedAppName]: status }));
-        } catch (err) {}
+        } catch (err) {
+          console.warn("Failed to update status after restart", err);
+        }
       }, 1500);
     } catch (err: any) {
-      toast.error(`Failed to restart pod: ${err.message}`, { id: restartToast });
+      toast.error(`Failed to restart pod: ${err.message}`, {
+        id: restartToast
+      });
     }
   };
 
@@ -284,7 +308,9 @@ const ApplicationsView: React.FC = () => {
       const logs = await getLogs(podName, "pod");
       setLogsText(logs || "No logs found for this container.");
     } catch (err: any) {
-      setLogsText("Failed to load logs: " + (err.response?.data?.message || err.message));
+      setLogsText(
+        "Failed to load logs: " + (err.response?.data?.message || err.message)
+      );
     } finally {
       setLogsLoading(false);
     }
@@ -292,9 +318,9 @@ const ApplicationsView: React.FC = () => {
 
   const syncFormToYaml = () => {
     const name = formName.trim() || "my-app";
-    
+
     // Deployment YAML Generation
-    let depYaml = `apiVersion: apps/v1
+    const depYaml = `apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ${name}
@@ -327,7 +353,7 @@ spec:
             requests:
               cpu: "${formCpuReq}"
               memory: "${formMemReq}"`;
-              
+
     setYamlDeployment(depYaml);
 
     // Service YAML Generation
@@ -345,7 +371,7 @@ spec:
       }
     }
 
-    let svcYaml = `apiVersion: v1
+    const svcYaml = `apiVersion: v1
 kind: Service
 metadata:
   name: ${name}${svcAnnotations}
@@ -363,7 +389,7 @@ spec:
 
     // Ingress YAML Generation
     if (formIsPublic) {
-      let ingYaml = `apiVersion: networking.k8s.io/v1
+      const ingYaml = `apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ${name}
@@ -386,7 +412,7 @@ spec:
 
   const handleSaveApplication = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     let appName = isEditing ? selectedAppName : formName.trim();
     if (!appName) {
       if (expertMode) {
@@ -394,7 +420,12 @@ spec:
         try {
           const parsed = YAML.parse(yamlDeployment);
           appName = parsed?.metadata?.name || "";
-        } catch (e) {}
+        } catch (e) {
+          console.debug(
+            "Failed to parse deployment name from raw YAML during sync",
+            e
+          );
+        }
       }
     }
 
@@ -413,45 +444,83 @@ spec:
       const yamls: ApplicationYamls = {
         deployment: yamlDeployment,
         service: yamlService,
-        ingress: formIsPublic || (expertMode && yamlIngress) ? yamlIngress : undefined
+        ingress:
+          formIsPublic || (expertMode && yamlIngress) ? yamlIngress : undefined
       };
 
       if (isEditing) {
         await updateApplication(appName, yamls);
-        toast.success(`Application "${appName}" updated successfully.`, { id: saveToast });
+        toast.success(`Application "${appName}" updated successfully.`, {
+          id: saveToast
+        });
       } else {
         await createApplication(appName, yamls);
-        toast.success(`Application "${appName}" created successfully.`, { id: saveToast });
+        toast.success(`Application "${appName}" created successfully.`, {
+          id: saveToast
+        });
       }
 
       setShowFormModal(false);
       loadData();
     } catch (err: any) {
-      const serverMsg = err.response?.data?.message || err.message || "Unknown error";
-      toast.error(`Failed to save application: ${serverMsg}`, { id: saveToast });
+      const serverMsg =
+        err.response?.data?.message || err.message || "Unknown error";
+      toast.error(`Failed to save application: ${serverMsg}`, {
+        id: saveToast
+      });
     }
   };
 
   const getOverallStatusBadge = (appName: string) => {
     const status = statuses[appName];
-    if (!status) return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-800">Pending</span>;
-    if (!status.deployed) return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800">Waiting for Sync</span>;
+    if (!status)
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-800">
+          Pending
+        </span>
+      );
+    if (!status.deployed)
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800">
+          Waiting for Sync
+        </span>
+      );
 
     const pods = status.pods || [];
-    if (pods.length === 0) return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800">Scaling</span>;
+    if (pods.length === 0)
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800">
+          Scaling
+        </span>
+      );
 
-    const crashCount = pods.filter(p => p.phase === "Failed" || p.restarts > 3).length;
-    const runningCount = pods.filter(p => p.phase === "Running").length;
+    const crashCount = pods.filter(
+      (p) => p.phase === "Failed" || p.restarts > 3
+    ).length;
+    const runningCount = pods.filter((p) => p.phase === "Running").length;
 
     if (crashCount > 0) {
-      return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800">Degraded ({crashCount} Pod Issues)</span>;
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-800">
+          Degraded ({crashCount} Pod Issues)
+        </span>
+      );
     }
 
     if (runningCount === pods.length) {
-      return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-800 flex items-center w-max"><CheckCircleIcon className="h-4 w-4 mr-1 text-green-600" /> Healthy ({runningCount}/{pods.length})</span>;
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-800 flex items-center w-max">
+          <CheckCircleIcon className="h-4 w-4 mr-1 text-green-600" /> Healthy (
+          {runningCount}/{pods.length})
+        </span>
+      );
     }
 
-    return <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800">Progressing</span>;
+    return (
+      <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800">
+        Progressing
+      </span>
+    );
   };
 
   return (
@@ -464,7 +533,8 @@ spec:
             Applications Management
           </h1>
           <p className="mt-1 text-sm text-gray-500">
-            Deploy microservices and frontend apps. Managed automatically via GitOps and Kubernetes.
+            Deploy microservices and frontend apps. Managed automatically via
+            GitOps and Kubernetes.
           </p>
         </div>
         <div className="flex space-x-3">
@@ -473,7 +543,9 @@ spec:
             disabled={refreshing}
             className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#004170] transition-all"
           >
-            <ArrowPathIcon className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} />
+            <ArrowPathIcon
+              className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`}
+            />
             Refresh
           </button>
           <button
@@ -493,8 +565,12 @@ spec:
       ) : apps.length === 0 ? (
         <div className="text-center bg-white shadow rounded-lg p-16">
           <CpuChipIcon className="mx-auto h-12 w-12 text-gray-400" />
-          <h3 className="mt-2 text-sm font-medium text-gray-900">No applications</h3>
-          <p className="mt-1 text-sm text-gray-500">Get started by creating a new microservice.</p>
+          <h3 className="mt-2 text-sm font-medium text-gray-900">
+            No applications
+          </h3>
+          <p className="mt-1 text-sm text-gray-500">
+            Get started by creating a new microservice.
+          </p>
           <div className="mt-6">
             <button
               onClick={handleOpenNewModal}
@@ -510,30 +586,60 @@ spec:
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Application Name</th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Storage Files</th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                <th
+                  scope="col"
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                >
+                  Application Name
+                </th>
+                <th
+                  scope="col"
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                >
+                  Storage Files
+                </th>
+                <th
+                  scope="col"
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                >
+                  Status
+                </th>
+                <th
+                  scope="col"
+                  className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider"
+                >
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {apps.map((app) => (
-                <tr key={app.name} className="hover:bg-gray-50 transition-colors">
+                <tr
+                  key={app.name}
+                  className="hover:bg-gray-50 transition-colors"
+                >
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center">
                       <div className="flex-shrink-0 h-10 w-10 flex items-center justify-center bg-blue-50 text-[#004170] rounded-lg">
                         <CpuChipIcon className="h-6 w-6" />
                       </div>
                       <div className="ml-4">
-                        <div className="text-sm font-semibold text-gray-900">{app.name}</div>
-                        <div className="text-xs text-gray-400">Folder: applications/{app.name}</div>
+                        <div className="text-sm font-semibold text-gray-900">
+                          {app.name}
+                        </div>
+                        <div className="text-xs text-gray-400">
+                          Folder: applications/{app.name}
+                        </div>
                       </div>
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex space-x-1.5">
                       {app.files.map((file) => (
-                        <span key={file} className="px-2 py-0.5 bg-gray-100 border border-gray-200 text-gray-600 rounded text-xs font-mono">
+                        <span
+                          key={file}
+                          className="px-2 py-0.5 bg-gray-100 border border-gray-200 text-gray-600 rounded text-xs font-mono"
+                        >
                           {file}
                         </span>
                       ))}
@@ -577,18 +683,36 @@ spec:
 
       {/* 1. Modal: Create / Edit Application */}
       {showFormModal && (
-        <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto"
+          aria-labelledby="modal-title"
+          role="dialog"
+          aria-modal="true"
+        >
           <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={() => setShowFormModal(false)}></div>
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+            <div
+              className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+              onClick={() => setShowFormModal(false)}
+            ></div>
+            <span
+              className="hidden sm:inline-block sm:align-middle sm:h-screen"
+              aria-hidden="true"
+            >
+              &#8203;
+            </span>
             <div className="inline-block align-middle bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full">
               <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4 border-b border-gray-200">
                 <div className="flex justify-between items-center">
                   <h3 className="text-lg leading-6 font-bold text-gray-900 flex items-center">
                     <CpuChipIcon className="h-6 w-6 mr-2 text-[#004170]" />
-                    {isEditing ? `Edit Application: ${selectedAppName}` : "Deploy New Application"}
+                    {isEditing
+                      ? `Edit Application: ${selectedAppName}`
+                      : "Deploy New Application"}
                   </h3>
-                  <button onClick={() => setShowFormModal(false)} className="text-gray-400 hover:text-gray-500">
+                  <button
+                    onClick={() => setShowFormModal(false)}
+                    className="text-gray-400 hover:text-gray-500"
+                  >
                     <XMarkIcon className="h-6 w-6" />
                   </button>
                 </div>
@@ -599,7 +723,9 @@ spec:
                   {/* Mode Selector (Only on New Applications, edit starts directly in expert mode) */}
                   {!isEditing && (
                     <div className="flex justify-between items-center mb-6 border-b border-gray-100 pb-4">
-                      <span className="text-sm font-semibold text-gray-700">Creation Method:</span>
+                      <span className="text-sm font-semibold text-gray-700">
+                        Creation Method:
+                      </span>
                       <div className="relative z-0 inline-flex shadow-sm rounded-md">
                         <button
                           type="button"
@@ -637,20 +763,30 @@ spec:
                     <div className="space-y-4">
                       <div className="grid grid-cols-1 gap-y-4 gap-x-4 sm:grid-cols-6">
                         <div className="sm:col-span-3">
-                          <label className="block text-sm font-medium text-gray-700">Application Name</label>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Application Name
+                          </label>
                           <input
                             type="text"
                             required
                             disabled={isEditing}
                             value={formName}
-                            onChange={(e) => setFormName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+                            onChange={(e) =>
+                              setFormName(
+                                e.target.value
+                                  .toLowerCase()
+                                  .replace(/[^a-z0-9-]/g, "")
+                              )
+                            }
                             placeholder="e.g. data-analyzer"
                             className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-[#004170] focus:border-[#004170] sm:text-sm"
                           />
                         </div>
 
                         <div className="sm:col-span-3">
-                          <label className="block text-sm font-medium text-gray-700">Docker Image</label>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Docker Image
+                          </label>
                           <input
                             type="text"
                             required
@@ -662,18 +798,24 @@ spec:
                         </div>
 
                         <div className="sm:col-span-2">
-                          <label className="block text-sm font-medium text-gray-700">Container Port</label>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Container Port
+                          </label>
                           <input
                             type="number"
                             required
                             value={formPort}
-                            onChange={(e) => setFormPort(Number(e.target.value))}
+                            onChange={(e) =>
+                              setFormPort(Number(e.target.value))
+                            }
                             className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-[#004170] focus:border-[#004170] sm:text-sm"
                           />
                         </div>
 
                         <div className="sm:col-span-2">
-                          <label className="block text-sm font-medium text-gray-700">CPU Limit</label>
+                          <label className="block text-sm font-medium text-gray-700">
+                            CPU Limit
+                          </label>
                           <input
                             type="text"
                             required
@@ -685,7 +827,9 @@ spec:
                         </div>
 
                         <div className="sm:col-span-2">
-                          <label className="block text-sm font-medium text-gray-700">Memory Limit</label>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Memory Limit
+                          </label>
                           <input
                             type="text"
                             required
@@ -699,14 +843,20 @@ spec:
 
                       {/* EOXHub Integrations */}
                       <div className="border-t border-gray-100 pt-4 mt-4">
-                        <h4 className="text-sm font-bold text-gray-800 mb-3">EOXHub Portal Configuration</h4>
+                        <h4 className="text-sm font-bold text-gray-800 mb-3">
+                          EOXHub Portal Configuration
+                        </h4>
                         <div className="grid grid-cols-1 gap-y-4 gap-x-4 sm:grid-cols-6">
                           <div className="sm:col-span-6">
-                            <label className="block text-sm font-medium text-gray-700">Human Readable Service Name</label>
+                            <label className="block text-sm font-medium text-gray-700">
+                              Human Readable Service Name
+                            </label>
                             <input
                               type="text"
                               value={annServiceName}
-                              onChange={(e) => setAnnServiceName(e.target.value)}
+                              onChange={(e) =>
+                                setAnnServiceName(e.target.value)
+                              }
                               placeholder="e.g. Science Dashboard Tool"
                               className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-[#004170] focus:border-[#004170] sm:text-sm"
                             />
@@ -717,10 +867,15 @@ spec:
                               id="annAllowAnon"
                               type="checkbox"
                               checked={annAllowAnon}
-                              onChange={(e) => setAnnAllowAnon(e.target.checked)}
+                              onChange={(e) =>
+                                setAnnAllowAnon(e.target.checked)
+                              }
                               className="h-4 w-4 text-[#004170] focus:ring-[#004170] border-gray-300 rounded"
                             />
-                            <label htmlFor="annAllowAnon" className="ml-2 block text-sm font-medium text-gray-700">
+                            <label
+                              htmlFor="annAllowAnon"
+                              className="ml-2 block text-sm font-medium text-gray-700"
+                            >
                               Allow Anonymous Access (Public API)
                             </label>
                           </div>
@@ -730,10 +885,15 @@ spec:
                               id="annStopUnused"
                               type="checkbox"
                               checked={annStopUnused}
-                              onChange={(e) => setAnnStopUnused(e.target.checked)}
+                              onChange={(e) =>
+                                setAnnStopUnused(e.target.checked)
+                              }
                               className="h-4 w-4 text-[#004170] focus:ring-[#004170] border-gray-300 rounded"
                             />
-                            <label htmlFor="annStopUnused" className="ml-2 block text-sm font-medium text-gray-700">
+                            <label
+                              htmlFor="annStopUnused"
+                              className="ml-2 block text-sm font-medium text-gray-700"
+                            >
                               Auto-Stop when unused (Gateway scale-to-zero)
                             </label>
                           </div>
@@ -748,10 +908,15 @@ spec:
                               id="formIsPublic"
                               type="checkbox"
                               checked={formIsPublic}
-                              onChange={(e) => setFormIsPublic(e.target.checked)}
+                              onChange={(e) =>
+                                setFormIsPublic(e.target.checked)
+                              }
                               className="h-4 w-4 text-[#004170] focus:ring-[#004170] border-gray-300 rounded"
                             />
-                            <label htmlFor="formIsPublic" className="ml-2 block text-sm font-medium text-gray-700">
+                            <label
+                              htmlFor="formIsPublic"
+                              className="ml-2 block text-sm font-medium text-gray-700"
+                            >
                               Expose Publicly via Ingress (Creates ingress.yaml)
                             </label>
                           </div>
@@ -801,7 +966,10 @@ spec:
                       </div>
 
                       {/* Code Editors */}
-                      <div className="border border-gray-300 rounded-md overflow-hidden" style={{ height: "400px" }}>
+                      <div
+                        className="border border-gray-300 rounded-md overflow-hidden"
+                        style={{ height: "400px" }}
+                      >
                         {activeYamlTab === "deployment" && (
                           <Editor
                             height="100%"
@@ -809,7 +977,10 @@ spec:
                             theme="vs-light"
                             value={yamlDeployment}
                             onChange={(val) => setYamlDeployment(val || "")}
-                            options={{ minimap: { enabled: false }, fontSize: 13 }}
+                            options={{
+                              minimap: { enabled: false },
+                              fontSize: 13
+                            }}
                           />
                         )}
                         {activeYamlTab === "service" && (
@@ -819,7 +990,10 @@ spec:
                             theme="vs-light"
                             value={yamlService}
                             onChange={(val) => setYamlService(val || "")}
-                            options={{ minimap: { enabled: false }, fontSize: 13 }}
+                            options={{
+                              minimap: { enabled: false },
+                              fontSize: 13
+                            }}
                           />
                         )}
                         {activeYamlTab === "ingress" && (
@@ -829,12 +1003,18 @@ spec:
                             theme="vs-light"
                             value={yamlIngress}
                             onChange={(val) => setYamlIngress(val || "")}
-                            options={{ minimap: { enabled: false }, fontSize: 13 }}
+                            options={{
+                              minimap: { enabled: false },
+                              fontSize: 13
+                            }}
                           />
                         )}
                       </div>
                       <p className="mt-2 text-xs text-gray-400">
-                        * Note: Metadata namespace, app labeling, and matchSelectors are strictly validated and injected on the server side to ensure safety and isolation in {config?.defaults.namespace || "the workspace"}.
+                        * Note: Metadata namespace, app labeling, and
+                        matchSelectors are strictly validated and injected on
+                        the server side to ensure safety and isolation in{" "}
+                        {config?.defaults.namespace || "the workspace"}.
                       </p>
                     </div>
                   )}
@@ -863,10 +1043,23 @@ spec:
 
       {/* 2. Modal: Status & Pod Management */}
       {showStatusModal && (
-        <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto"
+          aria-labelledby="modal-title"
+          role="dialog"
+          aria-modal="true"
+        >
           <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={() => setShowStatusModal(false)}></div>
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+            <div
+              className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+              onClick={() => setShowStatusModal(false)}
+            ></div>
+            <span
+              className="hidden sm:inline-block sm:align-middle sm:h-screen"
+              aria-hidden="true"
+            >
+              &#8203;
+            </span>
             <div className="inline-block align-middle bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full">
               <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4 border-b border-gray-200">
                 <div className="flex justify-between items-center">
@@ -874,7 +1067,10 @@ spec:
                     <DocumentMagnifyingGlassIcon className="h-6 w-6 mr-2 text-[#004170]" />
                     Application Status: {selectedAppName}
                   </h3>
-                  <button onClick={() => setShowStatusModal(false)} className="text-gray-400 hover:text-gray-500">
+                  <button
+                    onClick={() => setShowStatusModal(false)}
+                    className="text-gray-400 hover:text-gray-500"
+                  >
                     <XMarkIcon className="h-6 w-6" />
                   </button>
                 </div>
@@ -883,15 +1079,25 @@ spec:
               <div className="bg-white px-6 py-4 space-y-6">
                 {/* 1. K8s Controller Sync Check */}
                 <div>
-                  <h4 className="text-sm font-bold text-gray-800 border-b border-gray-100 pb-2 mb-3">Reconciliation Status</h4>
+                  <h4 className="text-sm font-bold text-gray-800 border-b border-gray-100 pb-2 mb-3">
+                    Reconciliation Status
+                  </h4>
                   {statuses[selectedAppName] ? (
                     statuses[selectedAppName].deployed ? (
                       <div className="p-3 bg-green-50 border border-green-200 rounded-md flex items-start">
                         <CheckCircleIcon className="h-5 w-5 text-green-500 mr-2 flex-shrink-0 mt-0.5" />
                         <div>
-                          <div className="text-sm font-semibold text-green-800">Deployment Active</div>
+                          <div className="text-sm font-semibold text-green-800">
+                            Deployment Active
+                          </div>
                           <div className="text-xs text-green-600 mt-0.5">
-                            Kubernetes resources successfully created. Ready replicas: {statuses[selectedAppName].deployment?.readyReplicas || 0} / {statuses[selectedAppName].deployment?.replicas || 0}
+                            Kubernetes resources successfully created. Ready
+                            replicas:{" "}
+                            {statuses[selectedAppName].deployment
+                              ?.readyReplicas || 0}{" "}
+                            /{" "}
+                            {statuses[selectedAppName].deployment?.replicas ||
+                              0}
                           </div>
                         </div>
                       </div>
@@ -899,9 +1105,12 @@ spec:
                       <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-md flex items-start">
                         <ExclamationTriangleIcon className="h-5 w-5 text-yellow-500 mr-2 flex-shrink-0 mt-0.5" />
                         <div>
-                          <div className="text-sm font-semibold text-yellow-800">Synchronizing...</div>
+                          <div className="text-sm font-semibold text-yellow-800">
+                            Synchronizing...
+                          </div>
                           <div className="text-xs text-yellow-600 mt-0.5">
-                            Git changes pushed. Waiting for the cluster GitOps operator (Argo CD or flux) to synchronize files.
+                            Git changes pushed. Waiting for the cluster GitOps
+                            operator (Argo CD or flux) to synchronize files.
                           </div>
                         </div>
                       </div>
@@ -914,44 +1123,80 @@ spec:
                 </div>
 
                 {/* 2. Reconciliation Issues / Deployment Conditions */}
-                {statuses[selectedAppName]?.deployment?.conditions && statuses[selectedAppName].deployment!.conditions.length > 0 && (
-                  <div>
-                    <h4 className="text-sm font-bold text-gray-800 border-b border-gray-100 pb-2 mb-3">System Warnings / Conditions</h4>
-                    <div className="space-y-1.5">
-                      {statuses[selectedAppName].deployment!.conditions.map((cond, idx) => {
-                        const isIssue = cond.status === "False" || cond.type === "ReplicaFailure";
-                        return (
-                          <div key={idx} className={`p-2.5 rounded text-xs border ${
-                            isIssue ? "bg-red-50 border-red-200 text-red-700" : "bg-gray-50 border-gray-200 text-gray-600"
-                          }`}>
-                            <span className="font-semibold">{cond.type}</span> ({cond.status}): {cond.message}
-                          </div>
-                        );
-                      })}
+                {statuses[selectedAppName]?.deployment?.conditions &&
+                  statuses[selectedAppName].deployment!.conditions.length >
+                    0 && (
+                    <div>
+                      <h4 className="text-sm font-bold text-gray-800 border-b border-gray-100 pb-2 mb-3">
+                        System Warnings / Conditions
+                      </h4>
+                      <div className="space-y-1.5">
+                        {statuses[selectedAppName].deployment!.conditions.map(
+                          (cond, idx) => {
+                            const isIssue =
+                              cond.status === "False" ||
+                              cond.type === "ReplicaFailure";
+                            return (
+                              <div
+                                key={idx}
+                                className={`p-2.5 rounded text-xs border ${
+                                  isIssue
+                                    ? "bg-red-50 border-red-200 text-red-700"
+                                    : "bg-gray-50 border-gray-200 text-gray-600"
+                                }`}
+                              >
+                                <span className="font-semibold">
+                                  {cond.type}
+                                </span>{" "}
+                                ({cond.status}): {cond.message}
+                              </div>
+                            );
+                          }
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
                 {/* 3. Pods List */}
                 <div>
-                  <h4 className="text-sm font-bold text-gray-800 border-b border-gray-100 pb-2 mb-3">Active Pods & Logs</h4>
-                  {statuses[selectedAppName]?.pods && statuses[selectedAppName].pods.length > 0 ? (
+                  <h4 className="text-sm font-bold text-gray-800 border-b border-gray-100 pb-2 mb-3">
+                    Active Pods & Logs
+                  </h4>
+                  {statuses[selectedAppName]?.pods &&
+                  statuses[selectedAppName].pods.length > 0 ? (
                     <div className="space-y-3">
                       {statuses[selectedAppName].pods.map((pod) => (
-                        <div key={pod.name} className="p-3 border border-gray-200 rounded-md flex items-center justify-between hover:bg-gray-50 transition-colors">
+                        <div
+                          key={pod.name}
+                          className="p-3 border border-gray-200 rounded-md flex items-center justify-between hover:bg-gray-50 transition-colors"
+                        >
                           <div>
-                            <div className="text-sm font-semibold text-gray-900 font-mono">{pod.name}</div>
+                            <div className="text-sm font-semibold text-gray-900 font-mono">
+                              {pod.name}
+                            </div>
                             <div className="flex items-center space-x-3 mt-1.5 text-xs text-gray-500">
                               <span>
                                 Phase:{" "}
-                                <span className={`font-semibold ${pod.phase === "Running" ? "text-green-600" : "text-yellow-600"}`}>
+                                <span
+                                  className={`font-semibold ${pod.phase === "Running" ? "text-green-600" : "text-yellow-600"}`}
+                                >
                                   {pod.phase}
                                 </span>
                               </span>
                               <span>&bull;</span>
-                              <span>Restarts: <span className="font-semibold text-gray-700">{pod.restarts}</span></span>
+                              <span>
+                                Restarts:{" "}
+                                <span className="font-semibold text-gray-700">
+                                  {pod.restarts}
+                                </span>
+                              </span>
                               <span>&bull;</span>
-                              <span>Age: {pod.age ? new Date(pod.age).toLocaleString() : "Unknown"}</span>
+                              <span>
+                                Age:{" "}
+                                {pod.age
+                                  ? new Date(pod.age).toLocaleString()
+                                  : "Unknown"}
+                              </span>
                             </div>
                           </div>
                           <div className="flex space-x-2">
@@ -975,7 +1220,8 @@ spec:
                     </div>
                   ) : (
                     <div className="text-center p-6 border border-dashed border-gray-300 rounded-md text-sm text-gray-500">
-                      No active pods found. The service might be shut down or syncing.
+                      No active pods found. The service might be shut down or
+                      syncing.
                     </div>
                   )}
                 </div>
@@ -997,15 +1243,33 @@ spec:
 
       {/* 3. Modal: Logs Viewer */}
       {showLogModal && (
-        <div className="fixed inset-0 z-50 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto"
+          aria-labelledby="modal-title"
+          role="dialog"
+          aria-modal="true"
+        >
           <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={() => setShowLogModal(false)}></div>
-            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+            <div
+              className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+              onClick={() => setShowLogModal(false)}
+            ></div>
+            <span
+              className="hidden sm:inline-block sm:align-middle sm:h-screen"
+              aria-hidden="true"
+            >
+              &#8203;
+            </span>
             <div className="inline-block align-middle bg-gray-900 rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-5xl sm:w-full">
               <div className="bg-gray-800 px-4 py-3 border-b border-gray-700 flex justify-between items-center">
                 <div className="flex items-center text-gray-200">
-                  <ArrowPathIcon className={`h-5 w-5 mr-2 text-indigo-400 ${logsLoading ? "animate-spin" : ""}`} />
-                  <span className="text-sm font-semibold">Pod Logs: <span className="font-mono text-xs">{logPodName}</span></span>
+                  <ArrowPathIcon
+                    className={`h-5 w-5 mr-2 text-indigo-400 ${logsLoading ? "animate-spin" : ""}`}
+                  />
+                  <span className="text-sm font-semibold">
+                    Pod Logs:{" "}
+                    <span className="font-mono text-xs">{logPodName}</span>
+                  </span>
                 </div>
                 <div className="flex items-center space-x-3">
                   <button
@@ -1015,7 +1279,10 @@ spec:
                   >
                     <ArrowPathIcon className="h-5 w-5" />
                   </button>
-                  <button onClick={() => setShowLogModal(false)} className="text-gray-400 hover:text-white">
+                  <button
+                    onClick={() => setShowLogModal(false)}
+                    className="text-gray-400 hover:text-white"
+                  >
                     <XMarkIcon className="h-5 w-5" />
                   </button>
                 </div>

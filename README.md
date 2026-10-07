@@ -7,6 +7,7 @@ As optional experimental feature it also has canvas rendering, for visual workfl
 ## Features
 
 - **Workflow Browser**: List and search all workflow definitions in your repository.
+- **Application Deployment Management**: Create, edit, and manage microservices (Deployments, Services, and Ingresses) directly via Git commits with strict workspace security.
 - **Workflow Monitoring**: Live tracking of Argo Workflow executions.
 - **Resources Dashboard**: Monitor chronological CPU (core-minutes), memory, storage, and GPU consumption per workflow run with high-precision tooltip formatting.
 - **Log Viewer**: Integrated log viewing via Loki proxy.
@@ -74,6 +75,9 @@ The easiest way to run the service is using Docker.
 | `ARGO_AVAILABLE_TOLERATIONS` | JSON string of cluster-supported tolerations for the form dropdowns. | - |
 | `ARGO_AVAILABLE_NODE_SELECTORS` | JSON string of cluster-supported node selectors (only renders if configured). | - |
 | `ARGO_PROFILES` | JSON string of default presets available during new file template creation. | - |
+| `ENABLE_APPLICATIONS` | Enable the experimental Application Deployment Management tab. | `false` |
+| `GITLAB_APPLICATIONS_PATH` | The subdirectory in the repo containing application folders. | `applications` |
+| `ALLOW_PUBLIC_INGRESS` | Allow creating/editing `ingress.yaml` to expose applications publicly. | `false` |
 
 ## How it Works: Proactive Configuration Guard
 

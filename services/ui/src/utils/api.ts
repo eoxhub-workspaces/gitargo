@@ -279,7 +279,12 @@ export interface ApplicationStatus {
   service?: {
     type: string;
     clusterIP: string;
-    ports: Array<{ port: number; targetPort: any; name: string; protocol: string }>;
+    ports: Array<{
+      port: number;
+      targetPort: any;
+      name: string;
+      protocol: string;
+    }>;
   };
   pods: Array<{
     name: string;
@@ -295,7 +300,9 @@ export const getApplications = async (): Promise<Application[]> => {
   return response.data;
 };
 
-export const getApplication = async (name: string): Promise<ApplicationYamls> => {
+export const getApplication = async (
+  name: string
+): Promise<ApplicationYamls> => {
   const response = await api.get<ApplicationYamls>(`/applications/${name}`);
   return response.data;
 };
@@ -329,12 +336,19 @@ export const deleteApplication = async (name: string) => {
   return response.data;
 };
 
-export const getApplicationStatus = async (name: string): Promise<ApplicationStatus> => {
-  const response = await api.get<ApplicationStatus>(`/applications/${name}/status`);
+export const getApplicationStatus = async (
+  name: string
+): Promise<ApplicationStatus> => {
+  const response = await api.get<ApplicationStatus>(
+    `/applications/${name}/status`
+  );
   return response.data;
 };
 
-export const deleteApplicationPod = async (appName: string, podName: string) => {
+export const deleteApplicationPod = async (
+  appName: string,
+  podName: string
+) => {
   const response = await api.delete(`/applications/${appName}/pods/${podName}`);
   return response.data;
 };
