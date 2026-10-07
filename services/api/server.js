@@ -19,6 +19,9 @@ const GITLAB_TOKEN = process.env.GITLAB_TOKEN;
 const GITLAB_PROJECT_ID = process.env.GITLAB_PROJECT_ID;
 const GITLAB_BRANCH = process.env.GITLAB_BRANCH || 'main';
 const GITLAB_WORKFLOWS_PATH = process.env.GITLAB_WORKFLOWS_PATH || '.';
+const ENABLE_APPLICATIONS = process.env.ENABLE_APPLICATIONS === 'true';
+const GITLAB_APPLICATIONS_PATH = process.env.GITLAB_APPLICATIONS_PATH || 'applications';
+const ALLOW_PUBLIC_INGRESS = process.env.ALLOW_PUBLIC_INGRESS === 'true';
 
 if (!GITLAB_TOKEN || !GITLAB_PROJECT_ID) {
   console.error('ERROR: GITLAB_TOKEN and GITLAB_PROJECT_ID are required environment variables.');
@@ -290,6 +293,8 @@ apiRouter.get("/config", (req, res) => {
     availableNodeSelectors: ARGO_AVAILABLE_NODE_SELECTORS,
     ephemeralVolume: EPHEMERAL_VOLUME_CONFIG,
     allowPublishing: process.env.ALLOW_PUBLISHING === "true",
+    enableApplications: ENABLE_APPLICATIONS,
+    allowPublicIngress: ALLOW_PUBLIC_INGRESS,
     logViewerUrl: process.env.LOG_VIEWER_URL || `https://hub-test.eox.at/services/eoxhub-gateway/cif/log-viewer/search`,
     defaults: {
       namespace: process.env.ARGO_NAMESPACE || "default",
@@ -902,6 +907,8 @@ try {
 }
 
 const customObjectsApi = kc.makeApiClient(k8s.CustomObjectsApi);
+const appsV1Api = kc.makeApiClient(k8s.AppsV1Api);
+const coreV1Api = kc.makeApiClient(k8s.CoreV1Api);
 
 // Helper to safely parse and forward K8s API error bodies as real JSON objects (avoiding string double-encoding)
 const sendK8sError = (res, error) => {
@@ -1121,6 +1128,416 @@ function getLokiConfig(req, targetUrl) {
   }
   return config;
 }
+
+// --- Applications Deployment Feature ---
+
+const requiresApplicationsEnabled = (req, res, next) => {
+  if (!ENABLE_APPLICATIONS) {
+    return res.status(403).json({ message: "Applications feature is disabled." });
+  }
+  next();
+};
+
+const validateAndSanitizeAppYaml = (appName, content, fileType) => {
+  const parsed = YAML.parse(content);
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(`Invalid YAML format for ${fileType}.yaml`);
+  }
+  
+  if (!parsed.metadata) parsed.metadata = {};
+  
+  // Enforce namespace
+  const enforcedNamespace = process.env.ARGO_NAMESPACE || "default";
+  parsed.metadata.namespace = enforcedNamespace;
+  
+  // Enforce labels
+  if (!parsed.metadata.labels) parsed.metadata.labels = {};
+  parsed.metadata.labels['app.kubernetes.io/service'] = appName;
+  
+  // Enforce selector matchLabels for deployment
+  if (fileType === 'deployment') {
+    if (!parsed.spec) parsed.spec = {};
+    if (!parsed.spec.selector) parsed.spec.selector = {};
+    if (!parsed.spec.selector.matchLabels) parsed.spec.selector.matchLabels = {};
+    parsed.spec.selector.matchLabels['app.kubernetes.io/service'] = appName;
+    
+    if (!parsed.spec.template) parsed.spec.template = {};
+    if (!parsed.spec.template.metadata) parsed.spec.template.metadata = {};
+    if (!parsed.spec.template.metadata.labels) parsed.spec.template.metadata.labels = {};
+    parsed.spec.template.metadata.labels['app.kubernetes.io/service'] = appName;
+  }
+  
+  // Enforce selector for service
+  if (fileType === 'service') {
+    if (!parsed.spec) parsed.spec = {};
+    if (!parsed.spec.selector) parsed.spec.selector = {};
+    parsed.spec.selector['app.kubernetes.io/service'] = appName;
+  }
+  
+  // Enforce ingress rules targeting the service
+  if (fileType === 'ingress') {
+    if (!ALLOW_PUBLIC_INGRESS) {
+      throw new Error("Ingress creation is disabled by administrator.");
+    }
+    if (parsed.spec?.rules) {
+      for (const rule of parsed.spec.rules) {
+        if (rule.http?.paths) {
+          for (const p of rule.http.paths) {
+            if (p.backend?.service?.name && p.backend.service.name !== appName) {
+              p.backend.service.name = appName;
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  return YAML.stringify(parsed);
+};
+
+apiRouter.get("/applications", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const response = await gitlabApi.get(
+      `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
+      {
+        params: {
+          path: GITLAB_APPLICATIONS_PATH,
+          ref: GITLAB_BRANCH,
+          recursive: true
+        }
+      }
+    );
+
+    const apps = {};
+    for (const file of response.data) {
+      if (file.type === "blob" && file.path.startsWith(GITLAB_APPLICATIONS_PATH + "/")) {
+        const relativePath = file.path.slice(GITLAB_APPLICATIONS_PATH.length + 1);
+        const parts = relativePath.split('/');
+        if (parts.length === 2) {
+          const appName = parts[0];
+          const filename = parts[1];
+          if (["service.yaml", "deployment.yaml", "ingress.yaml"].includes(filename)) {
+            if (!apps[appName]) {
+              apps[appName] = { name: appName, files: [] };
+            }
+            apps[appName].files.push(filename);
+          }
+        }
+      }
+    }
+
+    res.json(Object.values(apps));
+  } catch (error) {
+    if (error.response && error.response.status === 404) {
+      return res.json([]);
+    }
+    next(error);
+  }
+});
+
+apiRouter.get("/applications/:name", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const { name } = req.params;
+    const files = ["deployment.yaml", "service.yaml"];
+    if (ALLOW_PUBLIC_INGRESS) {
+      files.push("ingress.yaml");
+    }
+
+    const payload = {};
+    for (const f of files) {
+      const filePath = `${GITLAB_APPLICATIONS_PATH}/${name}/${f}`;
+      try {
+        const response = await gitlabApi.get(
+          `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
+          { params: { ref: GITLAB_BRANCH } }
+        );
+        payload[f.replace(".yaml", "")] = response.data;
+      } catch (err) {
+        if (err.response && err.response.status === 404) {
+          payload[f.replace(".yaml", "")] = null;
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+});
+
+apiRouter.post("/applications/:name", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const { name } = req.params;
+    const { deployment, service, ingress, commit_message } = req.body;
+
+    if (!deployment || !service) {
+      return res.status(400).json({ message: "Both deployment and service YAML content are required." });
+    }
+
+    const actions = [];
+    try {
+      const sanitizedDeployment = validateAndSanitizeAppYaml(name, deployment, 'deployment');
+      actions.push({
+        action: "create",
+        file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/deployment.yaml`,
+        content: sanitizedDeployment
+      });
+
+      const sanitizedService = validateAndSanitizeAppYaml(name, service, 'service');
+      actions.push({
+        action: "create",
+        file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/service.yaml`,
+        content: sanitizedService
+      });
+
+      if (ingress && ALLOW_PUBLIC_INGRESS) {
+        const sanitizedIngress = validateAndSanitizeAppYaml(name, ingress, 'ingress');
+        actions.push({
+          action: "create",
+          file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/ingress.yaml`,
+          content: sanitizedIngress
+        });
+      }
+    } catch (err) {
+      return res.status(400).json({ message: err.message });
+    }
+
+    const response = await gitlabApi.post(
+      `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+      {
+        branch: GITLAB_BRANCH,
+        commit_message: commit_message || `Create application ${name}`,
+        ...getCommitOptions(req),
+        actions: actions
+      }
+    );
+
+    res.status(201).json(response.data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+apiRouter.put("/applications/:name", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const { name } = req.params;
+    const { deployment, service, ingress, commit_message } = req.body;
+
+    if (!deployment || !service) {
+      return res.status(400).json({ message: "Both deployment and service YAML content are required." });
+    }
+
+    const actions = [];
+    try {
+      let existingFiles = [];
+      try {
+        const response = await gitlabApi.get(
+          `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
+          {
+            params: {
+              path: `${GITLAB_APPLICATIONS_PATH}/${name}`,
+              ref: GITLAB_BRANCH
+            }
+          }
+        );
+        existingFiles = response.data.map(f => f.name);
+      } catch (err) {
+        // directory may not exist
+      }
+
+      const sanitizedDeployment = validateAndSanitizeAppYaml(name, deployment, 'deployment');
+      actions.push({
+        action: existingFiles.includes("deployment.yaml") ? "update" : "create",
+        file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/deployment.yaml`,
+        content: sanitizedDeployment
+      });
+
+      const sanitizedService = validateAndSanitizeAppYaml(name, service, 'service');
+      actions.push({
+        action: existingFiles.includes("service.yaml") ? "update" : "create",
+        file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/service.yaml`,
+        content: sanitizedService
+      });
+
+      if (ALLOW_PUBLIC_INGRESS) {
+        if (ingress) {
+          const sanitizedIngress = validateAndSanitizeAppYaml(name, ingress, 'ingress');
+          actions.push({
+            action: existingFiles.includes("ingress.yaml") ? "update" : "create",
+            file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/ingress.yaml`,
+            content: sanitizedIngress
+          });
+        } else if (existingFiles.includes("ingress.yaml")) {
+          actions.push({
+            action: "delete",
+            file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/ingress.yaml`
+          });
+        }
+      }
+    } catch (err) {
+      return res.status(400).json({ message: err.message });
+    }
+
+    const response = await gitlabApi.post(
+      `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+      {
+        branch: GITLAB_BRANCH,
+        commit_message: commit_message || `Update application ${name}`,
+        ...getCommitOptions(req),
+        actions: actions
+      }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+apiRouter.delete("/applications/:name", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const { name } = req.params;
+
+    let existingFiles = [];
+    try {
+      const response = await gitlabApi.get(
+        `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
+        {
+          params: {
+            path: `${GITLAB_APPLICATIONS_PATH}/${name}`,
+            ref: GITLAB_BRANCH
+          }
+        }
+      );
+      existingFiles = response.data.filter(f => f.type === "blob").map(f => f.name);
+    } catch (err) {
+      return res.status(404).json({ message: `Application ${name} not found in Git.` });
+    }
+
+    if (existingFiles.length === 0) {
+      return res.json({ message: `Application ${name} is already empty or deleted.` });
+    }
+
+    const actions = existingFiles.map(filename => ({
+      action: "delete",
+      file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/${filename}`
+    }));
+
+    const response = await gitlabApi.post(
+      `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+      {
+        branch: GITLAB_BRANCH,
+        commit_message: `Delete application ${name}`,
+        ...getCommitOptions(req),
+        actions: actions
+      }
+    );
+
+    res.json({ message: `Application ${name} deleted from Git.`, gitlab: response.data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const { name } = req.params;
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+
+    let deploymentStatus = null;
+    try {
+      const depResponse = await appsV1Api.readNamespacedDeployment(name, namespace);
+      const d = depResponse.body || depResponse;
+      deploymentStatus = {
+        replicas: d.status?.replicas || 0,
+        readyReplicas: d.status?.readyReplicas || 0,
+        availableReplicas: d.status?.availableReplicas || 0,
+        conditions: d.spec?.replicas === 0 ? [{ type: "ScaledToZero", status: "True", message: "Application is scaled to zero." }] : (d.status?.conditions || [])
+      };
+    } catch (err) {
+      if (err.statusCode !== 404) {
+        console.error("Failed to read deployment from K8s:", err.message);
+      }
+    }
+
+    let serviceStatus = null;
+    try {
+      const svcResponse = await coreV1Api.readNamespacedService(name, namespace);
+      const s = svcResponse.body || svcResponse;
+      serviceStatus = {
+        type: s.spec?.type,
+        clusterIP: s.spec?.clusterIP,
+        ports: s.spec?.ports || []
+      };
+    } catch (err) {
+      // 404 is expected if not reconciled
+    }
+
+    let pods = [];
+    try {
+      const podsResponse = await coreV1Api.listNamespacedPod(namespace, undefined, undefined, undefined, undefined, `app.kubernetes.io/service=${name}`);
+      const items = podsResponse.body?.items || podsResponse.items || [];
+      pods = items.map(p => ({
+        name: p.metadata?.name,
+        phase: p.status?.phase,
+        restarts: p.status?.containerStatuses?.reduce((acc, c) => acc + (c.restartCount || 0), 0) || 0,
+        age: p.metadata?.creationTimestamp,
+        containerStatus: p.status?.containerStatuses?.map(c => ({
+          name: c.name,
+          ready: c.ready,
+          state: c.state
+        })) || []
+      }));
+    } catch (err) {
+      console.error("Failed to list pods from K8s:", err.message);
+    }
+
+    res.json({
+      name,
+      deployed: !!deploymentStatus,
+      deployment: deploymentStatus,
+      service: serviceStatus,
+      pods: pods
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+apiRouter.delete("/applications/:name/pods/:podName", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const { name, podName } = req.params;
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+
+    // 1. Get the pod first to verify it belongs to this application (strict isolation)
+    let pod;
+    try {
+      const podResponse = await coreV1Api.readNamespacedPod(podName, namespace);
+      pod = podResponse.body || podResponse;
+    } catch (err) {
+      if (err.statusCode === 404) {
+        return res.status(404).json({ message: `Pod ${podName} not found.` });
+      }
+      throw err;
+    }
+
+    const appLabel = pod.metadata?.labels?.['app.kubernetes.io/service'];
+    if (appLabel !== name) {
+      return res.status(403).json({ message: `Unauthorized: Pod ${podName} does not belong to application ${name}.` });
+    }
+
+    // 2. Pod is verified, delete it
+    await coreV1Api.deleteNamespacedPod(podName, namespace);
+    res.json({ message: `Pod ${podName} deleted successfully.` });
+  } catch (error) {
+    if (error.body) {
+      return sendK8sError(res, error);
+    }
+    next(error);
+  }
+});
 
 // --- Loki Log Integration ---
 const LOKI_URL = process.env.LOKI_URL || "http://localhost:4567";
