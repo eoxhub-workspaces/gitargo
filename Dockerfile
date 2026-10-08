@@ -14,7 +14,7 @@ WORKDIR /app
 COPY services/api/package*.json ./
 RUN npm install
 COPY services/api/ ./
-COPY --from=build-frontend /app/ui/build ./public
+COPY --from=build-frontend /app/ui/dist ./public
 EXPOSE 3000
 CMD ["npm", "run", "dev"]
 
