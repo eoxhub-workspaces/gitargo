@@ -1181,6 +1181,13 @@ const validateAndSanitizeAppYaml = (appName, content, fileType) => {
   }
 
   const sanitizedDocs = documents.map(docStr => {
+    // If the entire document is commented out (disabled), bypass validation and preserve it as-is
+    const lines = docStr.split("\n").filter(l => l.trim().length > 0);
+    const isDocDisabled = lines.length > 0 && lines.every(line => line.trim().startsWith("#"));
+    if (isDocDisabled) {
+      return docStr;
+    }
+
     const parsed = YAML.parse(docStr);
     if (!parsed || typeof parsed !== "object") {
       throw new Error(`Invalid YAML document format in ${fileType}.yaml`);
