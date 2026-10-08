@@ -66,6 +66,20 @@ export interface CommitHistory {
   message: string;
 }
 
+export interface IngressConfig {
+  domain: string;
+  ingressClassName: string;
+  dnsTarget: string;
+  certIssuer: string;
+  tlsEnabled: boolean;
+  middlewareEnabled: boolean;
+  middlewareName: string;
+  middlewareAnnotationKey: string;
+  middlewareAnnotationValueTemplate: string;
+  pathType: string;
+  extraAnnotations?: Record<string, string>;
+}
+
 export interface AppConfig {
   profiles: Record<
     string,
@@ -93,6 +107,7 @@ export interface AppConfig {
   allowPublishing: boolean;
   enableApplications?: boolean;
   allowPublicIngress?: boolean;
+  ingress?: IngressConfig;
 }
 
 export interface WorkflowExecution {

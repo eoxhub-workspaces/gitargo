@@ -78,6 +78,31 @@ The easiest way to run the service is using Docker.
 | `ENABLE_APPLICATIONS` | Enable the experimental Application Deployment Management tab. | `false` |
 | `GITLAB_APPLICATIONS_PATH` | The subdirectory in the repo containing application folders. | `applications` |
 | `ALLOW_PUBLIC_INGRESS` | Allow creating/editing `ingress.yaml` to expose applications publicly. | `false` |
+| `INGRESS_CLUSTER_CONFIG` | **JSON String**. Simplifies custom ingress class, CORS headers, Traefik middlewares, DNS target, and cert-manager configs per cluster. | *(See schema below)* |
+
+### Ingress Cluster Configuration (`INGRESS_CLUSTER_CONFIG`)
+
+When `ALLOW_PUBLIC_INGRESS` is enabled, the UI dynamically generates customized, relocatable `ingress.yaml` and Traefik `Middleware` resources. You can configure and override the entire ingress template per cluster by passing a single JSON block to `INGRESS_CLUSTER_CONFIG`:
+
+```json
+{
+  "domain": "your-domain.com",
+  "ingressClassName": "traefik",
+  "dnsTarget": "1.2.3.4",
+  "certIssuer": "letsencrypt",
+  "tlsEnabled": true,
+  "middlewareEnabled": true,
+  "middlewareName": "cors-headers",
+  "middlewareAnnotationKey": "traefik.ingress.kubernetes.io/router.middlewares",
+  "middlewareAnnotationValueTemplate": "${namespace}-${middlewareName}@kubernetescrd",
+  "pathType": "Prefix",
+  "extraAnnotations": {}
+}
+```
+
+* **Default Value Behavior:** The properties above represent the default fallback values.
+* **Auto-TLS:** If `domain` is specified in your JSON config and `tlsEnabled` is not explicitly set, TLS will automatically be enabled.
+* **Traefik CORS Middleware:** If `middlewareEnabled` is `true`, the UI will automatically append a fully defined Traefik `Middleware` resource (with safe CORS headers enabled) alongside the Ingress manifest.
 
 ## How it Works: Proactive Configuration Guard
 

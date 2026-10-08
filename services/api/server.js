@@ -23,6 +23,36 @@ const ENABLE_APPLICATIONS = process.env.ENABLE_APPLICATIONS === 'true';
 const GITLAB_APPLICATIONS_PATH = process.env.GITLAB_APPLICATIONS_PATH || 'applications';
 const ALLOW_PUBLIC_INGRESS = process.env.ALLOW_PUBLIC_INGRESS === 'true';
 
+// Ingress custom configuration
+const INGRESS_DEFAULTS = {
+  domain: "your-domain.com",
+  ingressClassName: "traefik",
+  dnsTarget: "1.2.3.4",
+  certIssuer: "",
+  tlsEnabled: false,
+  middlewareEnabled: false,
+  middlewareName: "cors-headers",
+  middlewareAnnotationKey: "traefik.ingress.kubernetes.io/router.middlewares",
+  middlewareAnnotationValueTemplate: "${namespace}-${middlewareName}@kubernetescrd",
+  pathType: "Prefix",
+  extraAnnotations: {}
+};
+
+let ingressClusterConfig = { ...INGRESS_DEFAULTS };
+
+if (process.env.INGRESS_CLUSTER_CONFIG) {
+  try {
+    const parsed = JSON.parse(process.env.INGRESS_CLUSTER_CONFIG);
+    ingressClusterConfig = { ...INGRESS_DEFAULTS, ...parsed };
+    // Automatically enable TLS if a domain is defined and tlsEnabled is not explicitly set to false
+    if (ingressClusterConfig.domain && parsed.tlsEnabled === undefined) {
+      ingressClusterConfig.tlsEnabled = true;
+    }
+  } catch (e) {
+    console.error("Failed to parse INGRESS_CLUSTER_CONFIG environment variable:", e.message);
+  }
+}
+
 if (!GITLAB_TOKEN || !GITLAB_PROJECT_ID) {
   console.error('ERROR: GITLAB_TOKEN and GITLAB_PROJECT_ID are required environment variables.');
   process.exit(1);
@@ -299,6 +329,7 @@ apiRouter.get("/config", (req, res) => {
     allowPublishing: process.env.ALLOW_PUBLISHING === "true",
     enableApplications: ENABLE_APPLICATIONS,
     allowPublicIngress: ALLOW_PUBLIC_INGRESS,
+    ingress: ingressClusterConfig,
     logViewerUrl: process.env.LOG_VIEWER_URL || `https://hub-test.eox.at/services/eoxhub-gateway/cif/log-viewer/search`,
     defaults: {
       namespace: process.env.ARGO_NAMESPACE || "default",

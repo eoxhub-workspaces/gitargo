@@ -78,21 +78,102 @@ spec:
   selector:
     app.kubernetes.io/service: ${name}`;
 
-const defaultIngressYaml = (name: string) => `apiVersion: networking.k8s.io/v1
+const generateIngressYaml = (
+  name: string,
+  namespace: string,
+  ingressConfig?: IngressConfig
+) => {
+  const domain = ingressConfig?.domain || "local";
+  const ingressClassName = ingressConfig?.ingressClassName || "traefik";
+  const pathType = ingressConfig?.pathType || "Prefix";
+  const tlsEnabled = ingressConfig?.tlsEnabled ?? false;
+  const dnsTarget = ingressConfig?.dnsTarget || "";
+  const certIssuer = ingressConfig?.certIssuer || "";
+  const middlewareEnabled = ingressConfig?.middlewareEnabled ?? false;
+  const middlewareName = ingressConfig?.middlewareName || "cors-headers";
+  const middlewareAnnotationKey =
+    ingressConfig?.middlewareAnnotationKey ||
+    "traefik.ingress.kubernetes.io/router.middlewares";
+  const middlewareAnnotationValueTemplate =
+    ingressConfig?.middlewareAnnotationValueTemplate ||
+    "${namespace}-${middlewareName}@kubernetescrd";
+
+  const resolvedMiddlewareValue = middlewareAnnotationValueTemplate
+    .replace("${namespace}", namespace)
+    .replace("${middlewareName}", middlewareName);
+
+  // Annotations
+  const annotations: Record<string, string> = {
+    ...(ingressConfig?.extraAnnotations || {})
+  };
+  if (dnsTarget) {
+    annotations["external-dns.alpha.kubernetes.io/target"] = dnsTarget;
+  }
+  if (certIssuer) {
+    annotations["cert-manager.io/cluster-issuer"] = certIssuer;
+  }
+  if (middlewareEnabled) {
+    annotations[middlewareAnnotationKey] = resolvedMiddlewareValue;
+  }
+
+  const annotationsSection =
+    Object.keys(annotations).length > 0
+      ? "\n  annotations:\n" +
+        Object.entries(annotations)
+          .map(([k, v]) => `    ${k}: ${JSON.stringify(v)}`)
+          .join("\n")
+      : "";
+
+  const tlsSection = tlsEnabled
+    ? `\n  tls:\n    - hosts:\n        - ${name}.${domain}\n      secretName: ${name}.${domain}-tls`
+    : "";
+
+  const ingressYaml = `apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: ${name}
+  name: ${name}${annotationsSection}
 spec:
+  ingressClassName: ${ingressClassName}${tlsSection}
   rules:
-    - http:
+    - host: ${name}.${domain}
+      http:
         paths:
           - path: /
-            pathType: Prefix
+            pathType: ${pathType}
             backend:
               service:
                 name: ${name}
                 port:
-                  number: 80}`;
+                  number: 80`;
+
+  if (middlewareEnabled) {
+    const middlewareYaml = `apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ${middlewareName}
+  namespace: ${namespace}
+spec:
+  headers:
+    accessControlAllowMethods:
+      - "PUT"
+      - "GET"
+      - "POST"
+      - "OPTIONS"
+    accessControlAllowOriginList:
+      - "*"
+    accessControlAllowCredentials: false
+    accessControlExposeHeaders:
+      - "Location"
+    accessControlAllowHeaders:
+      - "*"
+    addVaryHeader: true
+    accessControlMaxAge: 86400`;
+
+    return `${middlewareYaml}\n---\n${ingressYaml}`;
+  }
+
+  return ingressYaml;
+};
 
 const commentOutYaml = (yaml: string) => {
   if (!yaml) return "";
@@ -277,7 +358,13 @@ const ApplicationsView: React.FC = () => {
 
     setYamlDeployment(defaultDeploymentYaml("my-app"));
     setYamlService(defaultServiceYaml("my-app"));
-    setYamlIngress(defaultIngressYaml("my-app"));
+    setYamlIngress(
+      generateIngressYaml(
+        "my-app",
+        config?.defaults?.namespace || "default",
+        config?.ingress
+      )
+    );
     setActiveYamlTab("deployment");
 
     setShowFormModal(true);
@@ -627,21 +714,11 @@ spec:
     // Ingress YAML Generation
     let ingYaml = "";
     if (formIsPublic) {
-      ingYaml = `apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: ${name}
-spec:
-  rules:
-    - http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: ${name}
-                port:
-                  number: 80`;
+      ingYaml = generateIngressYaml(
+        name,
+        config?.defaults?.namespace || "default",
+        config?.ingress
+      );
       setYamlIngress(ingYaml);
     } else {
       setYamlIngress("");
