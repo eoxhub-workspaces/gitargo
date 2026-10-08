@@ -801,6 +801,16 @@ spec:
     }
   };
 
+  const getIngressUrl = (app: Application) => {
+    if (!config?.ingress?.domain) return null;
+    const hasIngress = app.files.includes("ingress.yaml");
+    if (!hasIngress) return null;
+
+    const domain = config.ingress.domain;
+    const proto = config.ingress.tlsEnabled ? "https" : "http";
+    return `${proto}://${app.name}.${domain}`;
+  };
+
   const getOverallStatusBadge = (appName: string) => {
     if (isAppDisabled(appName)) {
       return (
@@ -966,6 +976,19 @@ spec:
                         <div className="text-sm font-semibold text-gray-900">
                           {app.name}
                         </div>
+                        {getIngressUrl(app) && (
+                          <div className="text-xs">
+                            <a
+                              href={getIngressUrl(app)!}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:text-blue-800 hover:underline flex items-center mt-0.5"
+                            >
+                              <EyeIcon className="h-3 w-3 mr-1 inline-block" />
+                              {getIngressUrl(app)}
+                            </a>
+                          </div>
+                        )}
                         <div className="text-xs text-gray-400">
                           Folder: applications/{app.name}
                         </div>
@@ -1663,6 +1686,33 @@ spec:
                                   : "Unknown"}
                               </span>
                             </div>
+                            {pod.containerStatus &&
+                              pod.containerStatus.length > 0 && (
+                                <div className="mt-2 space-y-1">
+                                  {pod.containerStatus.map((c: any) => {
+                                    if (c.state?.waiting) {
+                                      return (
+                                        <div
+                                          key={c.name}
+                                          className="p-2 bg-red-50 border border-red-100 rounded text-xs text-red-700 flex flex-col space-y-0.5"
+                                        >
+                                          <div className="font-semibold flex items-center">
+                                            <span className="w-1.5 h-1.5 bg-red-500 rounded-full mr-1.5 inline-block"></span>
+                                            Container "{c.name}" Error:{" "}
+                                            {c.state.waiting.reason}
+                                          </div>
+                                          {c.state.waiting.message && (
+                                            <div className="text-red-600 pl-3 italic font-mono break-all">
+                                              {c.state.waiting.message}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    }
+                                    return null;
+                                  })}
+                                </div>
+                              )}
                           </div>
                           <div className="flex space-x-2">
                             <button
