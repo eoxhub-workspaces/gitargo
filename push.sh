@@ -25,7 +25,7 @@ mkdir -p /tmp/gitargo-push
 cp -r services/api/* /tmp/gitargo-push/
 # Remove the stub index.html and copy the built frontend assets
 rm -rf /tmp/gitargo-push/public/*
-cp -r services/ui/build/* /tmp/gitargo-push/public/
+cp -r services/ui/dist/* /tmp/gitargo-push/public/
 
 # Copy the staged files to the container's working directory (/app)
 kubectl cp /tmp/gitargo-push/. $NAMESPACE/${POD}:/app

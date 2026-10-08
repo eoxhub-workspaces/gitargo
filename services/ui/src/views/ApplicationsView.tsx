@@ -94,11 +94,49 @@ spec:
                 port:
                   number: 80}`;
 
+const commentOutYaml = (yaml: string) => {
+  if (!yaml) return "";
+  return yaml
+    .split("\n")
+    .map((line) => {
+      if (line.trim().startsWith("#")) return line;
+      return `# ${line}`;
+    })
+    .join("\n");
+};
+
+const uncommentYaml = (yaml: string) => {
+  if (!yaml) return "";
+  return yaml
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("# ")) return line.slice(2);
+      if (line.startsWith("#")) return line.slice(1);
+      return line;
+    })
+    .join("\n");
+};
+
+const isYamlDisabled = (yaml: string) => {
+  if (!yaml) return false;
+  const lines = yaml.split("\n").filter((l) => l.trim().length > 0);
+  if (lines.length === 0) return false;
+  return lines.every((line) => line.trim().startsWith("#"));
+};
+
 const ApplicationsView: React.FC = () => {
   const [apps, setApps] = useState<Application[]>([]);
   const [statuses, setStatuses] = useState<Record<string, ApplicationStatus>>(
     {}
   );
+  const [appYamls, setAppYamls] = useState<Record<string, ApplicationYamls>>(
+    {}
+  );
+  const isAppDisabled = (appName: string) => {
+    const yamls = appYamls[appName];
+    if (!yamls) return false;
+    return isYamlDisabled(yamls.deployment || "");
+  };
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -112,6 +150,9 @@ const ApplicationsView: React.FC = () => {
   const [selectedAppName, setSelectedAppName] = useState<string>("");
   const [isEditing, setIsEditing] = useState(false);
   const [expertMode, setExpertMode] = useState(false);
+  const [isParseable, setIsParseable] = useState(true);
+  const [formEnv, setFormEnv] = useState<{ key: string; value: string }[]>([]);
+  const [formCommand, setFormCommand] = useState("");
 
   // Logs modal state
   const [logPodName, setLogPodName] = useState("");
@@ -160,14 +201,37 @@ const ApplicationsView: React.FC = () => {
             return { name: app.name, status: null };
           })
       );
-      const results = await Promise.all(statusPromises);
+
+      // Fetch YAML for each application
+      const yamlPromises = applications.map((app) =>
+        getApplication(app.name)
+          .then((yamls) => ({ name: app.name, yamls }))
+          .catch((err) => {
+            console.error(`Error loading YAML for ${app.name}`, err);
+            return { name: app.name, yamls: null };
+          })
+      );
+
+      const [statusResults, yamlResults] = await Promise.all([
+        Promise.all(statusPromises),
+        Promise.all(yamlPromises)
+      ]);
+
       const newStatuses: Record<string, ApplicationStatus> = {};
-      for (const res of results) {
+      for (const res of statusResults) {
         if (res.status) {
           newStatuses[res.name] = res.status;
         }
       }
       setStatuses(newStatuses);
+
+      const newYamls: Record<string, ApplicationYamls> = {};
+      for (const res of yamlResults) {
+        if (res.yamls) {
+          newYamls[res.name] = res.yamls;
+        }
+      }
+      setAppYamls(newYamls);
     } catch (err: any) {
       toast.error("Failed to fetch applications list: " + err.message);
     } finally {
@@ -196,6 +260,7 @@ const ApplicationsView: React.FC = () => {
   const handleOpenNewModal = () => {
     setIsEditing(false);
     setExpertMode(false);
+    setIsParseable(true);
     setFormName("");
     setFormImage("nginx:alpine");
     setFormPort(80);
@@ -207,6 +272,8 @@ const ApplicationsView: React.FC = () => {
     setAnnServiceName("");
     setAnnAllowAnon(false);
     setAnnStopUnused(false);
+    setFormEnv([]);
+    setFormCommand("");
 
     setYamlDeployment(defaultDeploymentYaml("my-app"));
     setYamlService(defaultServiceYaml("my-app"));
@@ -216,18 +283,106 @@ const ApplicationsView: React.FC = () => {
     setShowFormModal(true);
   };
 
+  const parseYamlToForm = (depYamlStr: string, svcYamlStr: string) => {
+    try {
+      const dep = YAML.parse(depYamlStr);
+      const svc = YAML.parse(svcYamlStr);
+
+      if (!dep || dep.kind !== "Deployment") return false;
+
+      const container = dep.spec?.template?.spec?.containers?.[0];
+      if (!container) return false;
+
+      // Extract form values
+      const name = dep.metadata?.name || "";
+      const image = container.image || "";
+      const port = container.ports?.[0]?.containerPort || 80;
+      const cpuLimit = container.resources?.limits?.cpu || "1";
+      const memLimit = container.resources?.limits?.memory || "2Gi";
+      const cpuReq = container.resources?.requests?.cpu || "0.1";
+      const memReq = container.resources?.requests?.memory || "0.5Gi";
+
+      // Extract env variables
+      const envs: { key: string; value: string }[] = [];
+      if (Array.isArray(container.env)) {
+        container.env.forEach((e: any) => {
+          if (e && e.name) {
+            envs.push({ key: e.name, value: String(e.value ?? "") });
+          }
+        });
+      }
+
+      // Extract command
+      let command = "";
+      if (Array.isArray(container.command)) {
+        if (
+          container.command[0] === "/bin/sh" &&
+          container.command[1] === "-c" &&
+          typeof container.command[2] === "string"
+        ) {
+          command = container.command[2];
+        } else {
+          command = container.command.join(" ");
+        }
+      }
+
+      // Extract service annotations
+      const svcAnnotations = svc?.metadata?.annotations || {};
+      const serviceName = svcAnnotations["eoxhub/service-name"] || "";
+      const allowAnon = svcAnnotations["eoxhub/allow-anonymous"] === "true";
+      const stopUnused = svcAnnotations["eoxhub/stop-if-unused"] === "true";
+
+      setFormName(name);
+      setFormImage(image);
+      setFormPort(port);
+      setFormCpuLimit(cpuLimit);
+      setFormMemLimit(memLimit);
+      setFormCpuReq(cpuReq);
+      setFormMemReq(memReq);
+      setFormEnv(envs);
+      setFormCommand(command);
+      setAnnServiceName(serviceName);
+      setAnnAllowAnon(allowAnon);
+      setAnnStopUnused(stopUnused);
+
+      return true;
+    } catch (err) {
+      console.warn("Failed to parse YAML back into form inputs", err);
+      return false;
+    }
+  };
+
   const handleOpenEditModal = async (appName: string) => {
     setIsEditing(true);
     setSelectedAppName(appName);
-    setExpertMode(true); // Default edit to expert mode since we can't reliably parse arbitrary YAML back into standard form inputs
     setActiveYamlTab("deployment");
 
     const loadingToast = toast.loading("Loading application config...");
     try {
       const yamls = await getApplication(appName);
-      setYamlDeployment(yamls.deployment || "");
-      setYamlService(yamls.service || "");
-      setYamlIngress(yamls.ingress || "");
+      const disabled = isYamlDisabled(yamls.deployment || "");
+
+      const rawDep = disabled
+        ? uncommentYaml(yamls.deployment || "")
+        : yamls.deployment || "";
+      const rawSvc = disabled
+        ? uncommentYaml(yamls.service || "")
+        : yamls.service || "";
+      const rawIng =
+        disabled && yamls.ingress
+          ? uncommentYaml(yamls.ingress)
+          : yamls.ingress || "";
+
+      setYamlDeployment(rawDep);
+      setYamlService(rawSvc);
+      setYamlIngress(rawIng);
+
+      // Try to parse into form state. If successful, we can offer Guided Form!
+      const parsedSuccessfully = parseYamlToForm(rawDep, rawSvc);
+      setFormIsPublic(!!rawIng);
+      setIsParseable(parsedSuccessfully);
+      setExpertMode(!parsedSuccessfully); // default to form if parseable, else expert
+
       setShowFormModal(true);
       toast.dismiss(loadingToast);
     } catch (err: any) {
@@ -268,6 +423,61 @@ const ApplicationsView: React.FC = () => {
       toast.error(`Failed to delete application: ${err.message}`, {
         id: delToast
       });
+    }
+  };
+
+  const handleToggleDisableApp = async (
+    appName: string,
+    currentlyDisabled: boolean
+  ) => {
+    const actionText = currentlyDisabled ? "Enabling" : "Disabling";
+    const toggleToast = toast.loading(
+      `${actionText} application "${appName}"...`
+    );
+    try {
+      // 1. Fetch current YAMLs
+      const yamls = await getApplication(appName);
+
+      // 2. Modify YAMLs
+      let updatedYamls: ApplicationYamls;
+      if (currentlyDisabled) {
+        updatedYamls = {
+          deployment: uncommentYaml(yamls.deployment || ""),
+          service: uncommentYaml(yamls.service || ""),
+          ingress: yamls.ingress ? uncommentYaml(yamls.ingress) : undefined
+        };
+      } else {
+        updatedYamls = {
+          deployment: commentOutYaml(yamls.deployment || ""),
+          service: commentOutYaml(yamls.service || ""),
+          ingress: yamls.ingress ? commentOutYaml(yamls.ingress) : undefined
+        };
+      }
+
+      // 3. Save updated YAMLs
+      await updateApplication(
+        appName,
+        updatedYamls,
+        `${actionText} application ${appName}`
+      );
+      toast.success(
+        `Application "${appName}" ${
+          currentlyDisabled ? "enabled" : "disabled"
+        } successfully.`,
+        {
+          id: toggleToast
+        }
+      );
+      loadData();
+    } catch (err: any) {
+      toast.error(
+        `Failed to ${currentlyDisabled ? "enable" : "disable"} application: ${
+          err.message
+        }`,
+        {
+          id: toggleToast
+        }
+      );
     }
   };
 
@@ -316,8 +526,35 @@ const ApplicationsView: React.FC = () => {
     }
   };
 
-  const syncFormToYaml = () => {
-    const name = formName.trim() || "my-app";
+  const syncFormToYaml = (nameToUse?: string) => {
+    const name = nameToUse || formName.trim() || "my-app";
+
+    let commandSection = "";
+    if (formCommand.trim()) {
+      const lines = formCommand.trim().split("\n");
+      if (lines.length === 1) {
+        commandSection = `\n          command: ["/bin/sh", "-c", ${JSON.stringify(
+          lines[0]
+        )}]`;
+      } else {
+        const indentedCommand = lines
+          .map((l) => `              ${l}`)
+          .join("\n");
+        commandSection = `\n          command:\n            - /bin/sh\n            - -c\n            - |\n${indentedCommand}`;
+      }
+    }
+
+    let envSection = "";
+    if (formEnv.length > 0) {
+      envSection = "\n          env:";
+      formEnv.forEach(({ key, value }) => {
+        if (key.trim()) {
+          envSection += `\n            - name: ${key.trim()}\n              value: ${JSON.stringify(
+            value
+          )}`;
+        }
+      });
+    }
 
     // Deployment YAML Generation
     const depYaml = `apiVersion: apps/v1
@@ -345,7 +582,7 @@ spec:
           ports:
             - name: http
               containerPort: ${formPort}
-              protocol: TCP
+              protocol: TCP${commandSection}${envSection}
           resources:
             limits:
               cpu: "${formCpuLimit}"
@@ -388,8 +625,9 @@ spec:
     setYamlService(svcYaml);
 
     // Ingress YAML Generation
+    let ingYaml = "";
     if (formIsPublic) {
-      const ingYaml = `apiVersion: networking.k8s.io/v1
+      ingYaml = `apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ${name}
@@ -408,6 +646,12 @@ spec:
     } else {
       setYamlIngress("");
     }
+
+    return {
+      deployment: depYaml,
+      service: svcYaml,
+      ingress: formIsPublic ? ingYaml : ""
+    };
   };
 
   const handleSaveApplication = async (e: React.FormEvent) => {
@@ -434,18 +678,27 @@ spec:
       return;
     }
 
+    let finalDeployment = yamlDeployment;
+    let finalService = yamlService;
+    let finalIngress = yamlIngress;
+
     // In Form mode, synchronize right before saving
     if (!expertMode) {
-      syncFormToYaml();
+      const synced = syncFormToYaml(appName);
+      finalDeployment = synced.deployment;
+      finalService = synced.service;
+      finalIngress = synced.ingress;
     }
 
     const saveToast = toast.loading("Saving application deployment...");
     try {
       const yamls: ApplicationYamls = {
-        deployment: yamlDeployment,
-        service: yamlService,
+        deployment: finalDeployment,
+        service: finalService,
         ingress:
-          formIsPublic || (expertMode && yamlIngress) ? yamlIngress : undefined
+          formIsPublic || (expertMode && finalIngress)
+            ? finalIngress
+            : undefined
       };
 
       if (isEditing) {
@@ -472,6 +725,13 @@ spec:
   };
 
   const getOverallStatusBadge = (appName: string) => {
+    if (isAppDisabled(appName)) {
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-500 border border-gray-300">
+          Disabled
+        </span>
+      );
+    }
     const status = statuses[appName];
     if (!status)
       return (
@@ -616,7 +876,9 @@ spec:
               {apps.map((app) => (
                 <tr
                   key={app.name}
-                  className="hover:bg-gray-50 transition-colors"
+                  className={`hover:bg-gray-50 transition-colors ${
+                    isAppDisabled(app.name) ? "opacity-60 bg-gray-50/50" : ""
+                  }`}
                 >
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center">
@@ -651,12 +913,36 @@ spec:
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <button
                       onClick={() => handleOpenStatusModal(app.name)}
-                      className="text-[#004170] hover:text-[#002f54] inline-flex items-center mr-4"
+                      disabled={isAppDisabled(app.name)}
+                      className={`inline-flex items-center mr-4 ${
+                        isAppDisabled(app.name)
+                          ? "text-gray-300 cursor-not-allowed"
+                          : "text-[#004170] hover:text-[#002f54]"
+                      }`}
                       title="Manage Status"
                     >
                       <DocumentMagnifyingGlassIcon className="h-5 w-5 mr-1" />
                       Manage
                     </button>
+                    {isAppDisabled(app.name) ? (
+                      <button
+                        onClick={() => handleToggleDisableApp(app.name, true)}
+                        className="text-green-600 hover:text-green-900 inline-flex items-center mr-4"
+                        title="Enable Application"
+                      >
+                        <CheckCircleIcon className="h-4 w-4 mr-1" />
+                        Enable
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleToggleDisableApp(app.name, false)}
+                        className="text-orange-600 hover:text-orange-900 inline-flex items-center mr-4"
+                        title="Disable Application"
+                      >
+                        <XMarkIcon className="h-4 w-4 mr-1" />
+                        Disable
+                      </button>
+                    )}
                     <button
                       onClick={() => handleOpenEditModal(app.name)}
                       className="text-indigo-600 hover:text-indigo-900 inline-flex items-center mr-4"
@@ -720,11 +1006,11 @@ spec:
 
               <form onSubmit={handleSaveApplication}>
                 <div className="bg-white px-6 py-4">
-                  {/* Mode Selector (Only on New Applications, edit starts directly in expert mode) */}
-                  {!isEditing && (
+                  {/* Mode Selector */}
+                  {(!isEditing || isParseable) && (
                     <div className="flex justify-between items-center mb-6 border-b border-gray-100 pb-4">
                       <span className="text-sm font-semibold text-gray-700">
-                        Creation Method:
+                        {isEditing ? "Configuration Mode:" : "Creation Method:"}
                       </span>
                       <div className="relative z-0 inline-flex shadow-sm rounded-md">
                         <button
@@ -922,6 +1208,108 @@ spec:
                           </div>
                         </div>
                       )}
+
+                      {/* Environment Variables */}
+                      <div className="border-t border-gray-100 pt-4 mt-4">
+                        <div className="flex justify-between items-center mb-2">
+                          <label className="block text-sm font-medium text-gray-700">
+                            Environment Variables
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFormEnv([...formEnv, { key: "", value: "" }])
+                            }
+                            className="inline-flex items-center px-2 py-1 border border-gray-300 shadow-sm text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none"
+                          >
+                            <PlusIcon className="h-3 w-3 mr-1 text-gray-500" />
+                            Add
+                          </button>
+                        </div>
+                        {formEnv.length === 0 ? (
+                          <p className="text-xs text-gray-400 italic">
+                            No environment variables defined.
+                          </p>
+                        ) : (
+                          <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                            {formEnv.map((env, idx) => (
+                              <div
+                                key={idx}
+                                className="flex items-center space-x-2"
+                              >
+                                <input
+                                  type="text"
+                                  value={env.key}
+                                  onChange={(e) => {
+                                    const updated = [...formEnv];
+                                    updated[idx].key = e.target.value
+                                      .toUpperCase()
+                                      .replace(/[^A-Z0-9_]/g, "");
+                                    setFormEnv(updated);
+                                  }}
+                                  placeholder="KEY"
+                                  className="block w-1/2 border border-gray-300 rounded-md shadow-sm py-1.5 px-3 focus:outline-none focus:ring-[#004170] focus:border-[#004170] sm:text-sm"
+                                />
+                                <input
+                                  type="text"
+                                  value={env.value}
+                                  onChange={(e) => {
+                                    const updated = [...formEnv];
+                                    updated[idx].value = e.target.value;
+                                    setFormEnv(updated);
+                                  }}
+                                  placeholder="Value"
+                                  className="block w-1/2 border border-gray-300 rounded-md shadow-sm py-1.5 px-3 focus:outline-none focus:ring-[#004170] focus:border-[#004170] sm:text-sm"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setFormEnv(
+                                      formEnv.filter((_, i) => i !== idx)
+                                    )
+                                  }
+                                  className="text-red-500 hover:text-red-700 p-1"
+                                >
+                                  <TrashIcon className="h-4 w-4" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Command / Arguments */}
+                      <div className="border-t border-gray-100 pt-4 mt-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Container Start Command
+                        </label>
+                        <div
+                          className="border border-gray-300 rounded-md overflow-hidden"
+                          style={{ height: "120px" }}
+                        >
+                          <Editor
+                            height="100%"
+                            language="shell"
+                            theme="vs-light"
+                            value={formCommand}
+                            onChange={(val) => setFormCommand(val || "")}
+                            options={{
+                              minimap: { enabled: false },
+                              lineNumbers: "off",
+                              glyphMargin: false,
+                              folding: false,
+                              lineDecorationsWidth: 0,
+                              lineNumbersMinChars: 0,
+                              fontSize: 13,
+                              wordWrap: "on"
+                            }}
+                          />
+                        </div>
+                        <p className="mt-1 text-xs text-gray-400">
+                          Enter any startup command. Multi-line commands will
+                          run as a shell script using `/bin/sh -c`.
+                        </p>
+                      </div>
                     </div>
                   ) : (
                     /* EXPERT MODE (YAML EDITOR) */

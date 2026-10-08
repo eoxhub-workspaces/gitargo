@@ -135,6 +135,10 @@ if (BASE_PATH !== "") {
     `${BASE_PATH}/static`,
     express.static(path.join(__dirname, "public", "static"))
   );
+  app.use(
+    BASE_PATH,
+    express.static(path.join(__dirname, "public"))
+  );
 }
 app.use("/static", express.static(path.join(__dirname, "public", "static")));
 app.use(express.static(path.join(__dirname, "public")));
@@ -1448,7 +1452,7 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
 
     let deploymentStatus = null;
     try {
-      const depResponse = await appsV1Api.readNamespacedDeployment(name, namespace);
+      const depResponse = await appsV1Api.readNamespacedDeployment({ name, namespace });
       const d = depResponse.body || depResponse;
       deploymentStatus = {
         replicas: d.status?.replicas || 0,
@@ -1464,7 +1468,7 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
 
     let serviceStatus = null;
     try {
-      const svcResponse = await coreV1Api.readNamespacedService(name, namespace);
+      const svcResponse = await coreV1Api.readNamespacedService({ name, namespace });
       const s = svcResponse.body || svcResponse;
       serviceStatus = {
         type: s.spec?.type,
@@ -1477,7 +1481,10 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
 
     let pods = [];
     try {
-      const podsResponse = await coreV1Api.listNamespacedPod(namespace, undefined, undefined, undefined, undefined, `app.kubernetes.io/service=${name}`);
+      const podsResponse = await coreV1Api.listNamespacedPod({
+        namespace,
+        labelSelector: `app.kubernetes.io/service=${name}`
+      });
       const items = podsResponse.body?.items || podsResponse.items || [];
       pods = items.map(p => ({
         name: p.metadata?.name,
@@ -1514,7 +1521,7 @@ apiRouter.delete("/applications/:name/pods/:podName", requiresApplicationsEnable
     // 1. Get the pod first to verify it belongs to this application (strict isolation)
     let pod;
     try {
-      const podResponse = await coreV1Api.readNamespacedPod(podName, namespace);
+      const podResponse = await coreV1Api.readNamespacedPod({ name: podName, namespace });
       pod = podResponse.body || podResponse;
     } catch (err) {
       if (err.statusCode === 404) {
@@ -1529,7 +1536,7 @@ apiRouter.delete("/applications/:name/pods/:podName", requiresApplicationsEnable
     }
 
     // 2. Pod is verified, delete it
-    await coreV1Api.deleteNamespacedPod(podName, namespace);
+    await coreV1Api.deleteNamespacedPod({ name: podName, namespace });
     res.json({ message: `Pod ${podName} deleted successfully.` });
   } catch (error) {
     if (error.body) {
@@ -1958,7 +1965,10 @@ apiRouter.get("/artifacts/:workflow/:nodeId/:artifactName", async (req, res, nex
     const coreV1Api = kc.makeApiClient(k8s.CoreV1Api);
     if (s3Config.accessKeySecret) {
       try {
-        const secretRes = await coreV1Api.readNamespacedSecret(s3Config.accessKeySecret.name, namespace);
+        const secretRes = await coreV1Api.readNamespacedSecret({
+          name: s3Config.accessKeySecret.name,
+          namespace
+        });
         if (secretRes.body.data && secretRes.body.data[s3Config.accessKeySecret.key]) {
           accessKey = Buffer.from(secretRes.body.data[s3Config.accessKeySecret.key], 'base64').toString('utf8');
         }
@@ -1969,7 +1979,10 @@ apiRouter.get("/artifacts/:workflow/:nodeId/:artifactName", async (req, res, nex
     
     if (s3Config.secretKeySecret) {
       try {
-        const secretRes = await coreV1Api.readNamespacedSecret(s3Config.secretKeySecret.name, namespace);
+        const secretRes = await coreV1Api.readNamespacedSecret({
+          name: s3Config.secretKeySecret.name,
+          namespace
+        });
         if (secretRes.body.data && secretRes.body.data[s3Config.secretKeySecret.key]) {
           secretKey = Buffer.from(secretRes.body.data[s3Config.secretKeySecret.key], 'base64').toString('utf8');
         }
@@ -2090,6 +2103,13 @@ if (BASE_PATH !== "") {
 app.use('/api', apiRouter);
 
 // --- 3. CATCH-ALL ROUTE ---
+
+if (BASE_PATH !== "") {
+  // Redirect base path without trailing slash to base path with trailing slash
+  app.get(BASE_PATH, (req, res) => {
+    res.redirect(`${BASE_PATH}/`);
+  });
+}
 
 // Catch-all route to serve index.html for React Router
 if (BASE_PATH !== "") {
