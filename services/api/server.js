@@ -1174,60 +1174,70 @@ const requiresApplicationsEnabled = (req, res, next) => {
 };
 
 const validateAndSanitizeAppYaml = (appName, content, fileType) => {
-  const parsed = YAML.parse(content);
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error(`Invalid YAML format for ${fileType}.yaml`);
+  // Support multi-document YAML configurations (e.g., Middleware + Ingress) safely
+  const documents = content.split("---").map(doc => doc.trim()).filter(Boolean);
+  if (documents.length === 0) {
+    throw new Error(`Empty YAML content for ${fileType}.yaml`);
   }
-  
-  if (!parsed.metadata) parsed.metadata = {};
-  
-  // Enforce namespace
-  const enforcedNamespace = process.env.ARGO_NAMESPACE || "default";
-  parsed.metadata.namespace = enforcedNamespace;
-  
-  // Enforce labels
-  if (!parsed.metadata.labels) parsed.metadata.labels = {};
-  parsed.metadata.labels['app.kubernetes.io/service'] = appName;
-  
-  // Enforce selector matchLabels for deployment
-  if (fileType === 'deployment') {
-    if (!parsed.spec) parsed.spec = {};
-    if (!parsed.spec.selector) parsed.spec.selector = {};
-    if (!parsed.spec.selector.matchLabels) parsed.spec.selector.matchLabels = {};
-    parsed.spec.selector.matchLabels['app.kubernetes.io/service'] = appName;
-    
-    if (!parsed.spec.template) parsed.spec.template = {};
-    if (!parsed.spec.template.metadata) parsed.spec.template.metadata = {};
-    if (!parsed.spec.template.metadata.labels) parsed.spec.template.metadata.labels = {};
-    parsed.spec.template.metadata.labels['app.kubernetes.io/service'] = appName;
-  }
-  
-  // Enforce selector for service
-  if (fileType === 'service') {
-    if (!parsed.spec) parsed.spec = {};
-    if (!parsed.spec.selector) parsed.spec.selector = {};
-    parsed.spec.selector['app.kubernetes.io/service'] = appName;
-  }
-  
-  // Enforce ingress rules targeting the service
-  if (fileType === 'ingress') {
-    if (!ALLOW_PUBLIC_INGRESS) {
-      throw new Error("Ingress creation is disabled by administrator.");
+
+  const sanitizedDocs = documents.map(docStr => {
+    const parsed = YAML.parse(docStr);
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error(`Invalid YAML document format in ${fileType}.yaml`);
     }
-    if (parsed.spec?.rules) {
-      for (const rule of parsed.spec.rules) {
-        if (rule.http?.paths) {
-          for (const p of rule.http.paths) {
-            if (p.backend?.service?.name && p.backend.service.name !== appName) {
-              p.backend.service.name = appName;
+
+    if (!parsed.metadata) parsed.metadata = {};
+
+    // Strictly override and enforce namespace to match the configured administrative space
+    const enforcedNamespace = process.env.ARGO_NAMESPACE || "default";
+    parsed.metadata.namespace = enforcedNamespace;
+
+    // Enforce labels
+    if (!parsed.metadata.labels) parsed.metadata.labels = {};
+    parsed.metadata.labels['app.kubernetes.io/service'] = appName;
+
+    // Enforce selector matchLabels for deployment
+    if (fileType === 'deployment' && parsed.kind === 'Deployment') {
+      if (!parsed.spec) parsed.spec = {};
+      if (!parsed.spec.selector) parsed.spec.selector = {};
+      if (!parsed.spec.selector.matchLabels) parsed.spec.selector.matchLabels = {};
+      parsed.spec.selector.matchLabels['app.kubernetes.io/service'] = appName;
+
+      if (!parsed.spec.template) parsed.spec.template = {};
+      if (!parsed.spec.template.metadata) parsed.spec.template.metadata = {};
+      if (!parsed.spec.template.metadata.labels) parsed.spec.template.metadata.labels = {};
+      parsed.spec.template.metadata.labels['app.kubernetes.io/service'] = appName;
+    }
+
+    // Enforce selector for service
+    if (fileType === 'service' && parsed.kind === 'Service') {
+      if (!parsed.spec) parsed.spec = {};
+      if (!parsed.spec.selector) parsed.spec.selector = {};
+      parsed.spec.selector['app.kubernetes.io/service'] = appName;
+    }
+
+    // Enforce ingress rules targeting the service
+    if (fileType === 'ingress' && parsed.kind === 'Ingress') {
+      if (!ALLOW_PUBLIC_INGRESS) {
+        throw new Error("Ingress creation is disabled by administrator.");
+      }
+      if (parsed.spec?.rules) {
+        for (const rule of parsed.spec.rules) {
+          if (rule.http?.paths) {
+            for (const p of rule.http.paths) {
+              if (p.backend?.service?.name && p.backend.service.name !== appName) {
+                p.backend.service.name = appName;
+              }
             }
           }
         }
       }
     }
-  }
-  
-  return YAML.stringify(parsed);
+
+    return YAML.stringify(parsed);
+  });
+
+  return sanitizedDocs.join("\n---\n");
 };
 
 apiRouter.get("/applications", requiresApplicationsEnabled, async (req, res, next) => {
@@ -1673,10 +1683,10 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
 
     // Sanitize user inputs to prevent LogQL injection
     const safeId = id.replace(/"/g, '');
-    const safeNamespace = namespace ? namespace.toString().replace(/"/g, '') : undefined;
     const safeQuery = query ? query.toString().replace(/"/g, '\\"') : undefined;
 
-    const ns = safeNamespace || NAMESPACE;
+    // Enforce strict namespace isolation
+    const ns = NAMESPACE;
 
     // Use 4 hours as a default temporal subset window instead of 24 hours for faster indexing
     const startNs = toLokiTimestamp(start_time || new Date(Date.now() - 3600000 * 4).toISOString());
