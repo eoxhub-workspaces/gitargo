@@ -1553,12 +1553,55 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
       console.error("Failed to list pods from K8s:", err.message);
     }
 
+    let vulnerabilities = null;
+    try {
+      const reportsResponse = await customObjectsApi.listNamespacedCustomObject({
+        group: 'aquasecurity.github.io',
+        version: 'v1alpha1',
+        namespace,
+        plural: 'vulnerabilityreports'
+      });
+      const items = reportsResponse.body?.items || reportsResponse.items || [];
+      
+      // Filter reports matching the current application name
+      const appReports = items.filter(item => {
+        const rName = item.metadata?.labels?.['trivy-operator.resource.name'] || '';
+        const cName = item.metadata?.labels?.['trivy-operator.container.name'] || '';
+        const repName = item.metadata?.name || '';
+        return rName === name || 
+               rName.startsWith(`${name}-`) || 
+               cName === name ||
+               repName.startsWith(`replicaset-${name}-`) ||
+               repName.startsWith(`deployment-${name}-`);
+      });
+
+      if (appReports.length > 0) {
+        vulnerabilities = appReports.map(item => ({
+          container: item.metadata?.labels?.['trivy-operator.container.name'] || 'unknown',
+          summary: item.report?.summary || { criticalCount: 0, highCount: 0, mediumCount: 0, lowCount: 0 },
+          topVulnerabilities: item.report?.vulnerabilities?.slice(0, 5).map(v => ({
+            id: v.vulnerabilityID,
+            title: v.title,
+            severity: v.severity,
+            pkg: v.resource,
+            installedVersion: v.installedVersion,
+            fixedVersion: v.fixedVersion,
+            link: v.primaryLink
+          })) || []
+        }));
+      }
+    } catch (err) {
+      // Trivy operator might not be installed, which is expected
+      console.debug("Failed to fetch Trivy vulnerability reports:", err.message);
+    }
+
     res.json({
       name,
       deployed: !!deploymentStatus,
       deployment: deploymentStatus,
       service: serviceStatus,
-      pods: pods
+      pods: pods,
+      vulnerabilities: vulnerabilities
     });
   } catch (error) {
     next(error);

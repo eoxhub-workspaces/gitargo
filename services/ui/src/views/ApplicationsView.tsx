@@ -811,6 +811,15 @@ spec:
     return `${proto}://${app.name}.${domain}`;
   };
 
+  const getSevereVulnerabilitiesCount = (appName: string) => {
+    const status = statuses[appName];
+    if (!status?.vulnerabilities) return 0;
+    return status.vulnerabilities.reduce((acc, v) => {
+      const s = v.summary;
+      return acc + (s.criticalCount || 0) + (s.highCount || 0);
+    }, 0);
+  };
+
   const getOverallStatusBadge = (appName: string) => {
     if (isAppDisabled(appName)) {
       return (
@@ -1008,7 +1017,20 @@ spec:
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    {getOverallStatusBadge(app.name)}
+                    <div className="flex flex-col space-y-1">
+                      <div>{getOverallStatusBadge(app.name)}</div>
+                      {getSevereVulnerabilitiesCount(app.name) > 0 && (
+                        <span
+                          className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-50 text-red-600 border border-red-200 flex items-center w-max cursor-pointer hover:bg-red-100 transition-colors"
+                          onClick={() => handleOpenStatusModal(app.name)}
+                          title="Critical or High vulnerabilities detected by security audit. Click Manage to view details."
+                        >
+                          <ExclamationTriangleIcon className="h-3.5 w-3.5 mr-1 text-red-500 inline-block animate-pulse" />
+                          Security Warning (
+                          {getSevereVulnerabilitiesCount(app.name)})
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <button
@@ -1646,7 +1668,7 @@ spec:
                   )}
 
                 {/* 3. Pods List */}
-                <div>
+                <div className="mb-6">
                   <h4 className="text-sm font-bold text-gray-800 border-b border-gray-100 pb-2 mb-3">
                     Active Pods & Logs
                   </h4>
@@ -1737,6 +1759,175 @@ spec:
                     <div className="text-center p-6 border border-dashed border-gray-300 rounded-md text-sm text-gray-500">
                       No active pods found. The service might be shut down or
                       syncing.
+                    </div>
+                  )}
+                </div>
+
+                {/* 4. Container Security & Vulnerability Auditing */}
+                <div>
+                  <h4 className="text-sm font-bold text-gray-800 border-b border-gray-100 pb-2 mb-3">
+                    Container Security Audits
+                  </h4>
+                  {statuses[selectedAppName]?.vulnerabilities ? (
+                    <div className="space-y-4">
+                      {statuses[selectedAppName].vulnerabilities!.map(
+                        (vuln, idx) => {
+                          const s = vuln.summary;
+                          const total =
+                            (s.criticalCount || 0) +
+                            (s.highCount || 0) +
+                            (s.mediumCount || 0) +
+                            (s.lowCount || 0);
+
+                          return (
+                            <div
+                              key={idx}
+                              className="p-3.5 border border-gray-200 rounded-md bg-white shadow-sm"
+                            >
+                              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3.5">
+                                <span className="text-sm font-semibold text-gray-900 flex items-center">
+                                  <span className="w-2.5 h-2.5 bg-blue-500 rounded-full mr-2"></span>
+                                  Container:{" "}
+                                  <span className="font-mono ml-1 text-gray-700">
+                                    {vuln.container}
+                                  </span>
+                                </span>
+                                {total === 0 ? (
+                                  <span className="px-2.5 py-0.5 mt-1 sm:mt-0 rounded-full text-xs font-semibold bg-green-100 text-green-800 border border-green-200 flex items-center w-max">
+                                    <CheckCircleIcon className="h-4 w-4 mr-1 text-green-600" />
+                                    0 Vulnerabilities Detected
+                                  </span>
+                                ) : (
+                                  <span className="px-2.5 py-0.5 mt-1 sm:mt-0 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200 flex items-center w-max">
+                                    {total} Vulnerabilities Found
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Severities grid */}
+                              <div className="grid grid-cols-4 gap-2 mb-3 text-center">
+                                <div className="p-2 bg-red-50 rounded border border-red-100">
+                                  <div className="text-xs font-bold text-red-800">
+                                    {s.criticalCount || 0}
+                                  </div>
+                                  <div className="text-[10px] uppercase font-bold tracking-wider text-red-600 mt-0.5">
+                                    Critical
+                                  </div>
+                                </div>
+                                <div className="p-2 bg-orange-50 rounded border border-orange-100">
+                                  <div className="text-xs font-bold text-orange-800">
+                                    {s.highCount || 0}
+                                  </div>
+                                  <div className="text-[10px] uppercase font-bold tracking-wider text-orange-600 mt-0.5">
+                                    High
+                                  </div>
+                                </div>
+                                <div className="p-2 bg-yellow-50 rounded border border-yellow-100">
+                                  <div className="text-xs font-bold text-yellow-800">
+                                    {s.mediumCount || 0}
+                                  </div>
+                                  <div className="text-[10px] uppercase font-bold tracking-wider text-yellow-600 mt-0.5">
+                                    Medium
+                                  </div>
+                                </div>
+                                <div className="p-2 bg-blue-50 rounded border border-blue-100">
+                                  <div className="text-xs font-bold text-blue-800">
+                                    {s.lowCount || 0}
+                                  </div>
+                                  <div className="text-[10px] uppercase font-bold tracking-wider text-blue-600 mt-0.5">
+                                    Low
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Critical Vulnerabilities Advisory */}
+                              {s.criticalCount > 0 && (
+                                <div className="mt-3 p-2.5 bg-red-50 border border-red-100 rounded text-xs text-red-700 flex items-start space-x-1.5 font-medium leading-relaxed">
+                                  <ExclamationTriangleIcon className="h-4 w-4 text-red-500 flex-shrink-0 mt-0.5" />
+                                  <span>
+                                    <strong>Security Advisory:</strong> Critical
+                                    vulnerabilities detected. Please make sure
+                                    to use the latest container releases and
+                                    package versions to secure your application.
+                                  </span>
+                                </div>
+                              )}
+
+                              {/* Top Vulnerabilities (Collapsible) */}
+                              {vuln.topVulnerabilities &&
+                                vuln.topVulnerabilities.length > 0 && (
+                                  <details className="group mt-3.5 border border-gray-100 rounded-md p-2 bg-gray-50/50">
+                                    <summary className="text-[11px] font-bold text-gray-500 uppercase tracking-wider cursor-pointer list-none flex items-center justify-between select-none hover:text-gray-700 transition-colors">
+                                      <span>Top Vulnerabilities Details</span>
+                                      <span className="text-gray-400 group-open:rotate-180 transition-transform text-xs">
+                                        &#9662;
+                                      </span>
+                                    </summary>
+                                    <div className="divide-y divide-gray-100 max-h-48 overflow-y-auto pr-1 mt-2">
+                                      {vuln.topVulnerabilities.map(
+                                        (v, vIdx) => {
+                                          return (
+                                            <div
+                                              key={vIdx}
+                                              className="py-2 flex items-start justify-between text-xs"
+                                            >
+                                              <div className="space-y-0.5">
+                                                <div className="flex items-center space-x-1.5">
+                                                  <span
+                                                    className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${
+                                                      v.severity === "CRITICAL"
+                                                        ? "bg-red-100 text-red-800"
+                                                        : v.severity === "HIGH"
+                                                          ? "bg-orange-100 text-orange-800"
+                                                          : v.severity ===
+                                                              "MEDIUM"
+                                                            ? "bg-yellow-100 text-yellow-800"
+                                                            : "bg-blue-100 text-blue-800"
+                                                    }`}
+                                                  >
+                                                    {v.severity}
+                                                  </span>
+                                                  {v.link ? (
+                                                    <a
+                                                      href={v.link}
+                                                      target="_blank"
+                                                      rel="noopener noreferrer"
+                                                      className="font-semibold text-indigo-600 hover:text-indigo-900 hover:underline"
+                                                    >
+                                                      {v.id}
+                                                    </a>
+                                                  ) : (
+                                                    <span className="font-semibold text-gray-700">
+                                                      {v.id}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <div className="text-gray-500 font-mono text-[11px]">
+                                                  Package: {v.pkg} (Installed:{" "}
+                                                  {v.installedVersion}{" "}
+                                                  {v.fixedVersion
+                                                    ? `| Fixed in: ${v.fixedVersion}`
+                                                    : ""}
+                                                  )
+                                                </div>
+                                              </div>
+                                            </div>
+                                          );
+                                        }
+                                      )}
+                                    </div>
+                                  </details>
+                                )}
+                            </div>
+                          );
+                        }
+                      )}
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-gray-50 border border-gray-200 rounded-md text-xs text-gray-500 italic">
+                      No vulnerability reports found in this namespace. Workload
+                      vulnerability reporting is supported out-of-the-box in
+                      clusters running the Trivy Operator.
                     </div>
                   )}
                 </div>

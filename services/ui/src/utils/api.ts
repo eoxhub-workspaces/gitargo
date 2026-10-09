@@ -308,6 +308,24 @@ export interface ApplicationStatus {
     age: string;
     containerStatus: Array<{ name: string; ready: boolean; state: any }>;
   }>;
+  vulnerabilities?: Array<{
+    container: string;
+    summary: {
+      criticalCount: number;
+      highCount: number;
+      mediumCount: number;
+      lowCount: number;
+    };
+    topVulnerabilities?: Array<{
+      id: string;
+      title: string;
+      severity: string;
+      pkg: string;
+      installedVersion: string;
+      fixedVersion: string;
+      link: string;
+    }>;
+  }>;
 }
 
 export const getApplications = async (): Promise<Application[]> => {
