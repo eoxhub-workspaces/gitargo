@@ -153,32 +153,6 @@ spec:
                 port:
                   number: 80`;
 
-  if (middlewareEnabled) {
-    const middlewareYaml = `apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: ${middlewareName}
-  namespace: ${namespace}
-spec:
-  headers:
-    accessControlAllowMethods:
-      - "PUT"
-      - "GET"
-      - "POST"
-      - "OPTIONS"
-    accessControlAllowOriginList:
-      - "*"
-    accessControlAllowCredentials: false
-    accessControlExposeHeaders:
-      - "Location"
-    accessControlAllowHeaders:
-      - "*"
-    addVaryHeader: true
-    accessControlMaxAge: 86400`;
-
-    return `${middlewareYaml}\n---\n${ingressYaml}`;
-  }
-
   return ingressYaml;
 };
 
@@ -610,7 +584,17 @@ const ApplicationsView: React.FC = () => {
     setShowLogModal(true);
     try {
       const logs = await getLogs(podName, "pod");
-      setLogsText(logs || "No logs found for this container.");
+      let logsTextVal = "";
+      if (logs) {
+        if (typeof logs === "object") {
+          logsTextVal = JSON.stringify(logs, null, 2);
+        } else {
+          logsTextVal = String(logs);
+        }
+      } else {
+        logsTextVal = "No logs found for this container.";
+      }
+      setLogsText(logsTextVal);
     } catch (err: any) {
       setLogsText(
         "Failed to load logs: " + (err.response?.data?.message || err.message)
@@ -1176,7 +1160,9 @@ spec:
                           type="button"
                           onClick={() => {
                             setExpertMode(true);
-                            syncFormToYaml();
+                            if (!isEditing) {
+                              syncFormToYaml();
+                            }
                           }}
                           className={`relative inline-flex items-center px-4 py-2 rounded-r-md border border-l-0 text-sm font-medium ${
                             expertMode

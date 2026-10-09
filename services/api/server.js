@@ -33,7 +33,7 @@ const INGRESS_DEFAULTS = {
   middlewareEnabled: true,
   middlewareName: "cors-headers",
   middlewareAnnotationKey: "traefik.ingress.kubernetes.io/router.middlewares",
-  middlewareAnnotationValueTemplate: "${namespace}-${middlewareName}@kubernetescrd",
+  middlewareAnnotationValueTemplate: "${namespace}-cors-headers@kubernetescrd",
   pathType: "Prefix",
   extraAnnotations: {}
 };
