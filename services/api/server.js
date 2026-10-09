@@ -906,7 +906,11 @@ try {
   // Explicitly check for KUBERNETES_SERVICE_HOST to handle environments where DNS for .default.svc is flaky
   const cluster = kc.getCurrentCluster();
   if (cluster && process.env.KUBERNETES_SERVICE_HOST) {
-    const host = process.env.KUBERNETES_SERVICE_HOST;
+    let host = process.env.KUBERNETES_SERVICE_HOST;
+    // If the host is an IPv6 address (contains colons), it must be enclosed in square brackets in the URL
+    if (host.includes(':') && !host.startsWith('[') && !host.endsWith(']')) {
+      host = `[${host}]`;
+    }
     const port = process.env.KUBERNETES_SERVICE_PORT || '443';
     cluster.server = `https://${host}:${port}`;
     cluster.skipTLSVerify = true; // Skip verification when using IP address
