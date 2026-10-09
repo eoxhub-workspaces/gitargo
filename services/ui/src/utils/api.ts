@@ -301,6 +301,10 @@ export interface ApplicationStatus {
       protocol: string;
     }>;
   };
+  ingress?: {
+    ready: boolean;
+    loadBalancer: any[];
+  };
   pods: Array<{
     name: string;
     phase: string;

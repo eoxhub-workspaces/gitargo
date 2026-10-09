@@ -948,6 +948,7 @@ try {
 const customObjectsApi = kc.makeApiClient(k8s.CustomObjectsApi);
 const appsV1Api = kc.makeApiClient(k8s.AppsV1Api);
 const coreV1Api = kc.makeApiClient(k8s.CoreV1Api);
+const networkingV1Api = kc.makeApiClient(k8s.NetworkingV1Api);
 
 // Helper to safely parse and forward K8s API error bodies as real JSON objects (avoiding string double-encoding)
 const sendK8sError = (res, error) => {
@@ -1497,6 +1498,40 @@ apiRouter.delete("/applications/:name", requiresApplicationsEnabled, async (req,
   }
 });
 
+const checkIngressUrlReachability = async (url) => {
+  return new Promise((resolve) => {
+    // Create an HTTPS/HTTP agent that strictly enforces SSL/TLS verification
+    const isHttps = url.startsWith("https://");
+    const options = {
+      method: "HEAD",
+      timeout: 1500,
+    };
+    
+    if (isHttps) {
+      options.agent = new https.Agent({ rejectUnauthorized: true });
+    }
+
+    const httpModule = isHttps ? https : require("http");
+    const req = httpModule.request(url, options, () => {
+      // Direct handshake completed and resolved
+      resolve(true);
+    });
+
+    req.on("error", (err) => {
+      // Handshake failed (DNS nxdomain, connection refused, or SSL verification failed!)
+      console.debug(`[Ingress Probe] Reachability check failed for ${url}: ${err.message}`);
+      resolve(false);
+    });
+
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+
+    req.end();
+  });
+};
+
 apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (req, res, next) => {
   try {
     const { name } = req.params;
@@ -1529,6 +1564,32 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
       };
     } catch (err) {
       // 404 is expected if not reconciled
+    }
+
+    let ingressStatus = null;
+    try {
+      const ingResponse = await networkingV1Api.readNamespacedIngress({ name, namespace });
+      const ing = ingResponse.body || ingResponse;
+      const lb = ing.status?.loadBalancer?.ingress || [];
+      const isIngressReady = lb.length > 0 && (lb[0].ip || lb[0].hostname);
+      
+      let isReachable = false;
+      if (isIngressReady && ingressClusterConfig.domain) {
+        const domain = ingressClusterConfig.domain;
+        const proto = ingressClusterConfig.tlsEnabled ? "https" : "http";
+        const hostDomain = namespace && namespace !== "default"
+          ? `${name}.${namespace}.${domain}`
+          : `${name}.${domain}`;
+        const ingressUrl = `${proto}://${hostDomain}`;
+        isReachable = await checkIngressUrlReachability(ingressUrl);
+      }
+
+      ingressStatus = {
+        ready: !!isIngressReady && isReachable,
+        loadBalancer: lb
+      };
+    } catch (err) {
+      // 404 is expected if ingress doesn't exist
     }
 
     let pods = [];
@@ -1600,6 +1661,7 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
       deployed: !!deploymentStatus,
       deployment: deploymentStatus,
       service: serviceStatus,
+      ingress: ingressStatus,
       pods: pods,
       vulnerabilities: vulnerabilities
     });

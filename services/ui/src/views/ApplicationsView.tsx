@@ -102,6 +102,13 @@ const generateIngressYaml = (
     .replace("${namespace}", namespace)
     .replace("${middlewareName}", middlewareName);
 
+  // Avoid collisions across different workspaces/namespaces by using a sub-domain format:
+  // appName.namespace.domain (or appName.domain if in default namespace)
+  const hostDomain =
+    namespace && namespace !== "default"
+      ? `${name}.${namespace}.${domain}`
+      : `${name}.${domain}`;
+
   // Annotations
   const annotations: Record<string, string> = {
     ...(ingressConfig?.extraAnnotations || {})
@@ -125,7 +132,7 @@ const generateIngressYaml = (
       : "";
 
   const tlsSection = tlsEnabled
-    ? `\n  tls:\n    - hosts:\n        - ${name}.${domain}\n      secretName: ${name}.${domain}-tls`
+    ? `\n  tls:\n    - hosts:\n        - ${hostDomain}\n      secretName: ${hostDomain}-tls`
     : "";
 
   const ingressYaml = `apiVersion: networking.k8s.io/v1
@@ -135,7 +142,7 @@ metadata:
 spec:
   ingressClassName: ${ingressClassName}${tlsSection}
   rules:
-    - host: ${name}.${domain}
+    - host: ${hostDomain}
       http:
         paths:
           - path: /
@@ -808,7 +815,14 @@ spec:
 
     const domain = config.ingress.domain;
     const proto = config.ingress.tlsEnabled ? "https" : "http";
-    return `${proto}://${app.name}.${domain}`;
+    const namespace = config.defaults?.namespace || "default";
+
+    const hostDomain =
+      namespace && namespace !== "default"
+        ? `${app.name}.${namespace}.${domain}`
+        : `${app.name}.${domain}`;
+
+    return `${proto}://${hostDomain}`;
   };
 
   const getSevereVulnerabilitiesCount = (appName: string) => {
@@ -986,16 +1000,26 @@ spec:
                           {app.name}
                         </div>
                         {getIngressUrl(app) && (
-                          <div className="text-xs">
-                            <a
-                              href={getIngressUrl(app)!}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 hover:text-blue-800 hover:underline flex items-center mt-0.5"
-                            >
-                              <EyeIcon className="h-3 w-3 mr-1 inline-block" />
-                              {getIngressUrl(app)}
-                            </a>
+                          <div className="text-xs mt-0.5">
+                            {statuses[app.name]?.ingress?.ready ? (
+                              <a
+                                href={getIngressUrl(app)!}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:text-blue-800 hover:underline flex items-center"
+                              >
+                                <EyeIcon className="h-3 w-3 mr-1 inline-block" />
+                                {getIngressUrl(app)}
+                              </a>
+                            ) : (
+                              <span
+                                className="text-gray-400 flex items-center animate-pulse select-none"
+                                title="Ingress is currently being reconciled and DNS routing allocated by the cluster. This link will activate automatically once ready."
+                              >
+                                <ArrowPathIcon className="h-3 w-3 mr-1 inline-block animate-spin" />
+                                Routing (Configuring DNS)...
+                              </span>
+                            )}
                           </div>
                         )}
                         <div className="text-xs text-gray-400">
