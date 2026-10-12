@@ -26,7 +26,7 @@ const getBasename = () => {
 
   // Regular expression to match our known frontend routes
   const knownRoutesRegex =
-    /\/(new|edit|history|workflows|executions|resources)(\/|$)/;
+    /\/(new|edit|history|workflows|executions|resources|applications)(\/|$)/;
   const match = path.match(knownRoutesRegex);
 
   if (match) {

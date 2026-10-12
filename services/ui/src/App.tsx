@@ -44,12 +44,22 @@ export default function App() {
     };
   }, []);
 
+  const isApplicationsDeployment =
+    window.BASE_PATH?.includes("gitargo-applications") ||
+    window.location.pathname.includes("gitargo-applications") ||
+    window.location.pathname.includes("-applications");
+
   return (
     <ThemeProvider theme={lightTheme}>
       <Toaster />
       <MainLayout>
         <Routes>
-          <Route path="/" element={<ListView />} />
+          <Route
+            path="/"
+            element={
+              isApplicationsDeployment ? <ApplicationsView /> : <ListView />
+            }
+          />
           <Route path="/executions" element={<ExecutionsView />} />
           <Route path="/resources" element={<ResourcesView />} />
           <Route path="/applications" element={<ApplicationsView />} />
