@@ -16,7 +16,6 @@ import {
   ArrowPathIcon,
   CommandLineIcon,
   ChevronLeftIcon,
-  ChevronRightIcon,
   TrashIcon,
   StopIcon,
   DocumentIcon,

@@ -188,7 +188,7 @@ const ListView: React.FC = () => {
               hasExecute
             }
           }));
-        } catch (e) {
+        } catch {
           setMetadata((prev) => ({
             ...prev,
             [wf.path]: { kind: "Error", isParsing: false }

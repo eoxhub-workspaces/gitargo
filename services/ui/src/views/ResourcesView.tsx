@@ -179,8 +179,8 @@ const getEstimatedDurations = (exe: any) => {
 const ResourcesView: React.FC = () => {
   const [executions, setExecutions] = useState<WorkflowExecution[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [config, setConfig] = useState<AppConfig | null>(null);
+  const [, setError] = useState<string | null>(null);
+  const [, setConfig] = useState<AppConfig | null>(null);
 
   // Filters
   const [workflowFilter, setWorkflowFilter] = useState("");
