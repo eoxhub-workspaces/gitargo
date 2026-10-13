@@ -983,7 +983,7 @@ spec:
                         <div className="text-sm font-semibold text-gray-900">
                           {app.name}
                         </div>
-                        {getIngressUrl(app) && (
+                        {!isAppDisabled(app.name) && getIngressUrl(app) && (
                           <div className="text-xs mt-0.5">
                             {statuses[app.name]?.ingress?.ready ? (
                               <a

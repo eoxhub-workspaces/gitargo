@@ -94,6 +94,32 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// HTTP Request Access Logging Middleware
+app.use((req, res, next) => {
+  const url = req.originalUrl || req.url;
+  // Skip static bundle/asset noise
+  if (url.includes("/static/") || url.match(/\.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?)$/i)) {
+    return next();
+  }
+
+  const start = Date.now();
+  res.on("finish", () => {
+    const duration = Date.now() - start;
+    if (process.env.NODE_ENV === "production") {
+      console.log(JSON.stringify({
+        type: "http_access",
+        method: req.method,
+        url: url,
+        status: res.statusCode,
+        durationMs: duration
+      }));
+    } else {
+      console.log(`[HTTP] ${req.method} ${url} ${res.statusCode} - ${duration}ms`);
+    }
+  });
+  next();
+});
+
 // Helper to decode JWT payload without verification (for logging claims only)
 function decodeJwt(token) {
   try {
@@ -898,6 +924,15 @@ try {
   if (fs.existsSync(SA_TOKEN_PATH)) {
     console.log(`Found ServiceAccount token at ${SA_TOKEN_PATH}`);
     kc.loadFromCluster();
+    try {
+      const saToken = fs.readFileSync(SA_TOKEN_PATH, 'utf8').trim();
+      const user = kc.getCurrentUser();
+      if (user) {
+        user.token = saToken;
+      }
+    } catch (e) {
+      console.warn("Could not read ServiceAccount token file:", e.message);
+    }
   } else {
     console.warn(`ServiceAccount token NOT FOUND at ${SA_TOKEN_PATH}. Falling back to default config.`);
     kc.loadFromDefault();
@@ -1260,7 +1295,8 @@ apiRouter.get("/applications", requiresApplicationsEnabled, async (req, res, nex
         params: {
           path: GITLAB_APPLICATIONS_PATH,
           ref: GITLAB_BRANCH,
-          recursive: true
+          recursive: true,
+          per_page: 100
         }
       }
     );
@@ -1506,7 +1542,7 @@ const checkIngressUrlReachability = async (url) => {
       method: "HEAD",
       timeout: 1500,
     };
-    
+
     if (isHttps) {
       options.agent = new https.Agent({ rejectUnauthorized: true });
     }
@@ -1532,15 +1568,46 @@ const checkIngressUrlReachability = async (url) => {
   });
 };
 
+// Helper to strictly verify whether a Pod belongs to an application without cross-app pod bleeding
+function isPodOwnedByApp(pod, appName) {
+  if (!pod || !appName) return false;
+  const labels = pod.metadata?.labels || {};
+
+  // 1. Exact label match (strict string equality)
+  if (
+    labels['app.kubernetes.io/service'] === appName ||
+    labels['app.kubernetes.io/name'] === appName ||
+    labels['app.kubernetes.io/instance'] === appName ||
+    labels['app'] === appName
+  ) {
+    return true;
+  }
+
+  // 2. Strict K8s ReplicaSet owner reference check (e.g. appName-66d5587ffd)
+  const ownerRefs = pod.metadata?.ownerReferences || [];
+  const escapedAppName = appName.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+  const replicaSetPattern = new RegExp(`^${escapedAppName}-[0-9a-z]{8,10}$`, 'i');
+
+  for (const ref of ownerRefs) {
+    if (ref.kind === 'ReplicaSet' && replicaSetPattern.test(ref.name)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (req, res, next) => {
   try {
     const { name } = req.params;
     const namespace = process.env.ARGO_NAMESPACE || "default";
 
     let deploymentStatus = null;
+    let deploymentMatchLabels = null;
     try {
       const depResponse = await appsV1Api.readNamespacedDeployment({ name, namespace });
       const d = depResponse.body || depResponse;
+      deploymentMatchLabels = d.spec?.selector?.matchLabels || null;
       deploymentStatus = {
         replicas: d.status?.replicas || 0,
         readyReplicas: d.status?.readyReplicas || 0,
@@ -1572,7 +1639,7 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
       const ing = ingResponse.body || ingResponse;
       const lb = ing.status?.loadBalancer?.ingress || [];
       const isIngressReady = lb.length > 0 && (lb[0].ip || lb[0].hostname);
-      
+
       let isReachable = false;
       if (isIngressReady && ingressClusterConfig.domain) {
         const domain = ingressClusterConfig.domain;
@@ -1594,12 +1661,55 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
 
     let pods = [];
     try {
-      const podsResponse = await coreV1Api.listNamespacedPod({
-        namespace,
-        labelSelector: `app.kubernetes.io/service=${name}`
-      });
-      const items = podsResponse.body?.items || podsResponse.items || [];
-      pods = items.map(p => ({
+      let labelSelectors = [];
+      if (deploymentMatchLabels && Object.keys(deploymentMatchLabels).length > 0) {
+        const sel = Object.entries(deploymentMatchLabels)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(",");
+        labelSelectors.push(sel);
+      } else {
+        labelSelectors = [
+          `app.kubernetes.io/service=${name}`,
+          `app.kubernetes.io/name=${name}`,
+          `app.kubernetes.io/instance=${name}`,
+          `app=${name}`
+        ];
+      }
+
+      const podPromises = labelSelectors.map(labelSelector =>
+        coreV1Api.listNamespacedPod({ namespace, labelSelector })
+          .then(res => res.body?.items || res.items || [])
+          .catch(() => [])
+      );
+
+      const results = await Promise.all(podPromises);
+      const podMap = new Map();
+
+      for (const items of results) {
+        for (const p of items) {
+          if (p.metadata?.name && !podMap.has(p.metadata.name)) {
+            podMap.set(p.metadata.name, p);
+          }
+        }
+      }
+
+      // If no pods matched standard label queries, list all pods in namespace and use strict ownership verification
+      if (podMap.size === 0) {
+        try {
+          const allPodsRes = await coreV1Api.listNamespacedPod({ namespace });
+          const allItems = allPodsRes.body?.items || allPodsRes.items || [];
+          for (const p of allItems) {
+            const pName = p.metadata?.name || '';
+            if (isPodOwnedByApp(p, name) && !podMap.has(pName)) {
+              podMap.set(pName, p);
+            }
+          }
+        } catch (e) {
+          // Ignore fallback error
+        }
+      }
+
+      pods = Array.from(podMap.values()).map(p => ({
         name: p.metadata?.name,
         phase: p.status?.phase,
         restarts: p.status?.containerStatuses?.reduce((acc, c) => acc + (c.restartCount || 0), 0) || 0,
@@ -1687,8 +1797,7 @@ apiRouter.delete("/applications/:name/pods/:podName", requiresApplicationsEnable
       throw err;
     }
 
-    const appLabel = pod.metadata?.labels?.['app.kubernetes.io/service'];
-    if (appLabel !== name) {
+    if (!isPodOwnedByApp(pod, name)) {
       return res.status(403).json({ message: `Unauthorized: Pod ${podName} does not belong to application ${name}.` });
     }
 
