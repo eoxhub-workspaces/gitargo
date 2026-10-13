@@ -49,7 +49,7 @@ const HistoryView: React.FC = () => {
         commitId
       );
       setCommitYaml(yamlContent);
-    } catch (err: any) {
+    } catch {
       toast.error("Failed to load YAML for this commit.");
       setCommitYaml("Error loading content.");
     } finally {

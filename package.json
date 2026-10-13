@@ -9,6 +9,9 @@
     "install:all": "cd services/api && npm install && cd ../ui && npm install"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^9.1.2"
+  },
+  "overrides": {
+    "shell-quote": "^1.8.3"
   }
 }

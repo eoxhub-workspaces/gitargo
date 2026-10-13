@@ -7,7 +7,7 @@ const DarkModeSwitch = () => {
   return (
     <div className="flex flex items-center">
       <button
-        onClick={(e) => setIsDark(!isDark)}
+        onClick={() => setIsDark(!isDark)}
         id="theme-toggle"
         type="button"
         className="

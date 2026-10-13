@@ -238,7 +238,7 @@ export default function CodeProject() {
         const extracted = extractResourcesAndScheduling(parsed);
         setSchedulingState(extracted);
       }
-    } catch (e) {
+    } catch {
       // Ignore parse errors during active editing
     }
   }, [yamlContent]);
@@ -598,7 +598,7 @@ export default function CodeProject() {
       }
 
       executeSave(yamlContent, runAfterSave);
-    } catch (e) {
+    } catch {
       executeSave(yamlContent, runAfterSave);
     }
   };

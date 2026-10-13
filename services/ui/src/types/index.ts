@@ -84,7 +84,7 @@ export interface ITabContext {
   onChange: (newValue: string) => void;
 }
 
-interface Steps<T> extends Array<T | Steps<T>> {}
+type Steps<T> = Array<T | Steps<T>>;
 
 type Step = {
   name: string;

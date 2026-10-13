@@ -66,6 +66,20 @@ export interface CommitHistory {
   message: string;
 }
 
+export interface IngressConfig {
+  domain: string;
+  ingressClassName: string;
+  dnsTarget: string;
+  certIssuer: string;
+  tlsEnabled: boolean;
+  middlewareEnabled: boolean;
+  middlewareName: string;
+  middlewareAnnotationKey: string;
+  middlewareAnnotationValueTemplate: string;
+  pathType: string;
+  extraAnnotations?: Record<string, string>;
+}
+
 export interface AppConfig {
   profiles: Record<
     string,
@@ -91,6 +105,9 @@ export interface AppConfig {
   };
   logViewerUrl?: string;
   allowPublishing: boolean;
+  enableApplications?: boolean;
+  allowPublicIngress?: boolean;
+  ingress?: IngressConfig;
 }
 
 export interface WorkflowExecution {
@@ -251,6 +268,125 @@ export const restoreWorkflow = async (path: string) => {
   const response = await api.post(
     `/workflows/${encodeURIComponent(path)}/restore`
   );
+  return response.data;
+};
+
+export interface Application {
+  name: string;
+  files: string[];
+}
+
+export interface ApplicationYamls {
+  deployment: string;
+  service: string;
+  ingress?: string;
+}
+
+export interface ApplicationStatus {
+  name: string;
+  deployed: boolean;
+  deployment?: {
+    replicas: number;
+    readyReplicas: number;
+    availableReplicas: number;
+    conditions: Array<{ type: string; status: string; message: string }>;
+  };
+  service?: {
+    type: string;
+    clusterIP: string;
+    ports: Array<{
+      port: number;
+      targetPort: any;
+      name: string;
+      protocol: string;
+    }>;
+  };
+  ingress?: {
+    ready: boolean;
+    loadBalancer: any[];
+  };
+  pods: Array<{
+    name: string;
+    phase: string;
+    restarts: number;
+    age: string;
+    containerStatus: Array<{ name: string; ready: boolean; state: any }>;
+  }>;
+  vulnerabilities?: Array<{
+    container: string;
+    summary: {
+      criticalCount: number;
+      highCount: number;
+      mediumCount: number;
+      lowCount: number;
+    };
+    topVulnerabilities?: Array<{
+      id: string;
+      title: string;
+      severity: string;
+      pkg: string;
+      installedVersion: string;
+      fixedVersion: string;
+      link: string;
+    }>;
+  }>;
+}
+
+export const getApplications = async (): Promise<Application[]> => {
+  const response = await api.get<Application[]>("/applications");
+  return response.data;
+};
+
+export const getApplication = async (
+  name: string
+): Promise<ApplicationYamls> => {
+  const response = await api.get<ApplicationYamls>(`/applications/${name}`);
+  return response.data;
+};
+
+export const createApplication = async (
+  name: string,
+  yamls: ApplicationYamls,
+  commitMessage?: string
+) => {
+  const response = await api.post(`/applications/${name}`, {
+    ...yamls,
+    commit_message: commitMessage
+  });
+  return response.data;
+};
+
+export const updateApplication = async (
+  name: string,
+  yamls: ApplicationYamls,
+  commitMessage?: string
+) => {
+  const response = await api.put(`/applications/${name}`, {
+    ...yamls,
+    commit_message: commitMessage
+  });
+  return response.data;
+};
+
+export const deleteApplication = async (name: string) => {
+  const response = await api.delete(`/applications/${name}`);
+  return response.data;
+};
+
+export const getApplicationStatus = async (
+  name: string
+): Promise<ApplicationStatus> => {
+  const response = await api.get<ApplicationStatus>(
+    `/applications/${name}/status`
+  );
+  return response.data;
+};
+
+export const deleteApplicationPod = async (
+  appName: string,
+  podName: string
+) => {
+  const response = await api.delete(`/applications/${appName}/pods/${podName}`);
   return response.data;
 };
 

@@ -19,6 +19,39 @@ const GITLAB_TOKEN = process.env.GITLAB_TOKEN;
 const GITLAB_PROJECT_ID = process.env.GITLAB_PROJECT_ID;
 const GITLAB_BRANCH = process.env.GITLAB_BRANCH || 'main';
 const GITLAB_WORKFLOWS_PATH = process.env.GITLAB_WORKFLOWS_PATH || '.';
+const ENABLE_APPLICATIONS = process.env.ENABLE_APPLICATIONS === 'true';
+const GITLAB_APPLICATIONS_PATH = process.env.GITLAB_APPLICATIONS_PATH || 'applications';
+const ALLOW_PUBLIC_INGRESS = process.env.ALLOW_PUBLIC_INGRESS === 'true';
+
+// Ingress custom configuration
+const INGRESS_DEFAULTS = {
+  domain: "your-domain.com",
+  ingressClassName: "traefik",
+  dnsTarget: "1.2.3.4",
+  certIssuer: "letsencrypt",
+  tlsEnabled: true,
+  middlewareEnabled: true,
+  middlewareName: "cors-headers",
+  middlewareAnnotationKey: "traefik.ingress.kubernetes.io/router.middlewares",
+  middlewareAnnotationValueTemplate: "${namespace}-cors-headers@kubernetescrd",
+  pathType: "Prefix",
+  extraAnnotations: {}
+};
+
+let ingressClusterConfig = { ...INGRESS_DEFAULTS };
+
+if (process.env.INGRESS_CLUSTER_CONFIG) {
+  try {
+    const parsed = JSON.parse(process.env.INGRESS_CLUSTER_CONFIG);
+    ingressClusterConfig = { ...INGRESS_DEFAULTS, ...parsed };
+    // Automatically enable TLS if a domain is defined and tlsEnabled is not explicitly set to false
+    if (ingressClusterConfig.domain && parsed.tlsEnabled === undefined) {
+      ingressClusterConfig.tlsEnabled = true;
+    }
+  } catch (e) {
+    console.error("Failed to parse INGRESS_CLUSTER_CONFIG environment variable:", e.message);
+  }
+}
 
 if (!GITLAB_TOKEN || !GITLAB_PROJECT_ID) {
   console.error('ERROR: GITLAB_TOKEN and GITLAB_PROJECT_ID are required environment variables.');
@@ -131,6 +164,10 @@ if (BASE_PATH !== "") {
   app.use(
     `${BASE_PATH}/static`,
     express.static(path.join(__dirname, "public", "static"))
+  );
+  app.use(
+    BASE_PATH,
+    express.static(path.join(__dirname, "public"))
   );
 }
 app.use("/static", express.static(path.join(__dirname, "public", "static")));
@@ -290,6 +327,9 @@ apiRouter.get("/config", (req, res) => {
     availableNodeSelectors: ARGO_AVAILABLE_NODE_SELECTORS,
     ephemeralVolume: EPHEMERAL_VOLUME_CONFIG,
     allowPublishing: process.env.ALLOW_PUBLISHING === "true",
+    enableApplications: ENABLE_APPLICATIONS,
+    allowPublicIngress: ALLOW_PUBLIC_INGRESS,
+    ingress: ingressClusterConfig,
     logViewerUrl: process.env.LOG_VIEWER_URL || `https://hub-test.eox.at/services/eoxhub-gateway/cif/log-viewer/search`,
     defaults: {
       namespace: process.env.ARGO_NAMESPACE || "default",
@@ -866,7 +906,11 @@ try {
   // Explicitly check for KUBERNETES_SERVICE_HOST to handle environments where DNS for .default.svc is flaky
   const cluster = kc.getCurrentCluster();
   if (cluster && process.env.KUBERNETES_SERVICE_HOST) {
-    const host = process.env.KUBERNETES_SERVICE_HOST;
+    let host = process.env.KUBERNETES_SERVICE_HOST;
+    // If the host is an IPv6 address (contains colons), it must be enclosed in square brackets in the URL
+    if (host.includes(':') && !host.startsWith('[') && !host.endsWith(']')) {
+      host = `[${host}]`;
+    }
     const port = process.env.KUBERNETES_SERVICE_PORT || '443';
     cluster.server = `https://${host}:${port}`;
     cluster.skipTLSVerify = true; // Skip verification when using IP address
@@ -902,6 +946,9 @@ try {
 }
 
 const customObjectsApi = kc.makeApiClient(k8s.CustomObjectsApi);
+const appsV1Api = kc.makeApiClient(k8s.AppsV1Api);
+const coreV1Api = kc.makeApiClient(k8s.CoreV1Api);
+const networkingV1Api = kc.makeApiClient(k8s.NetworkingV1Api);
 
 // Helper to safely parse and forward K8s API error bodies as real JSON objects (avoiding string double-encoding)
 const sendK8sError = (res, error) => {
@@ -1122,6 +1169,540 @@ function getLokiConfig(req, targetUrl) {
   return config;
 }
 
+// --- Applications Deployment Feature ---
+
+const requiresApplicationsEnabled = (req, res, next) => {
+  if (!ENABLE_APPLICATIONS) {
+    return res.status(403).json({ message: "Applications feature is disabled." });
+  }
+  next();
+};
+
+const validateAndSanitizeAppYaml = (appName, content, fileType) => {
+  // Support multi-document YAML configurations (e.g., Middleware + Ingress) safely
+  const documents = content.split("---").map(doc => doc.trim()).filter(Boolean);
+  if (documents.length === 0) {
+    throw new Error(`Empty YAML content for ${fileType}.yaml`);
+  }
+
+  const sanitizedDocs = documents.map(docStr => {
+    // If the entire document is commented out (disabled), bypass validation and preserve it as-is
+    const lines = docStr.split("\n").filter(l => l.trim().length > 0);
+    const isDocDisabled = lines.length > 0 && lines.every(line => line.trim().startsWith("#"));
+    if (isDocDisabled) {
+      return docStr;
+    }
+
+    const parsed = YAML.parse(docStr);
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error(`Invalid YAML document format in ${fileType}.yaml`);
+    }
+
+    if (!parsed.metadata) parsed.metadata = {};
+
+    // Strictly override and enforce namespace to match the configured administrative space
+    const enforcedNamespace = process.env.ARGO_NAMESPACE || "default";
+    parsed.metadata.namespace = enforcedNamespace;
+
+    // Enforce labels
+    if (!parsed.metadata.labels) parsed.metadata.labels = {};
+    parsed.metadata.labels['app.kubernetes.io/service'] = appName;
+
+    // Enforce selector matchLabels for deployment
+    if (fileType === 'deployment' && parsed.kind === 'Deployment') {
+      if (!parsed.spec) parsed.spec = {};
+      if (!parsed.spec.selector) parsed.spec.selector = {};
+      if (!parsed.spec.selector.matchLabels) parsed.spec.selector.matchLabels = {};
+      parsed.spec.selector.matchLabels['app.kubernetes.io/service'] = appName;
+
+      if (!parsed.spec.template) parsed.spec.template = {};
+      if (!parsed.spec.template.metadata) parsed.spec.template.metadata = {};
+      if (!parsed.spec.template.metadata.labels) parsed.spec.template.metadata.labels = {};
+      parsed.spec.template.metadata.labels['app.kubernetes.io/service'] = appName;
+    }
+
+    // Enforce selector for service
+    if (fileType === 'service' && parsed.kind === 'Service') {
+      if (!parsed.spec) parsed.spec = {};
+      if (!parsed.spec.selector) parsed.spec.selector = {};
+      parsed.spec.selector['app.kubernetes.io/service'] = appName;
+    }
+
+    // Enforce ingress rules targeting the service
+    if (fileType === 'ingress' && parsed.kind === 'Ingress') {
+      if (!ALLOW_PUBLIC_INGRESS) {
+        throw new Error("Ingress creation is disabled by administrator.");
+      }
+      if (parsed.spec?.rules) {
+        for (const rule of parsed.spec.rules) {
+          if (rule.http?.paths) {
+            for (const p of rule.http.paths) {
+              if (p.backend?.service?.name && p.backend.service.name !== appName) {
+                p.backend.service.name = appName;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return YAML.stringify(parsed);
+  });
+
+  return sanitizedDocs.join("\n---\n");
+};
+
+apiRouter.get("/applications", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const response = await gitlabApi.get(
+      `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
+      {
+        params: {
+          path: GITLAB_APPLICATIONS_PATH,
+          ref: GITLAB_BRANCH,
+          recursive: true
+        }
+      }
+    );
+
+    const apps = {};
+    for (const file of response.data) {
+      if (file.type === "blob" && file.path.startsWith(GITLAB_APPLICATIONS_PATH + "/")) {
+        const relativePath = file.path.slice(GITLAB_APPLICATIONS_PATH.length + 1);
+        const parts = relativePath.split('/');
+        if (parts.length === 2) {
+          const appName = parts[0];
+          const filename = parts[1];
+          if (["service.yaml", "deployment.yaml", "ingress.yaml"].includes(filename)) {
+            if (!apps[appName]) {
+              apps[appName] = { name: appName, files: [] };
+            }
+            apps[appName].files.push(filename);
+          }
+        }
+      }
+    }
+
+    res.json(Object.values(apps));
+  } catch (error) {
+    if (error.response && error.response.status === 404) {
+      return res.json([]);
+    }
+    next(error);
+  }
+});
+
+apiRouter.get("/applications/:name", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const { name } = req.params;
+    const files = ["deployment.yaml", "service.yaml"];
+    if (ALLOW_PUBLIC_INGRESS) {
+      files.push("ingress.yaml");
+    }
+
+    const payload = {};
+    for (const f of files) {
+      const filePath = `${GITLAB_APPLICATIONS_PATH}/${name}/${f}`;
+      try {
+        const response = await gitlabApi.get(
+          `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
+          { params: { ref: GITLAB_BRANCH } }
+        );
+        payload[f.replace(".yaml", "")] = response.data;
+      } catch (err) {
+        if (err.response && err.response.status === 404) {
+          payload[f.replace(".yaml", "")] = null;
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+});
+
+apiRouter.post("/applications/:name", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const { name } = req.params;
+    const { deployment, service, ingress, commit_message } = req.body;
+
+    if (!deployment || !service) {
+      return res.status(400).json({ message: "Both deployment and service YAML content are required." });
+    }
+
+    const actions = [];
+    try {
+      const sanitizedDeployment = validateAndSanitizeAppYaml(name, deployment, 'deployment');
+      actions.push({
+        action: "create",
+        file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/deployment.yaml`,
+        content: sanitizedDeployment
+      });
+
+      const sanitizedService = validateAndSanitizeAppYaml(name, service, 'service');
+      actions.push({
+        action: "create",
+        file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/service.yaml`,
+        content: sanitizedService
+      });
+
+      if (ingress && ALLOW_PUBLIC_INGRESS) {
+        const sanitizedIngress = validateAndSanitizeAppYaml(name, ingress, 'ingress');
+        actions.push({
+          action: "create",
+          file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/ingress.yaml`,
+          content: sanitizedIngress
+        });
+      }
+    } catch (err) {
+      return res.status(400).json({ message: err.message });
+    }
+
+    const response = await gitlabApi.post(
+      `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+      {
+        branch: GITLAB_BRANCH,
+        commit_message: commit_message || `Create application ${name}`,
+        ...getCommitOptions(req),
+        actions: actions
+      }
+    );
+
+    res.status(201).json(response.data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+apiRouter.put("/applications/:name", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const { name } = req.params;
+    const { deployment, service, ingress, commit_message } = req.body;
+
+    if (!deployment || !service) {
+      return res.status(400).json({ message: "Both deployment and service YAML content are required." });
+    }
+
+    const actions = [];
+    try {
+      let existingFiles = [];
+      try {
+        const response = await gitlabApi.get(
+          `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
+          {
+            params: {
+              path: `${GITLAB_APPLICATIONS_PATH}/${name}`,
+              ref: GITLAB_BRANCH
+            }
+          }
+        );
+        existingFiles = response.data.map(f => f.name);
+      } catch (err) {
+        // directory may not exist
+      }
+
+      const sanitizedDeployment = validateAndSanitizeAppYaml(name, deployment, 'deployment');
+      actions.push({
+        action: existingFiles.includes("deployment.yaml") ? "update" : "create",
+        file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/deployment.yaml`,
+        content: sanitizedDeployment
+      });
+
+      const sanitizedService = validateAndSanitizeAppYaml(name, service, 'service');
+      actions.push({
+        action: existingFiles.includes("service.yaml") ? "update" : "create",
+        file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/service.yaml`,
+        content: sanitizedService
+      });
+
+      if (ALLOW_PUBLIC_INGRESS) {
+        if (ingress) {
+          const sanitizedIngress = validateAndSanitizeAppYaml(name, ingress, 'ingress');
+          actions.push({
+            action: existingFiles.includes("ingress.yaml") ? "update" : "create",
+            file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/ingress.yaml`,
+            content: sanitizedIngress
+          });
+        } else if (existingFiles.includes("ingress.yaml")) {
+          actions.push({
+            action: "delete",
+            file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/ingress.yaml`
+          });
+        }
+      }
+    } catch (err) {
+      return res.status(400).json({ message: err.message });
+    }
+
+    const response = await gitlabApi.post(
+      `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+      {
+        branch: GITLAB_BRANCH,
+        commit_message: commit_message || `Update application ${name}`,
+        ...getCommitOptions(req),
+        actions: actions
+      }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+apiRouter.delete("/applications/:name", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const { name } = req.params;
+
+    let existingFiles = [];
+    try {
+      const response = await gitlabApi.get(
+        `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
+        {
+          params: {
+            path: `${GITLAB_APPLICATIONS_PATH}/${name}`,
+            ref: GITLAB_BRANCH
+          }
+        }
+      );
+      existingFiles = response.data.filter(f => f.type === "blob").map(f => f.name);
+    } catch (err) {
+      return res.status(404).json({ message: `Application ${name} not found in Git.` });
+    }
+
+    if (existingFiles.length === 0) {
+      return res.json({ message: `Application ${name} is already empty or deleted.` });
+    }
+
+    const actions = existingFiles.map(filename => ({
+      action: "delete",
+      file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/${filename}`
+    }));
+
+    const response = await gitlabApi.post(
+      `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+      {
+        branch: GITLAB_BRANCH,
+        commit_message: `Delete application ${name}`,
+        ...getCommitOptions(req),
+        actions: actions
+      }
+    );
+
+    res.json({ message: `Application ${name} deleted from Git.`, gitlab: response.data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+const checkIngressUrlReachability = async (url) => {
+  return new Promise((resolve) => {
+    // Create an HTTPS/HTTP agent that strictly enforces SSL/TLS verification
+    const isHttps = url.startsWith("https://");
+    const options = {
+      method: "HEAD",
+      timeout: 1500,
+    };
+    
+    if (isHttps) {
+      options.agent = new https.Agent({ rejectUnauthorized: true });
+    }
+
+    const httpModule = isHttps ? https : require("http");
+    const req = httpModule.request(url, options, () => {
+      // Direct handshake completed and resolved
+      resolve(true);
+    });
+
+    req.on("error", (err) => {
+      // Handshake failed (DNS nxdomain, connection refused, or SSL verification failed!)
+      console.debug(`[Ingress Probe] Reachability check failed for ${url}: ${err.message}`);
+      resolve(false);
+    });
+
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+
+    req.end();
+  });
+};
+
+apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const { name } = req.params;
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+
+    let deploymentStatus = null;
+    try {
+      const depResponse = await appsV1Api.readNamespacedDeployment({ name, namespace });
+      const d = depResponse.body || depResponse;
+      deploymentStatus = {
+        replicas: d.status?.replicas || 0,
+        readyReplicas: d.status?.readyReplicas || 0,
+        availableReplicas: d.status?.availableReplicas || 0,
+        conditions: d.spec?.replicas === 0 ? [{ type: "ScaledToZero", status: "True", message: "Application is scaled to zero." }] : (d.status?.conditions || [])
+      };
+    } catch (err) {
+      if (err.statusCode !== 404) {
+        console.error("Failed to read deployment from K8s:", err.message);
+      }
+    }
+
+    let serviceStatus = null;
+    try {
+      const svcResponse = await coreV1Api.readNamespacedService({ name, namespace });
+      const s = svcResponse.body || svcResponse;
+      serviceStatus = {
+        type: s.spec?.type,
+        clusterIP: s.spec?.clusterIP,
+        ports: s.spec?.ports || []
+      };
+    } catch (err) {
+      // 404 is expected if not reconciled
+    }
+
+    let ingressStatus = null;
+    try {
+      const ingResponse = await networkingV1Api.readNamespacedIngress({ name, namespace });
+      const ing = ingResponse.body || ingResponse;
+      const lb = ing.status?.loadBalancer?.ingress || [];
+      const isIngressReady = lb.length > 0 && (lb[0].ip || lb[0].hostname);
+      
+      let isReachable = false;
+      if (isIngressReady && ingressClusterConfig.domain) {
+        const domain = ingressClusterConfig.domain;
+        const proto = ingressClusterConfig.tlsEnabled ? "https" : "http";
+        const hostDomain = namespace && namespace !== "default"
+          ? `${name}.${namespace}.${domain}`
+          : `${name}.${domain}`;
+        const ingressUrl = `${proto}://${hostDomain}`;
+        isReachable = await checkIngressUrlReachability(ingressUrl);
+      }
+
+      ingressStatus = {
+        ready: !!isIngressReady && isReachable,
+        loadBalancer: lb
+      };
+    } catch (err) {
+      // 404 is expected if ingress doesn't exist
+    }
+
+    let pods = [];
+    try {
+      const podsResponse = await coreV1Api.listNamespacedPod({
+        namespace,
+        labelSelector: `app.kubernetes.io/service=${name}`
+      });
+      const items = podsResponse.body?.items || podsResponse.items || [];
+      pods = items.map(p => ({
+        name: p.metadata?.name,
+        phase: p.status?.phase,
+        restarts: p.status?.containerStatuses?.reduce((acc, c) => acc + (c.restartCount || 0), 0) || 0,
+        age: p.metadata?.creationTimestamp,
+        containerStatus: p.status?.containerStatuses?.map(c => ({
+          name: c.name,
+          ready: c.ready,
+          state: c.state
+        })) || []
+      }));
+    } catch (err) {
+      console.error("Failed to list pods from K8s:", err.message);
+    }
+
+    let vulnerabilities = null;
+    try {
+      const reportsResponse = await customObjectsApi.listNamespacedCustomObject({
+        group: 'aquasecurity.github.io',
+        version: 'v1alpha1',
+        namespace,
+        plural: 'vulnerabilityreports'
+      });
+      const items = reportsResponse.body?.items || reportsResponse.items || [];
+      
+      // Filter reports matching the current application name
+      const appReports = items.filter(item => {
+        const rName = item.metadata?.labels?.['trivy-operator.resource.name'] || '';
+        const cName = item.metadata?.labels?.['trivy-operator.container.name'] || '';
+        const repName = item.metadata?.name || '';
+        return rName === name || 
+               rName.startsWith(`${name}-`) || 
+               cName === name ||
+               repName.startsWith(`replicaset-${name}-`) ||
+               repName.startsWith(`deployment-${name}-`);
+      });
+
+      if (appReports.length > 0) {
+        vulnerabilities = appReports.map(item => ({
+          container: item.metadata?.labels?.['trivy-operator.container.name'] || 'unknown',
+          summary: item.report?.summary || { criticalCount: 0, highCount: 0, mediumCount: 0, lowCount: 0 },
+          topVulnerabilities: item.report?.vulnerabilities?.slice(0, 5).map(v => ({
+            id: v.vulnerabilityID,
+            title: v.title,
+            severity: v.severity,
+            pkg: v.resource,
+            installedVersion: v.installedVersion,
+            fixedVersion: v.fixedVersion,
+            link: v.primaryLink
+          })) || []
+        }));
+      }
+    } catch (err) {
+      // Trivy operator might not be installed, which is expected
+      console.debug("Failed to fetch Trivy vulnerability reports:", err.message);
+    }
+
+    res.json({
+      name,
+      deployed: !!deploymentStatus,
+      deployment: deploymentStatus,
+      service: serviceStatus,
+      ingress: ingressStatus,
+      pods: pods,
+      vulnerabilities: vulnerabilities
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+apiRouter.delete("/applications/:name/pods/:podName", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const { name, podName } = req.params;
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+
+    // 1. Get the pod first to verify it belongs to this application (strict isolation)
+    let pod;
+    try {
+      const podResponse = await coreV1Api.readNamespacedPod({ name: podName, namespace });
+      pod = podResponse.body || podResponse;
+    } catch (err) {
+      if (err.statusCode === 404) {
+        return res.status(404).json({ message: `Pod ${podName} not found.` });
+      }
+      throw err;
+    }
+
+    const appLabel = pod.metadata?.labels?.['app.kubernetes.io/service'];
+    if (appLabel !== name) {
+      return res.status(403).json({ message: `Unauthorized: Pod ${podName} does not belong to application ${name}.` });
+    }
+
+    // 2. Pod is verified, delete it
+    await coreV1Api.deleteNamespacedPod({ name: podName, namespace });
+    res.json({ message: `Pod ${podName} deleted successfully.` });
+  } catch (error) {
+    if (error.body) {
+      return sendK8sError(res, error);
+    }
+    next(error);
+  }
+});
+
 // --- Loki Log Integration ---
 const LOKI_URL = process.env.LOKI_URL || "http://localhost:4567";
 const NAMESPACE = process.env.ARGO_NAMESPACE || "default";
@@ -1218,10 +1799,10 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
 
     // Sanitize user inputs to prevent LogQL injection
     const safeId = id.replace(/"/g, '');
-    const safeNamespace = namespace ? namespace.toString().replace(/"/g, '') : undefined;
     const safeQuery = query ? query.toString().replace(/"/g, '\\"') : undefined;
 
-    const ns = safeNamespace || NAMESPACE;
+    // Enforce strict namespace isolation
+    const ns = NAMESPACE;
 
     // Use 4 hours as a default temporal subset window instead of 24 hours for faster indexing
     const startNs = toLokiTimestamp(start_time || new Date(Date.now() - 3600000 * 4).toISOString());
@@ -1541,7 +2122,10 @@ apiRouter.get("/artifacts/:workflow/:nodeId/:artifactName", async (req, res, nex
     const coreV1Api = kc.makeApiClient(k8s.CoreV1Api);
     if (s3Config.accessKeySecret) {
       try {
-        const secretRes = await coreV1Api.readNamespacedSecret(s3Config.accessKeySecret.name, namespace);
+        const secretRes = await coreV1Api.readNamespacedSecret({
+          name: s3Config.accessKeySecret.name,
+          namespace
+        });
         if (secretRes.body.data && secretRes.body.data[s3Config.accessKeySecret.key]) {
           accessKey = Buffer.from(secretRes.body.data[s3Config.accessKeySecret.key], 'base64').toString('utf8');
         }
@@ -1552,7 +2136,10 @@ apiRouter.get("/artifacts/:workflow/:nodeId/:artifactName", async (req, res, nex
     
     if (s3Config.secretKeySecret) {
       try {
-        const secretRes = await coreV1Api.readNamespacedSecret(s3Config.secretKeySecret.name, namespace);
+        const secretRes = await coreV1Api.readNamespacedSecret({
+          name: s3Config.secretKeySecret.name,
+          namespace
+        });
         if (secretRes.body.data && secretRes.body.data[s3Config.secretKeySecret.key]) {
           secretKey = Buffer.from(secretRes.body.data[s3Config.secretKeySecret.key], 'base64').toString('utf8');
         }
@@ -1674,6 +2261,13 @@ app.use('/api', apiRouter);
 
 // --- 3. CATCH-ALL ROUTE ---
 
+if (BASE_PATH !== "") {
+  // Redirect base path without trailing slash to base path with trailing slash
+  app.get(BASE_PATH, (req, res) => {
+    res.redirect(`${BASE_PATH}/`);
+  });
+}
+
 // Catch-all route to serve index.html for React Router
 if (BASE_PATH !== "") {
   app.get(`${BASE_PATH}/*path`, (req, res) => {
@@ -1749,7 +2343,7 @@ app.use((err, req, res, next) => {
 
 // --- 5. SERVER START ---
 
-const server = app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '::', () => {
   console.log(`Server is running on port ${PORT}`);
 });
 

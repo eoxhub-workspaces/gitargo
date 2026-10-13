@@ -10,52 +10,60 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
   const isExecutions = location.pathname.startsWith("/executions");
   const isResources = location.pathname.startsWith("/resources");
+  const isApplicationsDeployment =
+    window.BASE_PATH?.includes("gitargo-applications") ||
+    window.location.pathname.includes("gitargo-applications") ||
+    window.location.pathname.includes("-applications");
+  const isApplications =
+    location.pathname.startsWith("/applications") || isApplicationsDeployment;
 
   return (
     <div className="flex flex-col min-h-screen">
-      <nav className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex">
-              <div className="hidden sm:-my-px sm:flex sm:space-x-8">
-                <Link
-                  to="/"
-                  className={`${
-                    !isExecutions && !isResources
-                      ? "border-[#004170] text-gray-900"
-                      : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-                  } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all`}
-                >
-                  <ClipboardDocumentListIcon className="h-5 w-5 mr-2" />
-                  Workflow Definitions
-                </Link>
-                <Link
-                  to="/executions"
-                  className={`${
-                    isExecutions
-                      ? "border-[#004170] text-gray-900"
-                      : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-                  } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all`}
-                >
-                  <PlayIcon className="h-5 w-5 mr-2" />
-                  Workflow Executions
-                </Link>
-                <Link
-                  to="/resources"
-                  className={`${
-                    isResources
-                      ? "border-[#004170] text-gray-900"
-                      : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-                  } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all`}
-                >
-                  <ChartBarIcon className="h-5 w-5 mr-2" />
-                  Resources Dashboard
-                </Link>
+      {!isApplications && (
+        <nav className="bg-white border-b border-gray-200">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between h-16">
+              <div className="flex">
+                <div className="hidden sm:-my-px sm:flex sm:space-x-8">
+                  <Link
+                    to="/"
+                    className={`${
+                      !isExecutions && !isResources
+                        ? "border-[#004170] text-gray-900"
+                        : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
+                    } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all`}
+                  >
+                    <ClipboardDocumentListIcon className="h-5 w-5 mr-2" />
+                    Workflow Definitions
+                  </Link>
+                  <Link
+                    to="/executions"
+                    className={`${
+                      isExecutions
+                        ? "border-[#004170] text-gray-900"
+                        : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
+                    } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all`}
+                  >
+                    <PlayIcon className="h-5 w-5 mr-2" />
+                    Workflow Executions
+                  </Link>
+                  <Link
+                    to="/resources"
+                    className={`${
+                      isResources
+                        ? "border-[#004170] text-gray-900"
+                        : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
+                    } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all`}
+                  >
+                    <ChartBarIcon className="h-5 w-5 mr-2" />
+                    Resources Dashboard
+                  </Link>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </nav>
+        </nav>
+      )}
       <div className="flex-1 bg-gray-50">{children}</div>
     </div>
   );

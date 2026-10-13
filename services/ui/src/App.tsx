@@ -7,6 +7,7 @@ import ListView from "./views/ListView";
 import HistoryView from "./views/HistoryView";
 import ExecutionsView from "./views/ExecutionsView";
 import ResourcesView from "./views/ResourcesView";
+import ApplicationsView from "./views/ApplicationsView";
 import MainLayout from "./components/MainLayout";
 
 import { lightTheme } from "./utils/theme";
@@ -43,14 +44,25 @@ export default function App() {
     };
   }, []);
 
+  const isApplicationsDeployment =
+    window.BASE_PATH?.includes("gitargo-applications") ||
+    window.location.pathname.includes("gitargo-applications") ||
+    window.location.pathname.includes("-applications");
+
   return (
     <ThemeProvider theme={lightTheme}>
       <Toaster />
       <MainLayout>
         <Routes>
-          <Route path="/" element={<ListView />} />
+          <Route
+            path="/"
+            element={
+              isApplicationsDeployment ? <ApplicationsView /> : <ListView />
+            }
+          />
           <Route path="/executions" element={<ExecutionsView />} />
           <Route path="/resources" element={<ResourcesView />} />
+          <Route path="/applications" element={<ApplicationsView />} />
           <Route path="/new" element={<CodeProject />} />
           <Route path="/edit/:filename" element={<CodeProject />} />
           <Route path="/history/:filename" element={<HistoryView />} />
