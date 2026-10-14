@@ -9,6 +9,7 @@ RUN npm run build
 # --- Stage 2: Development Stage ---
 # Keeps npm, npx, and dev tools fully intact for rapid development workflows
 FROM node:20-alpine AS development
+ENV NODE_ENV=development
 RUN apk update && apk upgrade --no-cache
 WORKDIR /app
 COPY services/api/package*.json ./
@@ -21,6 +22,7 @@ CMD ["npm", "run", "dev"]
 # --- Stage 3: Hardened Production Stage ---
 # Defaults to strict, non-root, zero-vulnerability security by purging npm/npx
 FROM node:20-alpine AS production
+ENV NODE_ENV=production
 
 # Update Alpine repositories and upgrade all OS-level packages 
 # to pull in critical security patches (like libcrypto3 & libssl3)

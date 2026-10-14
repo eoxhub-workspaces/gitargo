@@ -4,10 +4,10 @@
 NAMESPACE=${1:-default}
 
 # Find the pod
-POD=$(kubectl -n $NAMESPACE get po -l "app=gitargo" -o name | head -n1 | cut -d/ -f2)
+POD=$(kubectl -n $NAMESPACE get po -l "app=gitargo-dev" -o name | head -n1 | cut -d/ -f2)
 
 if [ -z "$POD" ]; then
-  echo "Error: No pod found matching label app=gitargo"
+  echo "Error: No pod found matching label app=gitargo-dev"
   exit 1
 fi
 
