@@ -878,7 +878,7 @@ spec:
   };
 
   return (
-    <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+    <div className="max-w-[96%] max-w-[1600px] mx-auto py-6 sm:px-6 lg:px-8">
       {/* View Header */}
       <div className="flex justify-between items-center px-4 sm:px-0 mb-6">
         <div>
@@ -936,7 +936,7 @@ spec:
           </div>
         </div>
       ) : (
-        <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+        <div className="bg-white shadow overflow-x-auto sm:rounded-lg">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
@@ -960,7 +960,7 @@ spec:
                 </th>
                 <th
                   scope="col"
-                  className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider"
+                  className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider pr-8"
                 >
                   Actions
                 </th>
@@ -974,13 +974,13 @@ spec:
                     isAppDisabled(app.name) ? "opacity-60 bg-gray-50/50" : ""
                   }`}
                 >
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  <td className="px-6 py-4 min-w-[260px]">
                     <div className="flex items-center">
                       <div className="flex-shrink-0 h-10 w-10 flex items-center justify-center bg-blue-50 text-[#004170] rounded-lg">
                         <CpuChipIcon className="h-6 w-6" />
                       </div>
-                      <div className="ml-4">
-                        <div className="text-sm font-semibold text-gray-900">
+                      <div className="ml-4 min-w-0 flex-1">
+                        <div className="text-sm font-semibold text-gray-900 break-words">
                           {app.name}
                         </div>
                         {!isAppDisabled(app.name) && getIngressUrl(app) && (
@@ -990,23 +990,26 @@ spec:
                                 href={getIngressUrl(app)!}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-blue-600 hover:text-blue-800 hover:underline flex items-center"
+                                className="text-blue-600 hover:text-blue-800 hover:underline flex items-center max-w-xs sm:max-w-md truncate"
+                                title={getIngressUrl(app)}
                               >
-                                <EyeIcon className="h-3 w-3 mr-1 inline-block" />
-                                {getIngressUrl(app)}
+                                <EyeIcon className="h-3 w-3 mr-1 inline-block flex-shrink-0" />
+                                <span className="truncate">
+                                  {getIngressUrl(app)}
+                                </span>
                               </a>
                             ) : (
                               <span
                                 className="text-gray-400 flex items-center animate-pulse select-none"
                                 title="Ingress is currently being reconciled and DNS routing allocated by the cluster. This link will activate automatically once ready."
                               >
-                                <ArrowPathIcon className="h-3 w-3 mr-1 inline-block animate-spin" />
+                                <ArrowPathIcon className="h-3 w-3 mr-1 inline-block animate-spin flex-shrink-0" />
                                 Routing (Configuring DNS)...
                               </span>
                             )}
                           </div>
                         )}
-                        <div className="text-xs text-gray-400">
+                        <div className="text-xs text-gray-400 truncate">
                           Folder: applications/{app.name}
                         </div>
                       </div>
@@ -1040,55 +1043,59 @@ spec:
                       )}
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button
-                      onClick={() => handleOpenStatusModal(app.name)}
-                      disabled={isAppDisabled(app.name)}
-                      className={`inline-flex items-center mr-4 ${
-                        isAppDisabled(app.name)
-                          ? "text-gray-300 cursor-not-allowed"
-                          : "text-[#004170] hover:text-[#002f54]"
-                      }`}
-                      title="Manage Status"
-                    >
-                      <DocumentMagnifyingGlassIcon className="h-5 w-5 mr-1" />
-                      Manage
-                    </button>
-                    {isAppDisabled(app.name) ? (
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium pr-8">
+                    <div className="flex items-center justify-end space-x-3">
                       <button
-                        onClick={() => handleToggleDisableApp(app.name, true)}
-                        className="text-green-600 hover:text-green-900 inline-flex items-center mr-4"
-                        title="Enable Application"
+                        onClick={() => handleOpenStatusModal(app.name)}
+                        disabled={isAppDisabled(app.name)}
+                        className={`inline-flex items-center ${
+                          isAppDisabled(app.name)
+                            ? "text-gray-300 cursor-not-allowed"
+                            : "text-[#004170] hover:text-[#002f54]"
+                        }`}
+                        title="Manage Status"
                       >
-                        <CheckCircleIcon className="h-4 w-4 mr-1" />
-                        Enable
+                        <DocumentMagnifyingGlassIcon className="h-5 w-5 mr-1" />
+                        Manage
                       </button>
-                    ) : (
+                      {isAppDisabled(app.name) ? (
+                        <button
+                          onClick={() => handleToggleDisableApp(app.name, true)}
+                          className="text-green-600 hover:text-green-900 inline-flex items-center"
+                          title="Enable Application"
+                        >
+                          <CheckCircleIcon className="h-4 w-4 mr-1" />
+                          Enable
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() =>
+                            handleToggleDisableApp(app.name, false)
+                          }
+                          className="text-orange-600 hover:text-orange-900 inline-flex items-center"
+                          title="Disable Application"
+                        >
+                          <XMarkIcon className="h-4 w-4 mr-1" />
+                          Disable
+                        </button>
+                      )}
                       <button
-                        onClick={() => handleToggleDisableApp(app.name, false)}
-                        className="text-orange-600 hover:text-orange-900 inline-flex items-center mr-4"
-                        title="Disable Application"
+                        onClick={() => handleOpenEditModal(app.name)}
+                        className="text-indigo-600 hover:text-indigo-900 inline-flex items-center"
+                        title="Edit YAML config"
                       >
-                        <XMarkIcon className="h-4 w-4 mr-1" />
-                        Disable
+                        <PencilIcon className="h-4 w-4 mr-1" />
+                        Edit
                       </button>
-                    )}
-                    <button
-                      onClick={() => handleOpenEditModal(app.name)}
-                      className="text-indigo-600 hover:text-indigo-900 inline-flex items-center mr-4"
-                      title="Edit YAML config"
-                    >
-                      <PencilIcon className="h-4 w-4 mr-1" />
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => handleDeleteApp(app.name)}
-                      className="text-red-600 hover:text-red-900 inline-flex items-center"
-                      title="Delete Application"
-                    >
-                      <TrashIcon className="h-4 w-4 mr-1" />
-                      Delete
-                    </button>
+                      <button
+                        onClick={() => handleDeleteApp(app.name)}
+                        className="text-red-600 hover:text-red-900 inline-flex items-center"
+                        title="Delete Application"
+                      >
+                        <TrashIcon className="h-4 w-4 mr-1" />
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
