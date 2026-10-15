@@ -1,12 +1,14 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   ClipboardDocumentListIcon,
   PlayIcon,
   ChartBarIcon
 } from "@heroicons/react/24/outline";
+import { getConfig } from "../utils/api";
 
 const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [version, setVersion] = useState<string | null>(null);
   const location = useLocation();
   const isExecutions = location.pathname.startsWith("/executions");
   const isResources = location.pathname.startsWith("/resources");
@@ -17,8 +19,16 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isApplications =
     location.pathname.startsWith("/applications") || isApplicationsDeployment;
 
+  useEffect(() => {
+    getConfig()
+      .then((cfg) => {
+        if (cfg?.version) setVersion(cfg.version);
+      })
+      .catch(() => {});
+  }, []);
+
   return (
-    <div className="flex flex-col min-h-screen">
+    <div className="flex flex-col min-h-screen relative pb-6">
       {!isApplications && (
         <nav className="bg-white border-b border-gray-200">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -65,6 +75,9 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </nav>
       )}
       <div className="flex-1 bg-gray-50">{children}</div>
+      <div className="fixed bottom-1 right-2 text-[10px] font-mono text-gray-400 opacity-60 hover:opacity-100 transition-opacity select-none pointer-events-none z-50">
+        v{version || "0.4.1"}
+      </div>
     </div>
   );
 };

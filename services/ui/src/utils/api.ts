@@ -81,6 +81,7 @@ export interface IngressConfig {
 }
 
 export interface AppConfig {
+  version?: string;
   profiles: Record<
     string,
     {

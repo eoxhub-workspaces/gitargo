@@ -74,19 +74,28 @@ const gitlabApi = axios.create({
 gitlabApi.defaults.httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 // CORS configuration to support authenticated requests (withCredentials: true)
-const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS 
-  ? process.env.CORS_ALLOWED_ORIGINS.split(',') 
-  : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:8000', 'http://localhost:8080'];
+const corsAllowedOriginsEnv = process.env.CORS_ALLOWED_ORIGINS;
+const allowedOrigins = corsAllowedOriginsEnv
+  ? corsAllowedOriginsEnv.split(',').map(o => o.trim())
+  : [];
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
+    // Allow requests with no origin (like mobile apps, curl, or same-origin)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+
+    // If CORS_ALLOWED_ORIGINS is not set, or includes '*', or in non-production, allow the origin
+    if (!corsAllowedOriginsEnv || allowedOrigins.includes('*') || process.env.NODE_ENV !== 'production') {
+      return callback(null, true);
     }
+
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      return callback(null, true);
+    }
+
+    // Safely reject origin without throwing a 500 Internal Server Error exception
+    console.warn(`[CORS] Rejected request from origin: ${origin}`);
+    callback(null, false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -342,12 +351,24 @@ apiRouter.use((req, res, next) => {
   requiresAuth(req, res, next);
 });
 
+let APP_VERSION = process.env.APP_VERSION || "0.4.1";
+try {
+  const apiPkg = require("./package.json");
+  if (apiPkg && apiPkg.version) APP_VERSION = apiPkg.version;
+} catch (e) {
+  try {
+    const rootPkg = require("../../package.json");
+    if (rootPkg && rootPkg.version) APP_VERSION = rootPkg.version;
+  } catch (err) {}
+}
+
 /**
  * GET /api/config
  * Expose relevant configuration and profiles to the frontend.
  */
 apiRouter.get("/config", (req, res) => {
   res.json({
+    version: APP_VERSION,
     profiles: ARGO_PROFILES,
     availableTolerations: ARGO_AVAILABLE_TOLERATIONS,
     availableNodeSelectors: ARGO_AVAILABLE_NODE_SELECTORS,
