@@ -3,7 +3,8 @@ import { Link, useLocation } from "react-router-dom";
 import {
   ClipboardDocumentListIcon,
   PlayIcon,
-  ChartBarIcon
+  ChartBarIcon,
+  CubeIcon
 } from "@heroicons/react/24/outline";
 import { getConfig } from "../utils/api";
 
@@ -12,6 +13,7 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
   const isExecutions = location.pathname.startsWith("/executions");
   const isResources = location.pathname.startsWith("/resources");
+  const isPackages = location.pathname.startsWith("/packages");
   const isApplicationsDeployment =
     window.BASE_PATH?.includes("gitargo-applications") ||
     window.location.pathname.includes("gitargo-applications") ||
@@ -38,13 +40,24 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                   <Link
                     to="/"
                     className={`${
-                      !isExecutions && !isResources
+                      !isExecutions && !isResources && !isPackages
                         ? "border-[#004170] text-gray-900"
                         : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
                     } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all`}
                   >
                     <ClipboardDocumentListIcon className="h-5 w-5 mr-2" />
                     Workflow Definitions
+                  </Link>
+                  <Link
+                    to="/packages"
+                    className={`${
+                      isPackages
+                        ? "border-[#004170] text-gray-900"
+                        : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
+                    } inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium transition-all`}
+                  >
+                    <CubeIcon className="h-5 w-5 mr-2" />
+                    OGC Packages
                   </Link>
                   <Link
                     to="/executions"

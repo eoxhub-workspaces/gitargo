@@ -8,6 +8,7 @@ import HistoryView from "./views/HistoryView";
 import ExecutionsView from "./views/ExecutionsView";
 import ResourcesView from "./views/ResourcesView";
 import ApplicationsView from "./views/ApplicationsView";
+import { ApplicationPackagesView } from "./views/ApplicationPackagesView";
 import MainLayout from "./components/MainLayout";
 
 import { lightTheme } from "./utils/theme";
@@ -61,6 +62,7 @@ export default function App() {
             }
           />
           <Route path="/executions" element={<ExecutionsView />} />
+          <Route path="/packages" element={<ApplicationPackagesView />} />
           <Route path="/resources" element={<ResourcesView />} />
           <Route path="/applications" element={<ApplicationsView />} />
           <Route path="/new" element={<CodeProject />} />

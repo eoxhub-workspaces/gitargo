@@ -391,4 +391,85 @@ export const deleteApplicationPod = async (
   return response.data;
 };
 
+export interface PackageFile {
+  id: string;
+  name: string;
+  type: string;
+  path: string;
+  mode: string;
+}
+
+export const getPackages = async (): Promise<PackageFile[]> => {
+  const response = await api.get<PackageFile[]>("/packages");
+  return response.data;
+};
+
+export const getPackageRaw = async (path: string): Promise<string> => {
+  const response = await api.get<string>(`/packages/${path}`, {
+    responseType: "text"
+  });
+  return response.data;
+};
+
+export const savePackage = async (
+  path: string,
+  content: string,
+  commitMessage?: string
+) => {
+  const response = await api.post(`/packages/${path}`, {
+    content,
+    commit_message: commitMessage
+  });
+  return response.data;
+};
+
+export const deletePackage = async (path: string) => {
+  const response = await api.delete(`/packages/${path}`);
+  return response.data;
+};
+
+export interface CwlSubmissionPayload {
+  cwlUrl?: string;
+  cwlContent?: string;
+  parameters?: Record<string, any>;
+  inputTypes?: Record<string, string>;
+  inlineFiles?: Record<string, string>;
+  name?: string;
+  packageId?: string;
+}
+
+export const submitCwlExecution = async (payload: CwlSubmissionPayload) => {
+  const response = await api.post("/executions/cwl", payload);
+  return response.data;
+};
+
+export interface WorkspaceFileItem {
+  name: string;
+  isDirectory: boolean;
+  size: number;
+  mtime: string | null;
+}
+
+export interface WorkspaceFilesResponse {
+  files: WorkspaceFileItem[];
+  exists: boolean;
+  currentPath: string;
+}
+
+export const getWorkspaceFiles = async (
+  filePath: string = ""
+): Promise<WorkspaceFilesResponse> => {
+  const response = await api.get<WorkspaceFilesResponse>("/workspace/files", {
+    params: { path: filePath }
+  });
+  return response.data;
+};
+
+export const getWorkspaceFileDownloadUrl = (filePath: string): string => {
+  const isDev = process.env.NODE_ENV === "development";
+  const basePath = window.BASE_PATH || "";
+  const baseUrl = isDev ? "http://localhost:3000/api" : `${basePath}/api`;
+  return `${baseUrl}/workspace/files?path=${encodeURIComponent(filePath)}`;
+};
+
 export default api;

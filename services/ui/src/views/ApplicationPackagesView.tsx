@@ -1,0 +1,992 @@
+import React, { useState, useEffect } from "react";
+import YAML from "yaml";
+import axios from "axios";
+import toast from "react-hot-toast";
+import {
+  getPackages,
+  getPackageRaw,
+  savePackage,
+  deletePackage,
+  submitCwlExecution,
+  getExecutions,
+  getLogs,
+  PackageFile
+} from "../utils/api";
+import CodeEditor from "../components/CodeEditor";
+import { WorkspaceBrowser } from "../components/WorkspaceBrowser";
+import {
+  CloudArrowDownIcon,
+  PlayIcon,
+  FolderOpenIcon,
+  ArrowPathIcon,
+  TrashIcon,
+  PlusIcon,
+  DocumentTextIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  ClockIcon,
+  Square3Stack3DIcon,
+  PencilSquareIcon,
+  KeyIcon,
+  CommandLineIcon,
+  XMarkIcon
+} from "@heroicons/react/24/outline";
+
+interface CwlInputDef {
+  id: string;
+  type: string;
+  doc?: string;
+  default?: any;
+  isFile?: boolean;
+}
+
+export const ApplicationPackagesView: React.FC = () => {
+  // Saved packages list
+  const [packages, setPackages] = useState<PackageFile[]>([]);
+  const [loadingPackages, setLoadingPackages] = useState<boolean>(true);
+  const [selectedPackagePath, setSelectedPackagePath] = useState<string | null>(null);
+
+  // Active package state
+  const [url, setUrl] = useState<string>(
+    "https://github.com/sunnydean/lightning2earthcare/blob/main/cwl/package.cwl"
+  );
+  const [loadingUrl, setLoadingUrl] = useState<boolean>(false);
+  const [executing, setExecuting] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [rawCwl, setRawCwl] = useState<string>("");
+  const [cwlDoc, setCwlDoc] = useState<any>(null);
+  const [inputs, setInputs] = useState<CwlInputDef[]>([]);
+  const [paramValues, setParamValues] = useState<Record<string, any>>({});
+  const [paramTypes, setParamTypes] = useState<Record<string, string>>({});
+  const [fileContents, setFileContents] = useState<Record<string, string>>({});
+  const [executionName, setExecutionName] = useState<string>("");
+  const [packageFileName, setPackageFileName] = useState<string>("");
+
+  // Tabs & Views
+  const [activeTab, setActiveTab] = useState<"configure" | "edit" | "executions">("configure");
+  const [showFileBrowser, setShowFileBrowser] = useState<boolean>(false);
+  const [fileBrowserPath, setFileBrowserPath] = useState<string>("application_packages_executions");
+
+  // Executions for selected package
+  const [allExecutions, setAllExecutions] = useState<any[]>([]);
+  const [loadingExecutions, setLoadingExecutions] = useState<boolean>(false);
+
+  // Logs modal
+  const [showLogModal, setShowLogModal] = useState<boolean>(false);
+  const [logExecName, setLogExecName] = useState<string>("");
+  const [logsText, setLogsText] = useState<string>("");
+  const [logsLoading, setLogsLoading] = useState<boolean>(false);
+
+  // Load saved packages list on mount
+  const fetchPackageList = async () => {
+    setLoadingPackages(true);
+    try {
+      const list = await getPackages();
+      setPackages(list);
+    } catch (err: any) {
+      console.error("Failed to list packages:", err);
+    } finally {
+      setLoadingPackages(false);
+    }
+  };
+
+  // Load all executions from K8s API
+  const fetchExecutions = async () => {
+    setLoadingExecutions(true);
+    try {
+      const data = await getExecutions();
+      setAllExecutions(Array.isArray(data) ? data : []);
+    } catch (err: any) {
+      console.error("Failed to load executions:", err);
+    } finally {
+      setLoadingExecutions(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPackageList();
+    fetchExecutions();
+  }, []);
+
+  // Helper to convert Github web URLs to raw URLs
+  const getRawUrl = (inputUrl: string): string => {
+    let clean = inputUrl.trim();
+    if (clean.includes("github.com") && clean.includes("/blob/")) {
+      clean = clean
+        .replace("github.com", "raw.githubusercontent.com")
+        .replace("/blob/", "/");
+    }
+    return clean;
+  };
+
+  const isFileInput = (id: string, typeStr: string) => {
+    const t = typeStr.toLowerCase();
+    const i = id.toLowerCase();
+    return (
+      t.includes("file") ||
+      i.includes("file") ||
+      i.includes("credentials") ||
+      i.includes("secret") ||
+      i.includes("config")
+    );
+  };
+
+  const formatTypeString = (typeVal: any): string => {
+    if (!typeVal) return "string";
+    if (typeof typeVal === "string") return typeVal;
+    if (Array.isArray(typeVal)) {
+      const validTypes = typeVal
+        .map((t) => formatTypeString(t))
+        .filter((t) => t !== "null");
+      return validTypes.join(" | ") || "string";
+    }
+    if (typeof typeVal === "object") {
+      if (typeVal.type === "array") {
+        return `${typeVal.items || "string"}[]`;
+      }
+      return typeVal.type || JSON.stringify(typeVal);
+    }
+    return String(typeVal);
+  };
+
+  const formatDefaultValue = (defVal: any): any => {
+    if (defVal === undefined) return undefined;
+    if (Array.isArray(defVal)) {
+      return defVal.join(", ");
+    }
+    return defVal;
+  };
+
+  // Helper to parse CWL text into state
+  const parseCwlText = (textContent: string, sourceName?: string) => {
+    setRawCwl(textContent);
+    try {
+      const parsed = YAML.parse(textContent);
+      setCwlDoc(parsed);
+
+      let targetInputs: any = null;
+      let targetDoc = parsed?.doc || parsed?.label || "";
+      let targetLabel = parsed?.label || parsed?.id || "";
+
+      if (parsed && parsed.inputs) {
+        targetInputs = parsed.inputs;
+      } else if (parsed && Array.isArray(parsed.$graph)) {
+        const mainObj =
+          parsed.$graph.find(
+            (item: any) => item.id === "main" || item.class === "Workflow"
+          ) ||
+          parsed.$graph.find((item: any) => item.inputs) ||
+          parsed.$graph[0];
+
+        if (mainObj) {
+          targetInputs = mainObj.inputs;
+          if (mainObj.doc) targetDoc = mainObj.doc;
+          if (mainObj.label || mainObj.id) targetLabel = mainObj.label || mainObj.id;
+        }
+      }
+
+      const parsedInputs: CwlInputDef[] = [];
+      const defaultValues: Record<string, any> = {};
+      const typesMap: Record<string, string> = {};
+
+      if (targetInputs) {
+        if (Array.isArray(targetInputs)) {
+          targetInputs.forEach((input: any) => {
+            const inputId = input.id || input.name;
+            const inputType = formatTypeString(input.type);
+            const defVal = formatDefaultValue(input.default);
+
+            typesMap[inputId] = inputType;
+            parsedInputs.push({
+              id: inputId,
+              type: inputType,
+              doc: input.doc || input.label,
+              default: defVal,
+              isFile: isFileInput(inputId, inputType)
+            });
+            if (defVal !== undefined) {
+              defaultValues[inputId] = defVal;
+            }
+          });
+        } else if (typeof targetInputs === "object") {
+          Object.entries(targetInputs).forEach(([inputId, inputVal]: [string, any]) => {
+            let inputType = "string";
+            let doc = "";
+            let rawDefVal = undefined;
+
+            if (typeof inputVal === "string") {
+              inputType = inputVal;
+            } else if (typeof inputVal === "object") {
+              inputType = formatTypeString(inputVal.type);
+              doc = inputVal.doc || inputVal.label || "";
+              rawDefVal = inputVal.default;
+            }
+
+            const defVal = formatDefaultValue(rawDefVal);
+            typesMap[inputId] = inputType;
+
+            parsedInputs.push({
+              id: inputId,
+              type: inputType,
+              doc,
+              default: defVal,
+              isFile: isFileInput(inputId, inputType)
+            });
+
+            if (defVal !== undefined) {
+              defaultValues[inputId] = defVal;
+            }
+          });
+        }
+      }
+
+      setInputs(parsedInputs);
+      setParamValues(defaultValues);
+      setParamTypes(typesMap);
+
+      let rawUrlFilename = "";
+      if (url) {
+        const parts = url.trim().split("/");
+        const last = parts[parts.length - 1];
+        if (last && (last.endsWith(".cwl") || last.endsWith(".yaml") || last.endsWith(".yml"))) {
+          rawUrlFilename = last;
+        }
+      }
+
+      let suggestedFileName = sourceName || rawUrlFilename || targetLabel || "package.cwl";
+      if (!suggestedFileName.endsWith(".cwl") && !suggestedFileName.endsWith(".yaml") && !suggestedFileName.endsWith(".yml")) {
+        suggestedFileName += ".cwl";
+      }
+
+      const cleanSlug = suggestedFileName
+        .replace(/\.(cwl|yaml|yml)$/i, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-");
+
+      setExecutionName(cleanSlug);
+      setPackageFileName(suggestedFileName);
+    } catch (err: any) {
+      toast.error(`Invalid CWL structure: ${err.message}`);
+    }
+  };
+
+  // Load CWL from URL
+  const handleLoadUrl = async () => {
+    if (!url) {
+      toast.error("Please enter a CWL Package URL.");
+      return;
+    }
+
+    setLoadingUrl(true);
+    setSelectedPackagePath(null);
+    const rawUrl = getRawUrl(url);
+
+    try {
+      const response = await axios.get(rawUrl, { responseType: "text" });
+      parseCwlText(response.data);
+      toast.success("Remote OGC Application Package loaded!");
+    } catch (err: any) {
+      console.error("Failed to load CWL:", err);
+      toast.error(`Failed to fetch URL: ${err.message}`);
+    } finally {
+      setLoadingUrl(false);
+    }
+  };
+
+  // Load saved package from Git
+  const handleSelectPackage = async (pkg: PackageFile) => {
+    setSelectedPackagePath(pkg.path);
+    try {
+      const content = await getPackageRaw(pkg.path);
+      parseCwlText(content, pkg.name);
+      toast.success(`Loaded package "${pkg.name}" from Git.`);
+    } catch (err: any) {
+      toast.error(`Failed to load saved package: ${err.message}`);
+    }
+  };
+
+  // Delete saved package from Git
+  const handleDeletePackage = async (e: React.MouseEvent, pkg: PackageFile) => {
+    e.stopPropagation();
+    if (!window.confirm(`Are you sure you want to delete "${pkg.name}" from Git?`)) {
+      return;
+    }
+
+    try {
+      await deletePackage(pkg.path);
+      toast.success(`Deleted package ${pkg.name}`);
+      if (selectedPackagePath === pkg.path) {
+        setSelectedPackagePath(null);
+        setCwlDoc(null);
+      }
+      fetchPackageList();
+    } catch (err: any) {
+      toast.error(`Failed to delete package: ${err.message}`);
+    }
+  };
+
+  // Save package to Git
+  const handleSaveToGit = async () => {
+    if (!rawCwl) {
+      toast.error("No CWL content to save.");
+      return;
+    }
+
+    const savePath = packageFileName || "ogc-package.cwl";
+    setSaving(true);
+    try {
+      await savePackage(
+        savePath,
+        rawCwl,
+        `Save OGC Application Package ${savePath}`
+      );
+      toast.success(`Package saved to Git repository (${savePath})!`);
+      fetchPackageList();
+      setSelectedPackagePath(savePath);
+    } catch (err: any) {
+      toast.error(`Failed to save package: ${err.message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Execute package
+  const handleExecute = async () => {
+    if (!cwlDoc) {
+      toast.error("Please load or select an Application Package first.");
+      return;
+    }
+
+    setExecuting(true);
+    try {
+      const cleanPkgId = (selectedPackagePath || executionName || "cwl-execution")
+        .toLowerCase()
+        .replace(/\.cwl$/i, "")
+        .replace(/[^a-z0-9-]/g, "-")
+        .substring(0, 63)
+        .replace(/-+$/, "");
+
+      await submitCwlExecution({
+        cwlUrl: selectedPackagePath ? undefined : getRawUrl(url),
+        cwlContent: rawCwl,
+        parameters: paramValues,
+        inputTypes: paramTypes,
+        inlineFiles: fileContents,
+        name: executionName || "cwl-execution",
+        packageId: cleanPkgId
+      });
+
+      toast.success("Application Package execution submitted successfully!");
+      fetchExecutions();
+      setActiveTab("executions");
+    } catch (err: any) {
+      console.error("Execution failed:", err);
+      toast.error(
+        `Execution failed: ${err.response?.data?.message || err.message}`
+      );
+    } finally {
+      setExecuting(false);
+    }
+  };
+
+  const handleInputChange = (inputId: string, value: any) => {
+    setParamValues((prev) => ({
+      ...prev,
+      [inputId]: value
+    }));
+  };
+
+  // Fetch execution logs
+  const handleViewLogs = async (execName: string, startTime?: string, endTime?: string) => {
+    setLogExecName(execName);
+    setLogsText("Fetching execution logs...");
+    setLogsLoading(true);
+    setShowLogModal(true);
+
+    try {
+      let startBuf = startTime;
+      let endBuf = endTime;
+      if (startBuf) {
+        startBuf = new Date(new Date(startBuf).getTime() - 24 * 3600 * 1000).toISOString();
+      }
+      if (endBuf) {
+        endBuf = new Date(new Date(endBuf).getTime() + 24 * 3600 * 1000).toISOString();
+      }
+
+      const logs = await getLogs(execName, "workflow", undefined, startBuf, endBuf, execName);
+      setLogsText(logs || "No logs recorded for this execution.");
+    } catch (err: any) {
+      setLogsText(
+        "Failed to load logs: " + (err.response?.data?.message || err.message)
+      );
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
+  // Filter executions for currently active package
+  const currentCleanPackageId = (selectedPackagePath || executionName || "")
+    .toLowerCase()
+    .replace(/\.cwl$/i, "")
+    .replace(/[^a-z0-9-]/g, "-")
+    .substring(0, 63)
+    .replace(/-+$/, "");
+
+  const packageFilenameSlug = selectedPackagePath
+    ? selectedPackagePath
+        .split("/")
+        .pop()
+        ?.replace(/\.cwl$/i, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-")
+        .substring(0, 63)
+        .replace(/-+$/, "")
+    : "";
+
+  const packageExecutions = allExecutions
+    .filter((item) => {
+      const pkgLabel = item.metadata?.labels?.["gitargo.eox.at/package-id"];
+      const typeLabel = item.metadata?.labels?.["gitargo.eox.at/type"];
+      const name = (item.metadata?.name || "").toLowerCase();
+
+      // 1. Direct label match or inclusion
+      if (pkgLabel && currentCleanPackageId && (pkgLabel === currentCleanPackageId || currentCleanPackageId.includes(pkgLabel) || pkgLabel.includes(currentCleanPackageId))) {
+        return true;
+      }
+      if (pkgLabel && packageFilenameSlug && (pkgLabel === packageFilenameSlug || packageFilenameSlug.includes(pkgLabel) || pkgLabel.includes(packageFilenameSlug))) {
+        return true;
+      }
+
+      // 2. Name substring / prefix match
+      if (currentCleanPackageId && name.includes(currentCleanPackageId)) {
+        return true;
+      }
+      if (packageFilenameSlug && name.includes(packageFilenameSlug)) {
+        return true;
+      }
+
+      // 3. Fallback for CWL package type
+      if (typeLabel === "cwl-package") {
+        if (!currentCleanPackageId && !packageFilenameSlug) return true;
+      }
+
+      return false;
+    })
+    .sort((a, b) => {
+      const timeA = new Date(a.metadata?.creationTimestamp || a.status?.startedAt || 0).getTime();
+      const timeB = new Date(b.metadata?.creationTimestamp || b.status?.startedAt || 0).getTime();
+      return timeB - timeA;
+    });
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-4rem)] bg-gray-50 overflow-hidden">
+      {/* Top Bar */}
+      <div className="bg-white border-b px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 dark:bg-gray-800 dark:border-gray-700">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900 dark:text-white flex items-center space-x-2">
+            <Square3Stack3DIcon className="w-6 h-6 text-blue-600" />
+            <span>OGC Application Packages</span>
+          </h1>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Manage, configure, and execute version-controlled CWL Application Packages on Kubernetes.
+          </p>
+        </div>
+
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={() => {
+              setSelectedPackagePath(null);
+              setCwlDoc(null);
+              setRawCwl("");
+              setActiveTab("configure");
+            }}
+            className="inline-flex items-center space-x-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-400 px-3.5 py-2 rounded-lg text-xs font-semibold transition"
+          >
+            <PlusIcon className="w-4 h-4" />
+            <span>Import / New Package</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setFileBrowserPath("application_packages_executions");
+              setShowFileBrowser(true);
+            }}
+            className="inline-flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-900 text-white px-3.5 py-2 rounded-lg text-xs font-semibold transition"
+          >
+            <FolderOpenIcon className="w-4 h-4" />
+            <span>All Workspace Files</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main Content Area (Sidebar + Editor/Form) */}
+      <div className="flex flex-1 overflow-hidden min-h-0">
+        {/* Sidebar: Saved Packages in Git */}
+        <div className="w-80 bg-white border-r border-gray-200 dark:bg-gray-800 dark:border-gray-700 flex flex-col overflow-hidden">
+          <div className="p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 flex justify-between items-center">
+            <span className="text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-gray-400">
+              Saved Packages ({packages.length})
+            </span>
+            <button
+              onClick={fetchPackageList}
+              className="p-1 text-gray-500 hover:text-gray-800 dark:hover:text-white"
+              title="Refresh package list"
+            >
+              <ArrowPathIcon className={`w-4 h-4 ${loadingPackages ? "animate-spin" : ""}`} />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700/60">
+            {loadingPackages ? (
+              <div className="p-6 text-center text-xs text-gray-400">Loading packages...</div>
+            ) : packages.length === 0 ? (
+              <div className="p-6 text-center text-xs text-gray-400 italic">
+                No packages saved in Git repository yet. Use "Import / New Package" to load and save one.
+              </div>
+            ) : (
+              packages.map((pkg) => {
+                const isSelected = selectedPackagePath === pkg.path;
+                return (
+                  <div
+                    key={pkg.path}
+                    onClick={() => handleSelectPackage(pkg)}
+                    className={`p-3 cursor-pointer transition flex items-center justify-between group ${
+                      isSelected
+                        ? "bg-blue-50/80 dark:bg-blue-900/30 border-l-4 border-blue-600"
+                        : "hover:bg-gray-50 dark:hover:bg-gray-700/40"
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2.5 overflow-hidden">
+                      <DocumentTextIcon className="w-5 h-5 text-blue-500 flex-shrink-0" />
+                      <div className="truncate">
+                        <p className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">
+                          {pkg.name}
+                        </p>
+                        <p className="text-[10px] font-mono text-gray-400 truncate">
+                          {pkg.path}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={(e) => handleDeletePackage(e, pkg)}
+                      className="p-1 opacity-0 group-hover:opacity-100 hover:text-red-600 transition"
+                      title="Delete package"
+                    >
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Right Main Content */}
+        <div className="flex-1 flex flex-col overflow-y-auto p-6 space-y-6">
+          {/* URL Import Card if no package loaded or creating new */}
+          {!selectedPackagePath && (
+            <div className="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm space-y-3">
+              <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">
+                Load Remote CWL Package URL
+              </label>
+              <div className="flex gap-3">
+                <input
+                  type="text"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="https://github.com/owner/repo/blob/main/cwl/package.cwl"
+                  className="flex-1 px-3.5 py-2 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-white text-xs outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  onClick={handleLoadUrl}
+                  disabled={loadingUrl}
+                  className="inline-flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-xs font-bold transition disabled:opacity-50"
+                >
+                  {loadingUrl ? (
+                    <ArrowPathIcon className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <CloudArrowDownIcon className="w-4 h-4" />
+                  )}
+                  <span>Fetch Package</span>
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-gray-500">
+                <span className="font-semibold text-gray-600 dark:text-gray-400">Sample Presets:</span>
+                <button
+                  type="button"
+                  onClick={() => setUrl("https://raw.githubusercontent.com/common-workflow-language/cwltool/main/tests/echo.cwl")}
+                  className="text-blue-600 hover:underline bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded font-mono"
+                >
+                  Simple Echo Tool
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUrl("https://github.com/sunnydean/lightning2earthcare/blob/main/cwl/package.cwl")}
+                  className="text-blue-600 hover:underline bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded font-mono"
+                >
+                  Lightning2EarthCare Package
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Active Package Section */}
+          {cwlDoc ? (
+            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex flex-col flex-1 overflow-hidden">
+              {/* Tabs Navigation */}
+              <div className="border-b border-gray-200 dark:border-gray-700 px-6 pt-3 flex items-center justify-between bg-gray-50/50 dark:bg-gray-900/30">
+                <div className="flex space-x-6">
+                  <button
+                    onClick={() => setActiveTab("configure")}
+                    className={`pb-3 text-xs font-bold border-b-2 transition ${
+                      activeTab === "configure"
+                        ? "border-blue-600 text-blue-600 dark:text-blue-400"
+                        : "border-transparent text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    Configure & Execute
+                  </button>
+                  <button
+                    onClick={() => setActiveTab("edit")}
+                    className={`pb-3 text-xs font-bold border-b-2 transition flex items-center space-x-1.5 ${
+                      activeTab === "edit"
+                        ? "border-blue-600 text-blue-600 dark:text-blue-400"
+                        : "border-transparent text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    <PencilSquareIcon className="w-3.5 h-3.5" />
+                    <span>Adapt CWL</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab("executions")}
+                    className={`pb-3 text-xs font-bold border-b-2 transition flex items-center space-x-1.5 ${
+                      activeTab === "executions"
+                        ? "border-blue-600 text-blue-600 dark:text-blue-400"
+                        : "border-transparent text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    <PlayIcon className="w-3.5 h-3.5" />
+                    <span>Executions ({packageExecutions.length})</span>
+                  </button>
+                </div>
+
+                <div className="pb-2 flex items-center space-x-2">
+                  <input
+                    type="text"
+                    value={packageFileName}
+                    onChange={(e) => setPackageFileName(e.target.value)}
+                    placeholder="package.cwl"
+                    className="px-2.5 py-1 rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-xs font-mono text-gray-800 dark:text-gray-200"
+                  />
+                  <button
+                    onClick={handleSaveToGit}
+                    disabled={saving}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1 rounded text-xs font-semibold transition disabled:opacity-50"
+                  >
+                    {saving ? "Saving..." : "Save to Git"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Tab 1: Configure & Execute */}
+              {activeTab === "configure" && (
+                <div className="p-6 space-y-6 overflow-y-auto flex-1">
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-900 dark:text-white">
+                      {cwlDoc.label || cwlDoc.id || "Package Configuration"}
+                    </h2>
+                    {cwlDoc.doc && (
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-relaxed">
+                        {cwlDoc.doc}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Input Parameters Form */}
+                  <div className="space-y-4 pt-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300">
+                      Input Parameters ({inputs.length})
+                    </h3>
+
+                    {inputs.length === 0 ? (
+                      <p className="text-xs text-gray-400 italic">
+                        No input parameters required by this application package definition.
+                      </p>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {inputs.map((input) => (
+                          <div
+                            key={input.id}
+                            className="p-3.5 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700/60 space-y-2"
+                          >
+                            <div className="flex justify-between items-center">
+                              <span className="font-semibold text-xs text-gray-900 dark:text-white flex items-center space-x-1">
+                                {input.isFile && <KeyIcon className="w-3.5 h-3.5 text-amber-500" />}
+                                <span>{input.id}</span>
+                              </span>
+                              <span className="text-[10px] font-mono text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 px-1.5 py-0.5 rounded">
+                                {input.type}
+                              </span>
+                            </div>
+
+                            {input.doc && (
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                                {input.doc}
+                              </p>
+                            )}
+
+                            {input.isFile ? (
+                              <div className="space-y-1">
+                                <div className="flex justify-between items-center text-[10px] text-gray-500">
+                                  <span>Paste file content (e.g. JSON/Secret) OR path (/workspace/...)</span>
+                                  <span className="font-mono text-amber-600 dark:text-amber-400 font-semibold bg-amber-50 dark:bg-amber-950/40 px-1 py-0.5 rounded">
+                                    File / Secret Input
+                                  </span>
+                                </div>
+                                <textarea
+                                  rows={3}
+                                  value={fileContents[input.id] ?? ""}
+                                  onChange={(e) =>
+                                    setFileContents((prev) => ({
+                                      ...prev,
+                                      [input.id]: e.target.value
+                                    }))
+                                  }
+                                  placeholder={
+                                    input.default !== undefined
+                                      ? `Default: ${input.default}`
+                                      : "Paste file/credentials content or path /workspace/file.json..."
+                                  }
+                                  className="w-full px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-xs font-mono text-gray-800 dark:text-gray-200 outline-none focus:ring-1 focus:ring-blue-500"
+                                />
+                              </div>
+                            ) : (
+                              <input
+                                type="text"
+                                value={paramValues[input.id] ?? ""}
+                                onChange={(e) =>
+                                  handleInputChange(input.id, e.target.value)
+                                }
+                                placeholder={
+                                  input.default !== undefined
+                                    ? `Default: ${input.default}`
+                                    : "Enter value..."
+                                }
+                                className="w-full px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-xs text-gray-800 dark:text-gray-200 outline-none focus:ring-1 focus:ring-blue-500"
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Submit Action */}
+                  <div className="pt-4 border-t dark:border-gray-700 flex justify-end">
+                    <button
+                      onClick={handleExecute}
+                      disabled={executing}
+                      className="inline-flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-lg text-xs font-bold transition disabled:opacity-50 shadow-sm"
+                    >
+                      {executing ? (
+                        <ArrowPathIcon className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <PlayIcon className="w-4 h-4" />
+                      )}
+                      <span>Execute Package</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Tab 2: Edit CWL Definition */}
+              {activeTab === "edit" && (
+                <div className="p-4 flex flex-col flex-1 min-h-[450px]">
+                  <div className="flex justify-between items-center pb-2">
+                    <span className="text-xs text-gray-500">
+                      Adapt raw CWL YAML definition. Click "Reparse" to update input parameters.
+                    </span>
+                    <button
+                      onClick={() => parseCwlText(rawCwl, selectedPackagePath || undefined)}
+                      className="px-3 py-1 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 text-xs font-semibold rounded text-gray-700 dark:text-gray-300"
+                    >
+                      Reparse Inputs
+                    </button>
+                  </div>
+
+                  <div className="flex-1 border rounded-lg overflow-hidden border-gray-200 dark:border-gray-700 min-h-[400px]">
+                    <CodeEditor
+                      data={rawCwl}
+                      language="yaml"
+                      onChange={(val) => setRawCwl(val)}
+                      disabled={false}
+                      lineWrapping={true}
+                      height="100%"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Tab 3: Executions & Results */}
+              {activeTab === "executions" && (
+                <div className="p-6 space-y-4 overflow-y-auto flex-1">
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300">
+                      Executions for {executionName || "this package"}
+                    </h3>
+
+                    <button
+                      onClick={fetchExecutions}
+                      className="text-xs text-blue-600 hover:underline flex items-center space-x-1"
+                    >
+                      <ArrowPathIcon className={`w-3.5 h-3.5 ${loadingExecutions ? "animate-spin" : ""}`} />
+                      <span>Refresh Runs</span>
+                    </button>
+                  </div>
+
+                  {packageExecutions.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-gray-400 italic bg-gray-50 dark:bg-gray-900/30 rounded-lg">
+                      No execution runs found for this package yet.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {packageExecutions.map((exec) => {
+                        const execName = exec.metadata?.name;
+                        const phase = exec.status?.phase || "Unknown";
+                        const creationTimestamp = exec.metadata?.creationTimestamp;
+
+                        return (
+                          <div
+                            key={execName}
+                            className="p-4 bg-gray-50 dark:bg-gray-900/40 rounded-lg border border-gray-200 dark:border-gray-700 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                          >
+                            <div className="space-y-1">
+                              <div className="flex items-center space-x-2">
+                                {phase === "Succeeded" ? (
+                                  <CheckCircleIcon className="w-5 h-5 text-emerald-500" />
+                                ) : phase === "Failed" || phase === "Error" ? (
+                                  <XCircleIcon className="w-5 h-5 text-red-500" />
+                                ) : (
+                                  <ClockIcon className="w-5 h-5 text-amber-500 animate-pulse" />
+                                )}
+                                <span className="font-mono text-xs font-bold text-gray-800 dark:text-gray-200">
+                                  {execName}
+                                </span>
+                                <span className="text-[10px] px-2 py-0.5 rounded font-semibold bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                                  {phase}
+                                </span>
+                              </div>
+
+                              <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                                Started: {creationTimestamp ? new Date(creationTimestamp).toLocaleString() : "-"}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center space-x-2">
+                              <button
+                                onClick={() => handleViewLogs(execName, creationTimestamp)}
+                                className="inline-flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-900 text-white px-3 py-1.5 rounded text-xs font-semibold transition"
+                              >
+                                <CommandLineIcon className="w-4 h-4" />
+                                <span>View Execution Logs</span>
+                              </button>
+
+                              <button
+                                onClick={() => {
+                                  setFileBrowserPath(`application_packages_executions/${execName}`);
+                                  setShowFileBrowser(true);
+                                }}
+                                className="inline-flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-semibold transition"
+                              >
+                                <FolderOpenIcon className="w-4 h-4" />
+                                <span>View Run Results Storage</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center py-16 text-gray-400 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
+              <Square3Stack3DIcon className="w-12 h-12 text-gray-300 dark:text-gray-600 mb-2" />
+              <p className="text-sm font-semibold">No Application Package Selected</p>
+              <p className="text-xs text-gray-400 mt-1">
+                Select a saved package from the sidebar or fetch a URL to start configuring.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Workspace Results Browser Modal */}
+      {showFileBrowser && (
+        <WorkspaceBrowser
+          onClose={() => setShowFileBrowser(false)}
+          initialPath={fileBrowserPath}
+        />
+      )}
+
+      {/* Execution Logs Viewer Modal */}
+      {showLogModal && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="flex items-center justify-center min-h-screen p-4 text-center">
+            <div
+              className="fixed inset-0 bg-black/60 transition-opacity"
+              onClick={() => setShowLogModal(false)}
+            ></div>
+
+            <div className="relative inline-block w-full max-w-4xl bg-gray-900 rounded-xl text-left overflow-hidden shadow-2xl transform transition-all border border-gray-800 my-8">
+              <div className="bg-gray-800 px-5 py-3.5 border-b border-gray-700 flex justify-between items-center">
+                <div className="flex items-center space-x-2 text-gray-200">
+                  <CommandLineIcon className="w-5 h-5 text-blue-400" />
+                  <span className="text-sm font-semibold">
+                    Execution Logs: <span className="font-mono text-blue-300">{logExecName}</span>
+                  </span>
+                </div>
+
+                <button
+                  onClick={() => setShowLogModal(false)}
+                  className="p-1 text-gray-400 hover:text-white rounded"
+                >
+                  <XMarkIcon className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-4 bg-gray-950 font-mono text-xs leading-relaxed" style={{ height: "480px" }}>
+                {logsLoading ? (
+                  <div className="flex items-center space-x-2 text-gray-400 p-4">
+                    <ArrowPathIcon className="w-4 h-4 animate-spin text-blue-500" />
+                    <span>Fetching logs from cluster...</span>
+                  </div>
+                ) : (
+                  <pre className="h-full overflow-y-auto p-3 bg-gray-950 text-emerald-400 rounded whitespace-pre-wrap select-text">
+                    {logsText}
+                  </pre>
+                )}
+              </div>
+
+              <div className="bg-gray-800 px-5 py-3 flex justify-end border-t border-gray-700">
+                <button
+                  onClick={() => setShowLogModal(false)}
+                  className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 text-white rounded text-xs font-semibold transition"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

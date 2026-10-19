@@ -23,6 +23,12 @@ const ENABLE_APPLICATIONS = process.env.ENABLE_APPLICATIONS === 'true';
 const GITLAB_APPLICATIONS_PATH = process.env.GITLAB_APPLICATIONS_PATH || 'applications';
 const ALLOW_PUBLIC_INGRESS = process.env.ALLOW_PUBLIC_INGRESS === 'true';
 
+// Multi-tenancy & Workspace Storage
+const MULTI_TENANT_MODE = process.env.MULTI_TENANT_MODE === 'true';
+const GITLAB_PACKAGES_PATH = process.env.GITLAB_PACKAGES_PATH || 'packages';
+const JUPYTERHUB_PVC_NAME = process.env.JUPYTERHUB_PVC_NAME || 'jupyterhub-home';
+const JUPYTER_PVC_MOUNT_PATH = process.env.JUPYTER_PVC_MOUNT_PATH || '/shared-workspace';
+
 // Ingress custom configuration
 const INGRESS_DEFAULTS = {
   domain: "your-domain.com",
@@ -385,8 +391,14 @@ apiRouter.get("/config", (req, res) => {
   });
 });
 
+// Helper to extract authenticated username
+function getUsername(req) {
+  if (!req || !req.user) return null;
+  return req.user.preferred_username || req.user.nickname || req.user.name || req.user.email || req.user.sub || null;
+}
+
 // Helper to convert a frontend virtual path to a physical GitLab path
-function getGitLabPath(virtualPath) {
+function getGitLabPath(virtualPath, req = null) {
   if (!virtualPath) return "";
   
   // Express 5 path-to-regexp v8 matches wildcards as arrays of string segments
@@ -395,10 +407,36 @@ function getGitLabPath(virtualPath) {
   // Prevent directory traversal
   let cleanVirtualPath = pathStr.replace(/^\//, "").replace(/\.\.\//g, "");
   
-  if (!GITLAB_WORKFLOWS_PATH || GITLAB_WORKFLOWS_PATH === ".") {
-    return cleanVirtualPath;
+  let basePath = "";
+  if (GITLAB_WORKFLOWS_PATH && GITLAB_WORKFLOWS_PATH !== ".") {
+    basePath = GITLAB_WORKFLOWS_PATH.replace(/\/$/, "").replace(/^\//, "");
   }
-  const basePath = GITLAB_WORKFLOWS_PATH.replace(/\/$/, "").replace(/^\//, "");
+
+  if (MULTI_TENANT_MODE) {
+    const user = getUsername(req);
+    if (user) {
+      basePath = basePath ? `${basePath}/${user}` : user;
+    }
+  }
+
+  return basePath ? `${basePath}/${cleanVirtualPath}` : cleanVirtualPath;
+}
+
+// Helper to convert a frontend package virtual path to a physical GitLab path
+function getGitLabPackagesPath(virtualPath, req = null) {
+  if (!virtualPath) return "";
+  let pathStr = Array.isArray(virtualPath) ? virtualPath.join('/') : String(virtualPath);
+  let cleanVirtualPath = pathStr.replace(/^\//, "").replace(/\.\.\//g, "");
+  
+  let basePath = GITLAB_PACKAGES_PATH.replace(/\/$/, "").replace(/^\//, "");
+
+  if (MULTI_TENANT_MODE) {
+    const user = getUsername(req);
+    if (user) {
+      basePath = `${basePath}/${user}`;
+    }
+  }
+
   return `${basePath}/${cleanVirtualPath}`;
 }
 
@@ -597,20 +635,27 @@ apiRouter.get(/^\/workflows\/(.+)\/sync-status$/, async (req, res, next) => {
  */
 apiRouter.get("/workflows", async (req, res, next) => {
   try {
+    let searchPath = GITLAB_WORKFLOWS_PATH === "." ? "" : GITLAB_WORKFLOWS_PATH;
+    
+    if (MULTI_TENANT_MODE) {
+      const user = getUsername(req);
+      if (user) {
+        searchPath = searchPath ? `${searchPath.replace(/\/$/, "")}/${user}` : user;
+      }
+    }
+
     const response = await gitlabApi.get(
       `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
       {
         params: {
-          path: GITLAB_WORKFLOWS_PATH === "." ? "" : GITLAB_WORKFLOWS_PATH,
+          path: searchPath,
           ref: GITLAB_BRANCH,
           recursive: true
         }
       }
     );
 
-    const prefix = GITLAB_WORKFLOWS_PATH && GITLAB_WORKFLOWS_PATH !== "." 
-      ? `${GITLAB_WORKFLOWS_PATH.replace(/\/$/, "")}/` 
-      : "";
+    const prefix = searchPath ? `${searchPath.replace(/\/$/, "")}/` : "";
 
     const workflows = response.data
       .filter(
@@ -642,7 +687,7 @@ apiRouter.get("/workflows", async (req, res, next) => {
 apiRouter.get(/^\/workflows\/(.+)\/history$/, async (req, res, next) => {
   try {
     const virtualPath = getVirtualPath(req);
-    const filePath = getGitLabPath(virtualPath);
+    const filePath = getGitLabPath(virtualPath, req);
     const response = await gitlabApi.get(
       `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
       {
@@ -669,7 +714,7 @@ apiRouter.get(/^\/workflows\/(.+)$/, async (req, res, next) => {
 
   try {
     const virtualPath = getVirtualPath(req);
-    const filePath = getGitLabPath(virtualPath);
+    const filePath = getGitLabPath(virtualPath, req);
     const ref = req.query.ref || GITLAB_BRANCH;
 
     const response = await gitlabApi.get(
@@ -694,7 +739,7 @@ apiRouter.get(/^\/workflows\/(.+)$/, async (req, res, next) => {
 apiRouter.post(/^\/workflows\/(.+)\/restore$/, async (req, res, next) => {
   try {
     const virtualPath = getVirtualPath(req);
-    const filePath = getGitLabPath(virtualPath);
+    const filePath = getGitLabPath(virtualPath, req);
     const originalPath = filePath.replace(/\.deleted$/, "");
 
     const response = await gitlabApi.post(
@@ -725,7 +770,7 @@ apiRouter.post(/^\/workflows\/(.+)\/restore$/, async (req, res, next) => {
 apiRouter.delete(/^\/workflows\/(.+)$/, async (req, res, next) => {
   try {
     const virtualPath = getVirtualPath(req);
-    const filePath = getGitLabPath(virtualPath);
+    const filePath = getGitLabPath(virtualPath, req);
     
     const response = await gitlabApi.post(
       `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
@@ -758,7 +803,7 @@ apiRouter.post(
   async (req, res, next) => {
     try {
       const virtualPath = getVirtualPath(req);
-      const filePath = getGitLabPath(virtualPath);
+      const filePath = getGitLabPath(virtualPath, req);
       const { content, commit_message, applyDefaults } = req.body;
 
       // Inject defaults if requested
@@ -799,7 +844,7 @@ apiRouter.put(
   async (req, res, next) => {
     try {
       const virtualPath = getVirtualPath(req);
-      const filePath = getGitLabPath(virtualPath);
+      const filePath = getGitLabPath(virtualPath, req);
       const { content, commit_message, applyDefaults } = req.body;
 
       // Inject defaults if requested
@@ -1019,6 +1064,43 @@ const sendK8sError = (res, error) => {
   return res.status(error.statusCode || 500).json(parsedBody);
 };
 
+// Helper to inject JupyterHub PVC volume with subPath into workflow spec
+function injectUserWorkspaceVolume(workflow, username) {
+  if (!workflow || !workflow.spec) return workflow;
+  if (!JUPYTERHUB_PVC_NAME || !username) return workflow;
+
+  const volName = "jupyterhub-workspace";
+  if (!workflow.spec.volumes) workflow.spec.volumes = [];
+
+  const exists = workflow.spec.volumes.some(v => v.name === volName);
+  if (!exists) {
+    workflow.spec.volumes.push({
+      name: volName,
+      persistentVolumeClaim: {
+        claimName: JUPYTERHUB_PVC_NAME
+      }
+    });
+  }
+
+  if (Array.isArray(workflow.spec.templates)) {
+    workflow.spec.templates.forEach(template => {
+      if (template.container) {
+        if (!template.container.volumeMounts) template.container.volumeMounts = [];
+        const mountExists = template.container.volumeMounts.some(m => m.name === volName || m.mountPath === "/workspace");
+        if (!mountExists) {
+          template.container.volumeMounts.push({
+            name: volName,
+            mountPath: "/workspace",
+            subPath: username
+          });
+        }
+      }
+    });
+  }
+
+  return workflow;
+}
+
 /**
  * GET /api/executions
  * List Argo Workflows directly via Kubernetes API using the official client
@@ -1027,16 +1109,33 @@ apiRouter.get("/executions", async (req, res, next) => {
   try {
     const namespace = process.env.ARGO_NAMESPACE || "default";
     console.log(`Fetching workflows from K8s API (namespace: ${namespace})`);
+
+    let labelSelector = undefined;
+    if (MULTI_TENANT_MODE) {
+      const user = getUsername(req);
+      if (user) {
+        labelSelector = `workflows.argoproj.io/creator-preferred-username=${user}`;
+        console.log(`[API EXECUTIONS] Filtering executions for user labelSelector: "${labelSelector}"`);
+      }
+    }
     
     const response = await customObjectsApi.listNamespacedCustomObject({
       group: 'argoproj.io',
       version: 'v1alpha1',
       namespace: namespace,
-      plural: 'workflows'
+      plural: 'workflows',
+      labelSelector: labelSelector
     });
     
     // The K8s client wraps the response in { response, body }
-    const items = response.items || [];
+    const items = response.body?.items || response.items || response.data?.items || [];
+    if (Array.isArray(items)) {
+      items.sort((a, b) => {
+        const timeA = new Date(a.metadata?.creationTimestamp || a.status?.startedAt || 0).getTime();
+        const timeB = new Date(b.metadata?.creationTimestamp || b.status?.startedAt || 0).getTime();
+        return timeB - timeA;
+      });
+    }
     res.json(Array.isArray(items) ? items : []);
   } catch (error) {
     console.error("Error fetching workflows from K8s API:", error.message);
@@ -1160,15 +1259,21 @@ apiRouter.post("/executions", async (req, res, next) => {
     workflow.kind = "Workflow";
     workflow.apiVersion = "argoproj.io/v1alpha1";
 
-    // Inject OIDC username label if present to resolve workflow variables like creator-preferred-username
-    if (req.user) {
-      const username = req.user.preferred_username || req.user.email || req.user.name || req.user.sub;
-      if (username) {
-        if (!workflow.metadata.labels) workflow.metadata.labels = {};
-        workflow.metadata.labels['workflows.argoproj.io/creator-preferred-username'] = username;
-        console.log(`[API EXECUTIONS] Injected workflows.argoproj.io/creator-preferred-username label: "${username}"`);
-      }
+    if (!workflow.spec) workflow.spec = {};
+    if (!workflow.spec.serviceAccountName && !workflow.spec.serviceAccount) {
+      workflow.spec.serviceAccountName = process.env.ARGO_SERVICE_ACCOUNT || "default";
     }
+
+    // Inject OIDC username label if present to resolve workflow variables like creator-preferred-username
+    const username = getUsername(req);
+    if (username) {
+      if (!workflow.metadata.labels) workflow.metadata.labels = {};
+      workflow.metadata.labels['workflows.argoproj.io/creator-preferred-username'] = username;
+      console.log(`[API EXECUTIONS] Injected workflows.argoproj.io/creator-preferred-username label: "${username}"`);
+    }
+
+    // Inject JupyterHub PVC volume if enabled/present
+    injectUserWorkspaceVolume(workflow, username);
     
     delete workflow.metadata.resourceVersion;
     delete workflow.metadata.uid;
@@ -1202,6 +1307,550 @@ apiRouter.post("/executions", async (req, res, next) => {
       console.error(`K8s API Error Body:`, error.body);
       return sendK8sError(res, error);
     }
+    next(error);
+  }
+});
+
+/**
+ * GET /api/packages
+ * List saved CWL / Application Package files in GITLAB_PACKAGES_PATH
+ */
+apiRouter.get("/packages", async (req, res, next) => {
+  try {
+    let searchPath = GITLAB_PACKAGES_PATH;
+    if (MULTI_TENANT_MODE) {
+      const user = getUsername(req);
+      if (user) {
+        searchPath = `${searchPath.replace(/\/$/, "")}/${user}`;
+      }
+    }
+
+    const response = await gitlabApi.get(
+      `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
+      {
+        params: {
+          path: searchPath,
+          ref: GITLAB_BRANCH,
+          recursive: true
+        }
+      }
+    );
+
+    const prefix = `${searchPath.replace(/\/$/, "")}/`;
+
+    const packages = response.data
+      .filter(
+        (file) =>
+          file.type === "blob" &&
+          (file.name.endsWith(".cwl") || file.name.endsWith(".yaml") || file.name.endsWith(".yml"))
+      )
+      .map((file) => {
+        let relativePath = file.path;
+        if (prefix && relativePath.startsWith(prefix)) {
+          relativePath = relativePath.slice(prefix.length);
+        }
+        return { ...file, path: relativePath };
+      });
+
+    res.json(packages);
+  } catch (error) {
+    if (error.response && error.response.status === 404) {
+      return res.json([]);
+    }
+    next(error);
+  }
+});
+
+/**
+ * GET /api/packages/*
+ * Get raw package content
+ */
+apiRouter.get(/^\/packages\/(.+)$/, async (req, res, next) => {
+  if (req.path === '/packages/' || req.path === '/packages') return next();
+
+  try {
+    const virtualPath = getVirtualPath(req);
+    const filePath = getGitLabPackagesPath(virtualPath, req);
+    const ref = req.query.ref || GITLAB_BRANCH;
+
+    const response = await gitlabApi.get(
+      `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
+      {
+        params: { ref },
+        responseType: 'text'
+      }
+    );
+
+    res.setHeader('Content-Type', 'text/plain');
+    res.send(response.data);
+  } catch (error) {
+    if (error.response && error.response.status === 404) {
+      return res.status(404).json({ message: "Package file not found in repository." });
+    }
+    next(error);
+  }
+});
+
+/**
+ * POST /api/packages/*
+ * Create or update a package file in GitLab
+ */
+apiRouter.post(/^\/packages\/(.+)$/, async (req, res, next) => {
+  try {
+    const virtualPath = getVirtualPath(req);
+    const filePath = getGitLabPackagesPath(virtualPath, req);
+    const { content, commit_message } = req.body;
+
+    if (!content) {
+      return res.status(400).json({ message: "Content is required." });
+    }
+
+    let action = 'create';
+    try {
+      await gitlabApi.get(
+        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}`,
+        { params: { ref: GITLAB_BRANCH } }
+      );
+      action = 'update';
+    } catch (err) {
+      if (err.response && err.response.status === 404) {
+        action = 'create';
+      } else {
+        throw err;
+      }
+    }
+
+    const commitMsg = commit_message || `${action === 'create' ? 'Add' : 'Update'} package ${virtualPath}`;
+
+    const response = await gitlabApi.post(
+      `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+      {
+        branch: GITLAB_BRANCH,
+        commit_message: commitMsg,
+        actions: [
+          {
+            action: action,
+            file_path: filePath,
+            content: content
+          }
+        ]
+      }
+    );
+
+    res.json({ message: `Package ${virtualPath} saved successfully.`, commit: response.data });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * DELETE /api/packages/*
+ * Delete a package file in GitLab
+ */
+apiRouter.delete(/^\/packages\/(.+)$/, async (req, res, next) => {
+  try {
+    const virtualPath = getVirtualPath(req);
+    const filePath = getGitLabPackagesPath(virtualPath, req);
+
+    const response = await gitlabApi.post(
+      `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
+      {
+        branch: GITLAB_BRANCH,
+        commit_message: `Delete package ${virtualPath}`,
+        actions: [
+          {
+            action: 'delete',
+            file_path: filePath
+          }
+        ]
+      }
+    );
+
+    res.json({ message: `Package ${virtualPath} deleted successfully.` });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/executions/cwl
+ * Submit a CWL execution by wrapping it in an Argo Workflow using cwltool
+ */
+apiRouter.post("/executions/cwl", async (req, res, next) => {
+  try {
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+    const { cwlUrl, cwlContent, parameters, inputTypes, inlineFiles, name, packageId } = req.body;
+
+    if (!cwlUrl && !cwlContent) {
+      return res.status(400).json({ message: "Either cwlUrl or cwlContent is required." });
+    }
+
+    const username = getUsername(req);
+    const cleanName = (name || "cwl-execution").toLowerCase().replace(/[^a-z0-9-]/g, "-");
+    let cleanPackageId = (packageId || cleanName).toLowerCase().replace(/[^a-z0-9-]/g, "-");
+    if (cleanPackageId.length > 63) {
+      cleanPackageId = cleanPackageId.substring(0, 63).replace(/-+$/, "");
+    }
+
+    const outDir = "/workspace/application_packages_executions/{{workflow.name}}";
+    let inlineSetupCmds = "";
+
+    // Construct standard CWL Job Object (job.json)
+    const jobObj = {};
+
+    if (parameters && typeof parameters === 'object') {
+      Object.entries(parameters).forEach(([key, val]) => {
+        if (val === undefined || val === null || val === '') return;
+        const typeStr = String(inputTypes?.[key] || '').toLowerCase();
+
+        if (typeStr.includes('[]') || typeStr.includes('array')) {
+          if (typeof val === 'string') {
+            jobObj[key] = val.split(',').map(s => s.trim()).filter(Boolean);
+          } else if (Array.isArray(val)) {
+            jobObj[key] = val;
+          }
+        } else if (typeStr.includes('int')) {
+          const num = parseInt(String(val), 10);
+          jobObj[key] = isNaN(num) ? val : num;
+        } else if (typeStr.includes('float') || typeStr.includes('double') || typeStr.includes('number')) {
+          const num = parseFloat(String(val));
+          jobObj[key] = isNaN(num) ? val : num;
+        } else if (typeStr.includes('boolean')) {
+          jobObj[key] = String(val) === 'true';
+        } else if (typeStr.includes('directory')) {
+          jobObj[key] = { "class": "Directory", "path": String(val) };
+        } else if (typeStr.includes('file')) {
+          jobObj[key] = { "class": "File", "path": String(val) };
+        } else {
+          jobObj[key] = val;
+        }
+      });
+    }
+
+    // Process inline secret/credentials/config files
+    if (inlineFiles && typeof inlineFiles === 'object') {
+      Object.entries(inlineFiles).forEach(([key, content]) => {
+        if (content !== undefined && content !== null && content !== '') {
+          const strContent = String(content);
+          if (strContent.startsWith('/workspace/')) {
+            jobObj[key] = { "class": "File", "path": strContent };
+          } else {
+            const encodedFile = Buffer.from(strContent).toString('base64');
+            const filePath = `/workspace/inputs/${key}`;
+            inlineSetupCmds += `mkdir -p /workspace/inputs && echo "${encodedFile}" | base64 -d > ${filePath} && `;
+            jobObj[key] = { "class": "File", "path": filePath };
+          }
+        }
+      });
+    }
+
+    // Helper to find dockerPull recursively in parsed CWL
+    function findDockerPullImage(obj) {
+      if (!obj || typeof obj !== 'object') return null;
+      if (obj.dockerPull && typeof obj.dockerPull === 'string') return obj.dockerPull;
+      if (Array.isArray(obj)) {
+        for (const item of obj) {
+          const found = findDockerPullImage(item);
+          if (found) return found;
+        }
+      }
+      for (const key of Object.keys(obj)) {
+        if (typeof obj[key] === 'object') {
+          const found = findDockerPullImage(obj[key]);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+
+    // Try to extract dockerPull image from cwlContent or cwlUrl
+    let customContainerImage = null;
+    try {
+      let rawCwlStr = cwlContent;
+      if (!rawCwlStr && cwlUrl) {
+        const rawUrl = cwlUrl.includes("github.com") && cwlUrl.includes("/blob/")
+          ? cwlUrl.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+          : cwlUrl;
+        const resp = await axios.get(rawUrl, { responseType: "text" });
+        rawCwlStr = resp.data;
+      }
+      if (rawCwlStr) {
+        const parsedCwl = YAML.parse(rawCwlStr);
+        customContainerImage = findDockerPullImage(parsedCwl);
+      }
+    } catch (e) {
+      console.warn("Failed to parse CWL for dockerPull extraction:", e.message);
+    }
+
+    const defaultImage = process.env.CWLTOOL_IMAGE || "quay.io/commonwl/cwltool:latest";
+    const selectedImage = customContainerImage || defaultImage;
+
+    console.log(`[CWL EXECUTION] Container image selected: "${selectedImage}" (custom: ${!!customContainerImage})`);
+
+    let runnerSetup = "";
+    if (customContainerImage) {
+      runnerSetup = "pip install --quiet cwltool >/dev/null 2>&1 || true && ";
+    }
+
+    const encodedJobJson = Buffer.from(JSON.stringify(jobObj, null, 2)).toString('base64');
+    const logHeader = `echo "=== CWL JOB PAYLOAD (job.json) ===" && cat ${outDir}/job.json && echo "=================================="`;
+
+    let executionCmd = "";
+    if (cwlContent) {
+      // Escape content safely for inline execution
+      const encodedCwl = Buffer.from(cwlContent).toString('base64');
+      executionCmd = `mkdir -p ${outDir} && ${inlineSetupCmds}${runnerSetup}echo "${encodedCwl}" | base64 -d > ${outDir}/package.cwl && echo "${encodedJobJson}" | base64 -d > ${outDir}/job.json && ${logHeader} && cwltool --debug --no-container --outdir ${outDir} ${outDir}/package.cwl ${outDir}/job.json`;
+    } else {
+      executionCmd = `mkdir -p ${outDir} && ${inlineSetupCmds}${runnerSetup}echo "${encodedJobJson}" | base64 -d > ${outDir}/job.json && ${logHeader} && cwltool --debug --no-container --outdir ${outDir} ${cwlUrl} ${outDir}/job.json`;
+    }
+
+    const ARGO_SERVICE_ACCOUNT = process.env.ARGO_SERVICE_ACCOUNT;
+    const ARGO_TOLERATIONS = process.env.ARGO_TOLERATIONS;
+    const ARGO_NODE_SELECTOR = process.env.ARGO_NODE_SELECTOR;
+    const ARGO_IMAGE_PULL_SECRETS = process.env.ARGO_IMAGE_PULL_SECRETS || process.env.IMAGE_PULL_SECRET;
+
+    const workflowSpec = {
+      entrypoint: "main",
+      templates: [
+        {
+          name: "main",
+          container: {
+            image: selectedImage,
+            command: ["sh", "-c"],
+            args: [executionCmd]
+          }
+        }
+      ]
+    };
+
+    if (ARGO_IMAGE_PULL_SECRETS) {
+      try {
+        workflowSpec.imagePullSecrets = JSON.parse(ARGO_IMAGE_PULL_SECRETS);
+      } catch (e) {
+        workflowSpec.imagePullSecrets = [{ name: ARGO_IMAGE_PULL_SECRETS }];
+      }
+    }
+
+    workflowSpec.serviceAccountName = process.env.ARGO_SERVICE_ACCOUNT || "default";
+
+    if (ARGO_TOLERATIONS) {
+      try {
+        workflowSpec.tolerations = JSON.parse(ARGO_TOLERATIONS);
+      } catch (e) {
+        console.error("Failed to parse ARGO_TOLERATIONS for CWL execution:", e);
+      }
+    }
+
+    if (ARGO_NODE_SELECTOR) {
+      try {
+        workflowSpec.nodeSelector = JSON.parse(ARGO_NODE_SELECTOR);
+      } catch (e) {
+        console.error("Failed to parse ARGO_NODE_SELECTOR for CWL execution:", e);
+      }
+    }
+
+    const workflow = {
+      apiVersion: "argoproj.io/v1alpha1",
+      kind: "Workflow",
+      metadata: {
+        generateName: `${cleanName}-`,
+        namespace: namespace,
+        labels: {
+          'gitargo.eox.at/type': 'cwl-package',
+          'gitargo.eox.at/package-id': cleanPackageId
+        }
+      },
+      spec: workflowSpec
+    };
+
+    const userLabel = username || (MULTI_TENANT_MODE ? 'anonymous' : null);
+    if (userLabel) {
+      workflow.metadata.labels['workflows.argoproj.io/creator-preferred-username'] = userLabel;
+    }
+
+    // Inject workspace volume
+    injectUserWorkspaceVolume(workflow, username);
+
+    console.log(`Submitting CWL workflow to K8s API (namespace: ${namespace}, packageId: ${cleanPackageId})`);
+
+    const response = await customObjectsApi.createNamespacedCustomObject({
+      group: 'argoproj.io',
+      version: 'v1alpha1',
+      namespace: namespace,
+      plural: 'workflows',
+      body: workflow
+    });
+
+    res.status(201).json(response);
+  } catch (error) {
+    console.error("Error submitting CWL workflow:", error.message);
+    if (error.body) {
+      return sendK8sError(res, error);
+    }
+    next(error);
+  }
+});
+
+/**
+ * GET /api/workspace/files
+ * List or download files from the workspace.
+ * In Multi-Tenant Mode: Strictly isolates user to /shared-workspace/<username>/ on PVC.
+ * In Single-Tenant Mode: Always uses connected S3 Bucket if configured, or /shared-workspace on local PVC.
+ */
+apiRouter.get("/workspace/files", async (req, res, next) => {
+  try {
+    const reqPath = req.query.path || "";
+    // Sanitize path against directory traversal
+    const safePath = path.normalize(reqPath).replace(/^(\.\.[\/\\])+/, "").replace(/^\/+/, "");
+
+    // --- MULTI-TENANT MODE: Strict User PVC Isolation ---
+    if (MULTI_TENANT_MODE) {
+      const username = getUsername(req);
+      if (!username) {
+        return res.status(403).json({ message: "Access denied. User session required in multi-tenant mode." });
+      }
+
+      // Root directory strictly restricted to this user
+      const userRootDir = path.resolve(JUPYTER_PVC_MOUNT_PATH, username);
+      const targetPath = path.resolve(userRootDir, safePath);
+
+      // Security Check: Ensure targetPath is strictly inside userRootDir
+      if (!targetPath.startsWith(userRootDir)) {
+        console.warn(`[SECURITY RISK] User '${username}' attempted directory traversal outside assigned folder: '${reqPath}'`);
+        return res.status(403).json({ message: "Access denied." });
+      }
+
+      if (!fs.existsSync(userRootDir) || !fs.existsSync(targetPath)) {
+        return res.json({ files: [], exists: false, currentPath: safePath });
+      }
+
+      const stat = fs.statSync(targetPath);
+      if (stat.isFile()) {
+        return res.sendFile(targetPath);
+      }
+
+      const entries = fs.readdirSync(targetPath, { withFileTypes: true });
+      const files = entries.map(entry => {
+        const full = path.join(targetPath, entry.name);
+        let size = 0;
+        let mtime = null;
+        try {
+          const s = fs.statSync(full);
+          size = s.size;
+          mtime = s.mtime;
+        } catch (e) {}
+
+        return {
+          name: entry.name,
+          isDirectory: entry.isDirectory(),
+          size: entry.isDirectory() ? 0 : size,
+          mtime: mtime
+        };
+      });
+
+      return res.json({ files, exists: true, currentPath: safePath });
+    }
+
+    // --- SINGLE-TENANT MODE: Primary S3 Bucket Storage ---
+    const bucket = process.env.S3_BUCKET || process.env.BUCKET_NAME || process.env.AWS_S3_BUCKET;
+    const endpoint = process.env.S3_ENDPOINT || process.env.AWS_ENDPOINT_URL;
+    const accessKey = process.env.AWS_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY;
+    const secretKey = process.env.AWS_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY;
+
+    if (bucket && endpoint && accessKey && secretKey) {
+      try {
+        const { ListObjectsV2Command } = require('@aws-sdk/client-s3');
+        let endpointUrl = endpoint;
+        if (!endpointUrl.startsWith('http://') && !endpointUrl.startsWith('https://')) {
+          endpointUrl = 'https://' + endpointUrl;
+        }
+
+        const s3Client = new S3Client({
+          region: process.env.AWS_REGION || "eu-nl",
+          endpoint: endpointUrl,
+          credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
+          forcePathStyle: true
+        });
+
+        const prefix = safePath ? (safePath.replace(/\/$/, "") + "/") : "";
+        const command = new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: prefix,
+          Delimiter: '/'
+        });
+
+        const s3Res = await s3Client.send(command);
+        const files = [];
+
+        if (s3Res.CommonPrefixes) {
+          s3Res.CommonPrefixes.forEach(p => {
+            const folderName = p.Prefix.replace(prefix, "").replace(/\/$/, "");
+            if (folderName) {
+              files.push({ name: folderName, isDirectory: true, size: 0, mtime: null });
+            }
+          });
+        }
+
+        if (s3Res.Contents) {
+          s3Res.Contents.forEach(c => {
+            const fileName = c.Key.replace(prefix, "");
+            if (fileName && fileName !== "") {
+              files.push({
+                name: fileName,
+                isDirectory: false,
+                size: c.Size || 0,
+                mtime: c.LastModified || null
+              });
+            }
+          });
+        }
+
+        return res.json({ files, exists: true, currentPath: safePath });
+      } catch (s3Err) {
+        console.error("[S3 STORAGE ERROR] Failed to list S3 workspace files:", s3Err.message);
+        return res.status(500).json({ message: "Failed to list files from S3 bucket storage.", error: s3Err.message });
+      }
+    }
+
+    // Fallback if S3 is not configured in single-tenant mode: use local PVC mount
+    const rootDir = path.resolve(JUPYTER_PVC_MOUNT_PATH);
+    const targetPath = path.resolve(rootDir, safePath);
+
+    if (!targetPath.startsWith(rootDir)) {
+      return res.status(403).json({ message: "Access denied." });
+    }
+
+    if (!fs.existsSync(rootDir) || !fs.existsSync(targetPath)) {
+      return res.json({ files: [], exists: false, currentPath: safePath });
+    }
+
+    const stat = fs.statSync(targetPath);
+    if (stat.isFile()) {
+      return res.sendFile(targetPath);
+    }
+
+    const entries = fs.readdirSync(targetPath, { withFileTypes: true });
+    const files = entries.map(entry => {
+      const full = path.join(targetPath, entry.name);
+      let size = 0;
+      let mtime = null;
+      try {
+        const s = fs.statSync(full);
+        size = s.size;
+        mtime = s.mtime;
+      } catch (e) {}
+
+      return {
+        name: entry.name,
+        isDirectory: entry.isDirectory(),
+        size: entry.isDirectory() ? 0 : size,
+        mtime: mtime
+      };
+    });
+
+    return res.json({ files, exists: true, currentPath: safePath });
+  } catch (error) {
+    console.error("Error listing workspace files:", error.message);
     next(error);
   }
 });
@@ -2146,6 +2795,43 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
     }
 
     if (logs.length === 0) {
+      console.log(`[API LOGS] Loki returned 0 logs. Executing direct Kubernetes API pod log fallback for ID: "${safeId}"`);
+      try {
+        const coreV1Api = kc.makeApiClient(k8s.CoreV1Api);
+        let targetPodName = podName || safeId;
+
+        if (type === 'workflow') {
+          try {
+            const podsRes = await coreV1Api.listNamespacedPod({
+              namespace: ns,
+              labelSelector: `workflows.argoproj.io/workflow=${safeId}`
+            });
+            const foundPods = podsRes.body?.items || podsRes.items || [];
+            if (foundPods.length > 0) {
+              targetPodName = foundPods[0].metadata?.name || safeId;
+            }
+          } catch (pErr) {
+            console.warn(`[API LOGS] Pod list for workflow ${safeId} failed:`, pErr.message);
+          }
+        }
+
+        const podLogRes = await coreV1Api.readNamespacedPodLog({
+          name: targetPodName,
+          namespace: ns,
+          container: 'main'
+        });
+
+        if (podLogRes) {
+          const rawText = typeof podLogRes === 'string' ? podLogRes : (podLogRes.body || JSON.stringify(podLogRes));
+          if (rawText && rawText.trim() !== '') {
+            console.log(`[API LOGS] Successfully retrieved direct K8s Pod Logs for "${targetPodName}"`);
+            return res.send(rawText);
+          }
+        }
+      } catch (k8sErr) {
+        console.warn(`[API LOGS] Direct K8s Pod Log fallback failed for "${safeId}":`, k8sErr.message);
+      }
+
       console.log(`[API LOGS] No logs found across all labels and fallbacks for ID: "${id}"`);
       try {
         const config = getLokiConfig(req, LOKI_URL);
@@ -2154,7 +2840,7 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
       } catch (labelErr) {
         console.error(`[API LOGS] DIAGNOSTIC ERROR: Failed to fetch Loki labels:`, labelErr.message);
       }
-      return res.send("No logs found in Loki for the specified execution time range.");
+      return res.send("No logs found in Loki or Kubernetes for the specified execution.");
     }
     
     console.log(`[API LOGS] Successfully returning ${logs.length} log lines for ID: "${id}"`);
