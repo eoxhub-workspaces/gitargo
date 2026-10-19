@@ -39,8 +39,8 @@ kubectl cp /tmp/gitargo-push/. $NAMESPACE/${POD}:/app
 # Clean up staging directory
 rm -rf /tmp/gitargo-push
 
-# Trigger nodemon reload without killing the K8s container
-echo "Triggering nodemon server reload inside gitargo-dev pod..."
+# Signal nodemon via file touch (avoiding process kill & EADDRINUSE port collisions)
+echo "Notifying nodemon of updated files in $POD..."
 kubectl -n $NAMESPACE exec ${POD} -- sh -c "touch /app/server.js" || true
 
-echo "Done. Code copied and nodemon server reloaded in $POD."
+echo "Done. Code copied and nodemon notified in $POD."

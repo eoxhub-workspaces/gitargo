@@ -67,6 +67,7 @@ export const ApplicationPackagesView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<"configure" | "edit" | "executions">("configure");
   const [showFileBrowser, setShowFileBrowser] = useState<boolean>(false);
   const [fileBrowserPath, setFileBrowserPath] = useState<string>("application_packages_executions");
+  const [fileBrowserRoot, setFileBrowserRoot] = useState<string>("application_packages_executions");
 
   // Executions for selected package
   const [allExecutions, setAllExecutions] = useState<any[]>([]);
@@ -269,6 +270,29 @@ export const ApplicationPackagesView: React.FC = () => {
     } catch (err: any) {
       toast.error(`Invalid CWL structure: ${err.message}`);
     }
+  };
+
+  const handleLoadSampleFileOutput = () => {
+    setSelectedPackagePath(null);
+    const sampleCwl = `cwlVersion: v1.0
+class: CommandLineTool
+label: "file-output-sample"
+doc: "Simple CWL tool that writes a message to output.txt file on storage."
+baseCommand: echo
+stdout: output.txt
+inputs:
+  message:
+    type: string
+    default: "Hello from Gitargo Results Storage!"
+    inputBinding:
+      position: 1
+outputs:
+  output_file:
+    type: File
+    outputBinding:
+      glob: output.txt`;
+    parseCwlText(sampleCwl, "file-output-sample.cwl");
+    toast.success("Loaded File Output Sample!");
   };
 
   // Load CWL from URL
@@ -509,6 +533,7 @@ export const ApplicationPackagesView: React.FC = () => {
           <button
             onClick={() => {
               setFileBrowserPath("application_packages_executions");
+              setFileBrowserRoot("application_packages_executions");
               setShowFileBrowser(true);
             }}
             className="inline-flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-900 text-white px-3.5 py-2 rounded-lg text-xs font-semibold transition"
@@ -614,6 +639,13 @@ export const ApplicationPackagesView: React.FC = () => {
 
               <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-gray-500">
                 <span className="font-semibold text-gray-600 dark:text-gray-400">Examples:</span>
+                <button
+                  type="button"
+                  onClick={handleLoadSampleFileOutput}
+                  className="text-emerald-700 dark:text-emerald-400 hover:underline bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded font-mono font-semibold"
+                >
+                  File Output Sample (Storage Test)
+                </button>
                 <button
                   type="button"
                   onClick={() => setUrl("https://raw.githubusercontent.com/common-workflow-language/cwltool/main/tests/echo.cwl")}
@@ -901,7 +933,9 @@ export const ApplicationPackagesView: React.FC = () => {
 
                                 <button
                                   onClick={() => {
-                                    setFileBrowserPath(`application_packages_executions/${execName}`);
+                                    const runPath = `application_packages_executions/${execName}`;
+                                    setFileBrowserPath(runPath);
+                                    setFileBrowserRoot(runPath);
                                     setShowFileBrowser(true);
                                   }}
                                   className="inline-flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-semibold transition"
@@ -951,6 +985,7 @@ export const ApplicationPackagesView: React.FC = () => {
         <WorkspaceBrowser
           onClose={() => setShowFileBrowser(false)}
           initialPath={fileBrowserPath}
+          rootPath={fileBrowserRoot}
         />
       )}
 

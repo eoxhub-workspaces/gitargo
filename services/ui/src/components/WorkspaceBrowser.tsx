@@ -16,12 +16,15 @@ import {
 interface WorkspaceBrowserProps {
   onClose: () => void;
   initialPath?: string;
+  rootPath?: string;
 }
 
 export const WorkspaceBrowser: React.FC<WorkspaceBrowserProps> = ({
   onClose,
-  initialPath = "results"
+  initialPath = "application_packages_executions",
+  rootPath
 }) => {
+  const effectiveRoot = rootPath ?? initialPath;
   const [currentPath, setCurrentPath] = useState<string>(initialPath);
   const [files, setFiles] = useState<WorkspaceFileItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -54,11 +57,22 @@ export const WorkspaceBrowser: React.FC<WorkspaceBrowserProps> = ({
     setCurrentPath(newPath);
   };
 
+  const normalizedCurrent = (currentPath || "").replace(/\/$/, "");
+  const normalizedRoot = (effectiveRoot || "").replace(/\/$/, "");
+  const isAtRoot =
+    normalizedCurrent === normalizedRoot ||
+    normalizedCurrent.length <= normalizedRoot.length;
+
   const handleGoBack = () => {
-    if (!currentPath) return;
+    if (isAtRoot) return;
     const parts = currentPath.split("/").filter(Boolean);
     parts.pop();
-    setCurrentPath(parts.join("/"));
+    const parentPath = parts.join("/");
+    if (parentPath.length >= normalizedRoot.length) {
+      setCurrentPath(parentPath);
+    } else {
+      setCurrentPath(normalizedRoot);
+    }
   };
 
   const formatSize = (bytes: number) => {
@@ -77,9 +91,9 @@ export const WorkspaceBrowser: React.FC<WorkspaceBrowserProps> = ({
           <div className="flex items-center space-x-2">
             <button
               onClick={handleGoBack}
-              disabled={!currentPath}
+              disabled={isAtRoot}
               className={`p-1.5 rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 ${
-                !currentPath ? "opacity-40 cursor-not-allowed" : ""
+                isAtRoot ? "opacity-40 cursor-not-allowed" : ""
               }`}
               title="Go Back"
             >
