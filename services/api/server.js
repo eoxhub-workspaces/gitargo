@@ -1064,63 +1064,38 @@ const sendK8sError = (res, error) => {
   return res.status(error.statusCode || 500).json(parsedBody);
 };
 
-// Helper to inject JupyterHub PVC volume or ephemeral emptyDir into workflow spec
+// Helper to inject JupyterHub PVC volume into workflow spec in MULTI_TENANT_MODE
 function injectUserWorkspaceVolume(workflow, username) {
   if (!workflow || !workflow.spec) return workflow;
+  if (!MULTI_TENANT_MODE || !JUPYTERHUB_PVC_NAME || !username) return workflow;
 
   const volName = "workspace-storage";
   if (!workflow.spec.volumes) workflow.spec.volumes = [];
 
   const exists = workflow.spec.volumes.some(v => v.name === volName);
+  if (!exists) {
+    workflow.spec.volumes.push({
+      name: volName,
+      persistentVolumeClaim: {
+        claimName: JUPYTERHUB_PVC_NAME
+      }
+    });
+  }
 
-  if (MULTI_TENANT_MODE && JUPYTERHUB_PVC_NAME && username) {
-    if (!exists) {
-      workflow.spec.volumes.push({
-        name: volName,
-        persistentVolumeClaim: {
-          claimName: JUPYTERHUB_PVC_NAME
+  if (Array.isArray(workflow.spec.templates)) {
+    workflow.spec.templates.forEach(template => {
+      if (template.container) {
+        if (!template.container.volumeMounts) template.container.volumeMounts = [];
+        const mountExists = template.container.volumeMounts.some(m => m.name === volName || m.mountPath === "/workspace");
+        if (!mountExists) {
+          template.container.volumeMounts.push({
+            name: volName,
+            mountPath: "/workspace",
+            subPath: username
+          });
         }
-      });
-    }
-
-    if (Array.isArray(workflow.spec.templates)) {
-      workflow.spec.templates.forEach(template => {
-        if (template.container) {
-          if (!template.container.volumeMounts) template.container.volumeMounts = [];
-          const mountExists = template.container.volumeMounts.some(m => m.name === volName || m.mountPath === "/workspace");
-          if (!mountExists) {
-            template.container.volumeMounts.push({
-              name: volName,
-              mountPath: "/workspace",
-              subPath: username
-            });
-          }
-        }
-      });
-    }
-  } else {
-    // Single-Tenant Mode: Ephemeral emptyDir for /workspace
-    if (!exists) {
-      workflow.spec.volumes.push({
-        name: volName,
-        emptyDir: {}
-      });
-    }
-
-    if (Array.isArray(workflow.spec.templates)) {
-      workflow.spec.templates.forEach(template => {
-        if (template.container) {
-          if (!template.container.volumeMounts) template.container.volumeMounts = [];
-          const mountExists = template.container.volumeMounts.some(m => m.name === volName || m.mountPath === "/workspace");
-          if (!mountExists) {
-            template.container.volumeMounts.push({
-              name: volName,
-              mountPath: "/workspace"
-            });
-          }
-        }
-      });
-    }
+      }
+    });
   }
 
   return workflow;
@@ -1517,7 +1492,9 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
       cleanPackageId = cleanPackageId.substring(0, 63).replace(/-+$/, "");
     }
 
-    const outDir = "/workspace/application_packages_executions/{{workflow.name}}";
+    const outDir = MULTI_TENANT_MODE
+      ? "/workspace/application_packages_executions/{{workflow.name}}"
+      : "/tmp/application_packages_executions/{{workflow.name}}";
     let inlineSetupCmds = "";
 
     // Construct standard CWL Job Object (job.json)
@@ -1624,7 +1601,7 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
     const runnerPy = `import os, sys, subprocess, glob, base64
 
 exec_name = sys.argv[1] if len(sys.argv) > 1 else "default-execution"
-out_dir = "/workspace/application_packages_executions/" + exec_name
+out_dir = "/tmp/application_packages_executions/" + exec_name
 os.makedirs(out_dir, exist_ok=True)
 
 job_json_path = os.path.join(out_dir, "job.json")
@@ -1647,41 +1624,13 @@ print("==================================")
 
 # Run cwltool
 cmd = ["cwltool", "--debug", "--no-container", "--outdir", out_dir, target_cwl, job_json_path]
-print("[RUNNER] Executing: " + " ".join(cmd))
 ret = subprocess.run(cmd)
-
-print("=== S3 ARTIFACT UPLOAD ===")
-bucket = "${bucket}"
-endpoint = "${rawEndpoint}"
-access_key = "${accessKey}"
-secret_key = "${secretKey}"
-
-has_ak = bool(access_key)
-has_sk = bool(secret_key)
-print("[S3 CHECK] Bucket: '" + bucket + "', Endpoint: '" + endpoint + "', HasAccessKey: " + str(has_ak) + ", HasSecretKey: " + str(has_sk))
-
-if bucket and endpoint and access_key and secret_key:
-    try:
-        import boto3
-        from botocore.config import Config
-        s3 = boto3.client('s3', endpoint_url=endpoint, aws_access_key_id=access_key, aws_secret_access_key=secret_key, config=Config(signature_version='s3v4', s3={'payload_signing': False}))
-        files = glob.glob(out_dir + "/**/*", recursive=True)
-        print("[S3 SYNC] Found " + str(len(files)) + " items in " + out_dir)
-        for p in files:
-            if os.path.isfile(p):
-                rel = os.path.relpath(p, "/workspace")
-                print("[S3 UPLOAD] Uploading " + p + " -> s3://" + bucket + "/" + rel)
-                with open(p, "rb") as fData:
-                    s3.put_object(Bucket=bucket, Key=rel, Body=fData.read())
-                print("[S3 UPLOAD SUCCESS] Uploaded " + rel)
-    except Exception as e:
-        print("[S3 UPLOAD ERROR] " + str(e))
 
 sys.exit(ret.returncode)
 `;
 
     const encodedRunnerPy = Buffer.from(runnerPy).toString('base64');
-    let executionCmd = `mkdir -p /workspace/runner && ${inlineSetupCmds}pip install --quiet cwltool boto3 >/dev/null 2>&1 || true && echo "${encodedRunnerPy}" | base64 -d > /workspace/runner/runner.py && python3 /workspace/runner/runner.py {{workflow.name}}`;
+    let executionCmd = `mkdir -p /workspace/runner && ${inlineSetupCmds}pip install --quiet cwltool >/dev/null 2>&1 || true && echo "${encodedRunnerPy}" | base64 -d > /workspace/runner/runner.py && python3 /workspace/runner/runner.py {{workflow.name}}`;
 
     const ARGO_SERVICE_ACCOUNT = process.env.ARGO_SERVICE_ACCOUNT;
     const ARGO_TOLERATIONS = process.env.ARGO_TOLERATIONS;
@@ -1697,6 +1646,17 @@ sys.exit(ret.returncode)
             image: selectedImage,
             command: ["sh", "-c"],
             args: [executionCmd]
+          },
+          outputs: {
+            artifacts: [
+              {
+                name: "results",
+                path: outDir,
+                archive: {
+                  none: {}
+                }
+              }
+            ]
           }
         }
       ]
@@ -1707,7 +1667,13 @@ sys.exit(ret.returncode)
         artifacts: [
           {
             name: "results",
-            path: "/workspace/application_packages_executions/{{workflow.name}}"
+            path: outDir,
+            archive: {
+              none: {}
+            },
+            s3: {
+              key: "application_packages_executions/{{workflow.name}}"
+            }
           }
         ]
       };
@@ -1868,7 +1834,11 @@ apiRouter.get("/workspace/files", async (req, res, next) => {
 
         const candidatePrefixes = [];
         if (safePath) candidatePrefixes.push(safePath.replace(/\/$/, "") + "/");
-        if (execName) candidatePrefixes.push(execName + "/");
+        if (execName) {
+          candidatePrefixes.push(execName + "/");
+          candidatePrefixes.push(`application_packages_executions/${execName}/`);
+          candidatePrefixes.push(`tmp/application_packages_executions/${execName}/`);
+        }
         if (execName && process.env.ARGO_NAMESPACE) candidatePrefixes.push(`${process.env.ARGO_NAMESPACE}/${execName}/`);
 
         // Check if K8s Workflow status resolves an explicit S3 key
