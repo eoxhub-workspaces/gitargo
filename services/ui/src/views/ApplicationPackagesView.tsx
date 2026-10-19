@@ -29,7 +29,8 @@ import {
   PencilSquareIcon,
   KeyIcon,
   CommandLineIcon,
-  XMarkIcon
+  XMarkIcon,
+  ExclamationTriangleIcon
 } from "@heroicons/react/24/outline";
 
 interface CwlInputDef {
@@ -293,28 +294,27 @@ export const ApplicationPackagesView: React.FC = () => {
     }
   };
 
-  // Load saved package from Git
+  // Load saved package
   const handleSelectPackage = async (pkg: PackageFile) => {
     setSelectedPackagePath(pkg.path);
     try {
       const content = await getPackageRaw(pkg.path);
       parseCwlText(content, pkg.name);
-      toast.success(`Loaded package "${pkg.name}" from Git.`);
     } catch (err: any) {
       toast.error(`Failed to load saved package: ${err.message}`);
     }
   };
 
-  // Delete saved package from Git
+  // Delete saved package
   const handleDeletePackage = async (e: React.MouseEvent, pkg: PackageFile) => {
     e.stopPropagation();
-    if (!window.confirm(`Are you sure you want to delete "${pkg.name}" from Git?`)) {
+    if (!window.confirm(`Are you sure you want to delete "${pkg.name}"?`)) {
       return;
     }
 
     try {
       await deletePackage(pkg.path);
-      toast.success(`Deleted package ${pkg.name}`);
+      toast.success(`Deleted ${pkg.name}`);
       if (selectedPackagePath === pkg.path) {
         setSelectedPackagePath(null);
         setCwlDoc(null);
@@ -325,10 +325,10 @@ export const ApplicationPackagesView: React.FC = () => {
     }
   };
 
-  // Save package to Git
+  // Save package
   const handleSaveToGit = async () => {
     if (!rawCwl) {
-      toast.error("No CWL content to save.");
+      toast.error("No package content to save.");
       return;
     }
 
@@ -340,7 +340,7 @@ export const ApplicationPackagesView: React.FC = () => {
         rawCwl,
         `Save OGC Application Package ${savePath}`
       );
-      toast.success(`Package saved to Git repository (${savePath})!`);
+      toast.success("Package saved successfully!");
       fetchPackageList();
       setSelectedPackagePath(savePath);
     } catch (err: any) {
@@ -488,7 +488,7 @@ export const ApplicationPackagesView: React.FC = () => {
             <span>OGC Application Packages</span>
           </h1>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-            Manage, configure, and execute version-controlled CWL Application Packages on Kubernetes.
+            Configure, edit, and run OGC Application Packages.
           </p>
         </div>
 
@@ -541,7 +541,7 @@ export const ApplicationPackagesView: React.FC = () => {
               <div className="p-6 text-center text-xs text-gray-400">Loading packages...</div>
             ) : packages.length === 0 ? (
               <div className="p-6 text-center text-xs text-gray-400 italic">
-                No packages saved in Git repository yet. Use "Import / New Package" to load and save one.
+                No saved packages yet. Use "Import / New Package" to load or create one.
               </div>
             ) : (
               packages.map((pkg) => {
@@ -588,7 +588,7 @@ export const ApplicationPackagesView: React.FC = () => {
           {!selectedPackagePath && (
             <div className="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm space-y-3">
               <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">
-                Load Remote CWL Package URL
+                Import Application Package URL
               </label>
               <div className="flex gap-3">
                 <input
@@ -613,7 +613,7 @@ export const ApplicationPackagesView: React.FC = () => {
               </div>
 
               <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-gray-500">
-                <span className="font-semibold text-gray-600 dark:text-gray-400">Sample Presets:</span>
+                <span className="font-semibold text-gray-600 dark:text-gray-400">Examples:</span>
                 <button
                   type="button"
                   onClick={() => setUrl("https://raw.githubusercontent.com/common-workflow-language/cwltool/main/tests/echo.cwl")}
@@ -657,7 +657,7 @@ export const ApplicationPackagesView: React.FC = () => {
                     }`}
                   >
                     <PencilSquareIcon className="w-3.5 h-3.5" />
-                    <span>Adapt CWL</span>
+                    <span>Edit Definition</span>
                   </button>
                   <button
                     onClick={() => setActiveTab("executions")}
@@ -685,7 +685,7 @@ export const ApplicationPackagesView: React.FC = () => {
                     disabled={saving}
                     className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1 rounded text-xs font-semibold transition disabled:opacity-50"
                   >
-                    {saving ? "Saving..." : "Save to Git"}
+                    {saving ? "Saving..." : "Save Package"}
                   </button>
                 </div>
               </div>
@@ -857,53 +857,75 @@ export const ApplicationPackagesView: React.FC = () => {
                         const phase = exec.status?.phase || "Unknown";
                         const creationTimestamp = exec.metadata?.creationTimestamp;
 
+                        const execStr = JSON.stringify(exec).toLowerCase();
+                        const isArchMismatch =
+                          execStr.includes("exec format error") ||
+                          execStr.includes("exit code 64");
+
                         return (
                           <div
                             key={execName}
-                            className="p-4 bg-gray-50 dark:bg-gray-900/40 rounded-lg border border-gray-200 dark:border-gray-700 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                            className="p-4 bg-gray-50 dark:bg-gray-900/40 rounded-lg border border-gray-200 dark:border-gray-700 flex flex-col space-y-3"
                           >
-                            <div className="space-y-1">
-                              <div className="flex items-center space-x-2">
-                                {phase === "Succeeded" ? (
-                                  <CheckCircleIcon className="w-5 h-5 text-emerald-500" />
-                                ) : phase === "Failed" || phase === "Error" ? (
-                                  <XCircleIcon className="w-5 h-5 text-red-500" />
-                                ) : (
-                                  <ClockIcon className="w-5 h-5 text-amber-500 animate-pulse" />
-                                )}
-                                <span className="font-mono text-xs font-bold text-gray-800 dark:text-gray-200">
-                                  {execName}
-                                </span>
-                                <span className="text-[10px] px-2 py-0.5 rounded font-semibold bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
-                                  {phase}
-                                </span>
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                              <div className="space-y-1">
+                                <div className="flex items-center space-x-2">
+                                  {phase === "Succeeded" ? (
+                                    <CheckCircleIcon className="w-5 h-5 text-emerald-500" />
+                                  ) : phase === "Failed" || phase === "Error" ? (
+                                    <XCircleIcon className="w-5 h-5 text-red-500" />
+                                  ) : (
+                                    <ClockIcon className="w-5 h-5 text-amber-500 animate-pulse" />
+                                  )}
+                                  <span className="font-mono text-xs font-bold text-gray-800 dark:text-gray-200">
+                                    {execName}
+                                  </span>
+                                  <span className="text-[10px] px-2 py-0.5 rounded font-semibold bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                                    {phase}
+                                  </span>
+                                </div>
+
+                                <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                                  Started: {creationTimestamp ? new Date(creationTimestamp).toLocaleString() : "-"}
+                                </p>
                               </div>
 
-                              <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                                Started: {creationTimestamp ? new Date(creationTimestamp).toLocaleString() : "-"}
-                              </p>
+                              <div className="flex items-center space-x-2">
+                                <button
+                                  onClick={() => handleViewLogs(execName, creationTimestamp)}
+                                  className="inline-flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-900 text-white px-3 py-1.5 rounded text-xs font-semibold transition"
+                                >
+                                  <CommandLineIcon className="w-4 h-4" />
+                                  <span>View Execution Logs</span>
+                                </button>
+
+                                <button
+                                  onClick={() => {
+                                    setFileBrowserPath(`application_packages_executions/${execName}`);
+                                    setShowFileBrowser(true);
+                                  }}
+                                  className="inline-flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-semibold transition"
+                                >
+                                  <FolderOpenIcon className="w-4 h-4" />
+                                  <span>View Run Results Storage</span>
+                                </button>
+                              </div>
                             </div>
 
-                            <div className="flex items-center space-x-2">
-                              <button
-                                onClick={() => handleViewLogs(execName, creationTimestamp)}
-                                className="inline-flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-900 text-white px-3 py-1.5 rounded text-xs font-semibold transition"
-                              >
-                                <CommandLineIcon className="w-4 h-4" />
-                                <span>View Execution Logs</span>
-                              </button>
-
-                              <button
-                                onClick={() => {
-                                  setFileBrowserPath(`application_packages_executions/${execName}`);
-                                  setShowFileBrowser(true);
-                                }}
-                                className="inline-flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-semibold transition"
-                              >
-                                <FolderOpenIcon className="w-4 h-4" />
-                                <span>View Run Results Storage</span>
-                              </button>
-                            </div>
+                            {isArchMismatch && (
+                              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300 space-y-1">
+                                <div className="font-bold flex items-center space-x-1 text-amber-800 dark:text-amber-200">
+                                  <ExclamationTriangleIcon className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                                  <span>CPU Architecture Mismatch Detected</span>
+                                </div>
+                                <p className="text-[11px]">
+                                  The container image requested by this CWL package (e.g. ghcr.io/...) was compiled for a different CPU architecture (such as ARM64) than your Kubernetes cluster worker node (x86_64 / amd64).
+                                </p>
+                                <p className="text-[11px] font-mono bg-amber-100/70 dark:bg-amber-900/40 p-1.5 rounded text-amber-950 dark:text-amber-200">
+                                  Fix: Rebuild image for amd64: <code>docker buildx build --platform linux/amd64 ...</code>
+                                </p>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
