@@ -338,7 +338,7 @@ const ExecutionsView: React.FC = () => {
 
   useEffect(() => {
     fetchExecutions();
-    const interval = setInterval(fetchExecutions, 10000); // Refresh every 10s
+    const interval = setInterval(fetchExecutions, 5000); // Refresh every 5s
     return () => clearInterval(interval);
   }, [selectedExe?.metadata.name, runFilter]);
 

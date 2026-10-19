@@ -108,6 +108,12 @@ export const ApplicationPackagesView: React.FC = () => {
   useEffect(() => {
     fetchPackageList();
     fetchExecutions();
+
+    const interval = setInterval(() => {
+      fetchExecutions();
+    }, 5000);
+
+    return () => clearInterval(interval);
   }, []);
 
   // Helper to convert Github web URLs to raw URLs
@@ -892,7 +898,7 @@ outputs:
                         const execStr = JSON.stringify(exec).toLowerCase();
                         const isArchMismatch =
                           execStr.includes("exec format error") ||
-                          execStr.includes("exit code 64");
+                          (execStr.includes("exec format") && execStr.includes("error"));
 
                         return (
                           <div

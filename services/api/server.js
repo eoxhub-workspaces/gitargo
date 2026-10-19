@@ -393,8 +393,21 @@ apiRouter.get("/config", (req, res) => {
 
 // Helper to extract authenticated username
 function getUsername(req) {
-  if (!req || !req.user) return null;
-  return req.user.preferred_username || req.user.nickname || req.user.name || req.user.email || req.user.sub || null;
+  if (!req) return null;
+  if (req.user) {
+    const u = req.user.preferred_username || req.user.nickname || req.user.name || req.user.email || req.user.sub;
+    if (u) return u;
+  }
+  if (req.headers && typeof req.headers === 'object') {
+    const headerUser = req.headers['x-auth-request-user'] ||
+                       req.headers['x-forwarded-user'] ||
+                       req.headers['x-authentik-username'] ||
+                       req.headers['x-user-claim-preferred-username'] ||
+                       req.headers['x-preferred-username'] ||
+                       req.headers['x-oauth2-proxy-user'];
+    if (headerUser) return headerUser;
+  }
+  return null;
 }
 
 // Helper to convert a frontend virtual path to a physical GitLab path
@@ -1067,8 +1080,9 @@ const sendK8sError = (res, error) => {
 // Helper to inject JupyterHub PVC volume into workflow spec in MULTI_TENANT_MODE
 function injectUserWorkspaceVolume(workflow, username) {
   if (!workflow || !workflow.spec) return workflow;
-  if (!MULTI_TENANT_MODE || !JUPYTERHUB_PVC_NAME || !username) return workflow;
+  if (!MULTI_TENANT_MODE || !JUPYTERHUB_PVC_NAME) return workflow;
 
+  const targetSubPath = username || 'shared-user';
   const volName = "workspace-storage";
   if (!workflow.spec.volumes) workflow.spec.volumes = [];
 
@@ -1091,9 +1105,35 @@ function injectUserWorkspaceVolume(workflow, username) {
           template.container.volumeMounts.push({
             name: volName,
             mountPath: "/workspace",
-            subPath: username
+            subPath: targetSubPath
           });
         }
+      }
+
+      // In multi-tenant mode, intercept standard workflow output artifacts if no S3 artifact repository exists
+      // (This applies to standard workflows; CWL Application Packages execution logic is untouched).
+      const isCwlWorkflow = workflow.metadata?.labels?.['gitargo.eox.at/type'] === 'cwl-package';
+      if (!isCwlWorkflow && template.outputs && Array.isArray(template.outputs.artifacts)) {
+        template.outputs.artifacts.forEach(artifact => {
+          if (artifact.s3) {
+            delete artifact.s3;
+          }
+
+          // Organize multi-tenant workflow artifacts under argo-artifacts/{{workflow.name}}/ on user PVC
+          if (!artifact.path) {
+            artifact.path = `/workspace/argo-artifacts/{{workflow.name}}/${artifact.name || 'output'}`;
+          } else if (artifact.path === "/workspace" || artifact.path === "/workspace/") {
+            artifact.path = `/workspace/argo-artifacts/{{workflow.name}}`;
+          } else if (artifact.path.startsWith("/workspace/")) {
+            const rel = artifact.path.replace(/^\/workspace\//, "");
+            if (!rel.startsWith("argo-artifacts/")) {
+              artifact.path = `/workspace/argo-artifacts/{{workflow.name}}/${rel}`;
+            }
+          } else if (!artifact.path.startsWith("/workspace")) {
+            const base = path.basename(artifact.path);
+            artifact.path = `/workspace/argo-artifacts/{{workflow.name}}/${base || artifact.name || 'output'}`;
+          }
+        });
       }
     });
   }
@@ -1598,10 +1638,14 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
     const encodedJobJson = Buffer.from(JSON.stringify(jobObj, null, 2)).toString('base64');
     const encodedCwl = cwlContent ? Buffer.from(cwlContent).toString('base64') : "";
 
+    const baseOutDirPrefix = MULTI_TENANT_MODE
+      ? "/workspace/application_packages_executions"
+      : "/tmp/application_packages_executions";
+
     const runnerPy = `import os, sys, subprocess, glob, base64
 
 exec_name = sys.argv[1] if len(sys.argv) > 1 else "default-execution"
-out_dir = "/tmp/application_packages_executions/" + exec_name
+out_dir = "${baseOutDirPrefix}/" + exec_name
 os.makedirs(out_dir, exist_ok=True)
 
 job_json_path = os.path.join(out_dir, "job.json")
@@ -1646,17 +1690,6 @@ sys.exit(ret.returncode)
             image: selectedImage,
             command: ["sh", "-c"],
             args: [executionCmd]
-          },
-          outputs: {
-            artifacts: [
-              {
-                name: "results",
-                path: outDir,
-                archive: {
-                  none: {}
-                }
-              }
-            ]
           }
         }
       ]
