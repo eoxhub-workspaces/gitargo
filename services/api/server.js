@@ -820,9 +820,11 @@ apiRouter.post(
       const { content, commit_message, applyDefaults } = req.body;
 
       // Inject defaults if requested
-      const injectedContent = applyDefaults 
-        ? injectDefaults(content, virtualPath)
+      let injectedContent = applyDefaults 
+        ? injectDefaults(content, virtualPath, req)
         : content;
+
+      injectedContent = ensureMultiTenantMetadataName(injectedContent, req);
 
       const response = await gitlabApi.post(
         `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
@@ -861,9 +863,11 @@ apiRouter.put(
       const { content, commit_message, applyDefaults } = req.body;
 
       // Inject defaults if requested
-      const injectedContent = applyDefaults 
-        ? injectDefaults(content, virtualPath)
+      let injectedContent = applyDefaults 
+        ? injectDefaults(content, virtualPath, req)
         : content;
+
+      injectedContent = ensureMultiTenantMetadataName(injectedContent, req);
 
       try {
         const response = await gitlabApi.post(
@@ -917,8 +921,34 @@ apiRouter.put(
   }
 );
 
+// Helper to ensure metadata.name and generateName are prefixed with username in MULTI_TENANT_MODE
+function ensureMultiTenantMetadataName(content, req = null) {
+  if (!MULTI_TENANT_MODE) return content;
+  const user = getUsername(req);
+  if (!user) return content;
+
+  try {
+    const parsed = YAML.parse(content);
+    if (!parsed || typeof parsed !== "object") return content;
+    if (!parsed.metadata) parsed.metadata = {};
+
+    const prefix = `${user.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-`;
+
+    if (parsed.metadata.name && !parsed.metadata.name.startsWith(prefix)) {
+      parsed.metadata.name = `${prefix}${parsed.metadata.name}`;
+    }
+    if (parsed.metadata.generateName && !parsed.metadata.generateName.startsWith(prefix)) {
+      parsed.metadata.generateName = `${prefix}${parsed.metadata.generateName}`;
+    }
+
+    return YAML.stringify(parsed);
+  } catch (e) {
+    return content;
+  }
+}
+
 // --- Helper for injecting defaults ---
-function injectDefaults(content, virtualPath) {
+function injectDefaults(content, virtualPath, req = null) {
   const ARGO_NAMESPACE = process.env.ARGO_NAMESPACE;
   const ARGO_SERVICE_ACCOUNT = process.env.ARGO_SERVICE_ACCOUNT;
   const ARGO_TOLERATIONS = process.env.ARGO_TOLERATIONS;
@@ -1991,6 +2021,117 @@ apiRouter.get("/workspace/files", async (req, res, next) => {
   } catch (error) {
     console.error("Error listing workspace files:", error.message);
     next(error);
+  }
+});
+
+/**
+ * GET /api/workspace/files/download
+ * Download or stream a file from S3 Bucket storage or local PVC
+ */
+apiRouter.get("/workspace/files/download", async (req, res, next) => {
+  try {
+    const reqPath = req.query.path || "";
+    const safePath = path.normalize(reqPath).replace(/^(\.\.[\/\\])+/, "").replace(/^\/+/, "");
+
+    if (!safePath) {
+      return res.status(400).json({ message: "path parameter is required." });
+    }
+
+    // --- MULTI-TENANT MODE: User PVC File Download ---
+    if (MULTI_TENANT_MODE) {
+      const username = getUsername(req);
+      if (!username) {
+        return res.status(403).json({ message: "Access denied. User session required in multi-tenant mode." });
+      }
+
+      const userRootDir = path.resolve(JUPYTER_PVC_MOUNT_PATH, username);
+      const targetPath = path.resolve(userRootDir, safePath);
+
+      if (!targetPath.startsWith(userRootDir)) {
+        return res.status(403).json({ message: "Access denied." });
+      }
+
+      if (!fs.existsSync(targetPath)) {
+        return res.status(404).json({ message: "File not found on user workspace PVC." });
+      }
+
+      return res.download(targetPath, path.basename(targetPath));
+    }
+
+    // --- SINGLE-TENANT MODE: S3 Bucket File Download or Local PVC ---
+    const bucket = process.env.S3_BUCKET || process.env.BUCKET_NAME || process.env.AWS_S3_BUCKET;
+    const endpoint = process.env.S3_ENDPOINT || process.env.AWS_ENDPOINT_URL;
+    const accessKey = process.env.AWS_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY;
+    const secretKey = process.env.AWS_SECRET_ACCESS_KEY || process.env.S3_SECRET_KEY;
+
+    if (bucket && endpoint && accessKey && secretKey) {
+      try {
+        const { GetObjectCommand } = require('@aws-sdk/client-s3');
+        let endpointUrl = endpoint;
+        if (!endpointUrl.startsWith('http://') && !endpointUrl.startsWith('https://')) {
+          endpointUrl = 'https://' + endpointUrl;
+        }
+
+        const s3Client = new S3Client({
+          region: process.env.AWS_REGION || "eu-nl",
+          endpoint: endpointUrl,
+          credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
+          forcePathStyle: true
+        });
+
+        // Try exact safePath first, then candidate S3 keys
+        const candidateKeys = [
+          safePath,
+          `application_packages_executions/${safePath}`,
+          `tmp/application_packages_executions/${safePath}`
+        ];
+
+        let s3Stream = null;
+        let contentType = 'application/octet-stream';
+
+        for (const s3Key of candidateKeys) {
+          try {
+            const command = new GetObjectCommand({
+              Bucket: bucket,
+              Key: s3Key
+            });
+            const s3Res = await s3Client.send(command);
+            if (s3Res.Body) {
+              s3Stream = s3Res.Body;
+              if (s3Res.ContentType) contentType = s3Res.ContentType;
+              break;
+            }
+          } catch (e) {
+            // Try next candidate key
+          }
+        }
+
+        if (s3Stream) {
+          const filename = path.basename(safePath);
+          res.setHeader('Content-Type', contentType);
+          res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+          return s3Stream.pipe(res);
+        }
+      } catch (s3Err) {
+        console.error("[S3 DOWNLOAD ERROR]", s3Err.message);
+      }
+    }
+
+    // Fallback: Local PVC File Download in Single-Tenant Mode
+    const rootDir = path.resolve(JUPYTER_PVC_MOUNT_PATH);
+    const targetPath = path.resolve(rootDir, safePath);
+
+    if (!targetPath.startsWith(rootDir)) {
+      return res.status(403).json({ message: "Access denied." });
+    }
+
+    if (fs.existsSync(targetPath) && fs.statSync(targetPath).isFile()) {
+      return res.download(targetPath, path.basename(targetPath));
+    }
+
+    return res.status(404).json({ message: "File not found." });
+  } catch (err) {
+    next(err);
   }
 });
 

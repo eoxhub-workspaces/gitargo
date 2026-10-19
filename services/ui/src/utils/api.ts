@@ -469,7 +469,7 @@ export const getWorkspaceFileDownloadUrl = (filePath: string): string => {
   const isDev = process.env.NODE_ENV === "development";
   const basePath = window.BASE_PATH || "";
   const baseUrl = isDev ? "http://localhost:3000/api" : `${basePath}/api`;
-  return `${baseUrl}/workspace/files?path=${encodeURIComponent(filePath)}`;
+  return `${baseUrl}/workspace/files/download?path=${encodeURIComponent(filePath)}`;
 };
 
 export default api;
