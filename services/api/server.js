@@ -1655,9 +1655,9 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
     }
 
     const defaultImage = process.env.CWLTOOL_IMAGE || "quay.io/commonwl/cwltool:latest";
-    const selectedImage = customContainerImage || defaultImage;
+    const selectedImage = defaultImage;
 
-    console.log(`[CWL EXECUTION] Container image selected: "${selectedImage}" (custom: ${!!customContainerImage})`);
+    console.log(`[CWL EXECUTION] Container image selected: "${selectedImage}" (cwltool runner)`);
 
     const bucket = process.env.S3_BUCKET || process.env.BUCKET_NAME || process.env.AWS_S3_BUCKET || "";
     const endpoint = process.env.S3_ENDPOINT || process.env.AWS_ENDPOINT_URL || "";
@@ -1704,7 +1704,23 @@ sys.exit(ret.returncode)
 `;
 
     const encodedRunnerPy = Buffer.from(runnerPy).toString('base64');
-    let executionCmd = `mkdir -p /workspace/runner && ${inlineSetupCmds}pip install --quiet cwltool >/dev/null 2>&1 || true && echo "${encodedRunnerPy}" | base64 -d > /workspace/runner/runner.py && python3 /workspace/runner/runner.py {{workflow.name}}`;
+    let executionCmd = `mkdir -p /tmp/runner ${baseOutDirPrefix}/{{workflow.name}} && {
+  {
+    echo "=== CWL EXECUTION DIAGNOSTICS ==="
+    echo "Workflow Name: {{workflow.name}}"
+    echo "Date: $(date 2>/dev/null || echo unknown)"
+    echo "User: $(whoami 2>/dev/null || echo unknown)"
+    echo "PATH: $PATH"
+    echo "Checking cwltool: $(which cwltool 2>&1 || echo 'NOT FOUND')"
+    echo "Checking python3: $(which python3 2>&1 || echo 'NOT FOUND')"
+    echo "Checking pip: $(which pip 2>&1 || echo 'NOT FOUND')"
+    echo "=================================="
+    ${inlineSetupCmds}
+    echo "${encodedRunnerPy}" | base64 -d > /tmp/runner/runner.py
+    (python3 /tmp/runner/runner.py {{workflow.name}} || python /tmp/runner/runner.py {{workflow.name}})
+  } 2>&1 | tee ${baseOutDirPrefix}/{{workflow.name}}/execution.log
+  exit \${PIPESTATUS[0]:-\$?}
+}`;
 
     const ARGO_SERVICE_ACCOUNT = process.env.ARGO_SERVICE_ACCOUNT;
     const ARGO_TOLERATIONS = process.env.ARGO_TOLERATIONS;
@@ -3095,18 +3111,37 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
           }
         }
 
-        const podLogRes = await coreV1Api.readNamespacedPodLog({
-          name: targetPodName,
-          namespace: ns,
-          container: 'main'
-        });
-
-        if (podLogRes) {
-          const rawText = typeof podLogRes === 'string' ? podLogRes : (podLogRes.body || JSON.stringify(podLogRes));
-          if (rawText && rawText.trim() !== '') {
-            console.log(`[API LOGS] Successfully retrieved direct K8s Pod Logs for "${targetPodName}"`);
-            return res.send(rawText);
+        let rawText = "";
+        try {
+          const podLogRes = await coreV1Api.readNamespacedPodLog({
+            name: targetPodName,
+            namespace: ns,
+            container: 'main'
+          });
+          rawText = typeof podLogRes === 'string' ? podLogRes : (podLogRes?.body || '');
+        } catch (e1) {
+          try {
+            const prevLogRes = await coreV1Api.readNamespacedPodLog({
+              name: targetPodName,
+              namespace: ns,
+              container: 'main',
+              previous: true
+            });
+            rawText = typeof prevLogRes === 'string' ? prevLogRes : (prevLogRes?.body || '');
+          } catch (e2) {
+            try {
+              const defLogRes = await coreV1Api.readNamespacedPodLog({
+                name: targetPodName,
+                namespace: ns
+              });
+              rawText = typeof defLogRes === 'string' ? defLogRes : (defLogRes?.body || '');
+            } catch (e3) {}
           }
+        }
+
+        if (rawText && rawText.trim() !== '') {
+          console.log(`[API LOGS] Successfully retrieved direct K8s Pod Logs for "${targetPodName}"`);
+          return res.send(rawText);
         }
       } catch (k8sErr) {
         console.warn(`[API LOGS] Direct K8s Pod Log fallback failed for "${safeId}":`, k8sErr.message);

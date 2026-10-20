@@ -30,7 +30,8 @@ import {
   KeyIcon,
   CommandLineIcon,
   XMarkIcon,
-  ExclamationTriangleIcon
+  ExclamationTriangleIcon,
+  ExclamationCircleIcon
 } from "@heroicons/react/24/outline";
 
 interface CwlInputDef {
@@ -895,6 +896,13 @@ outputs:
                         const phase = exec.status?.phase || "Unknown";
                         const creationTimestamp = exec.metadata?.creationTimestamp;
 
+                        // Extract error message from exec status or failed nodes
+                        const statusMessage = exec.status?.message || "";
+                        const nodes = exec.status?.nodes || {};
+                        const failedNode = Object.values(nodes).find((n: any) => n.message || n.phase === "Failed" || n.phase === "Error") as any;
+                        const nodeMessage = failedNode?.message || "";
+                        const displayError = statusMessage || nodeMessage;
+
                         const execStr = JSON.stringify(exec).toLowerCase();
                         const isArchMismatch =
                           execStr.includes("exec format error") ||
@@ -926,6 +934,18 @@ outputs:
                                 <p className="text-[11px] text-gray-500 dark:text-gray-400">
                                   Started: {creationTimestamp ? new Date(creationTimestamp).toLocaleString() : "-"}
                                 </p>
+
+                                {displayError && (
+                                  <div className="p-2.5 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 rounded text-xs text-red-700 dark:text-red-300 font-mono flex flex-col space-y-1 mt-1">
+                                    <div className="flex items-center space-x-2">
+                                      <ExclamationCircleIcon className="w-4 h-4 text-red-500 flex-shrink-0" />
+                                      <span className="font-semibold truncate">{displayError}</span>
+                                    </div>
+                                    <p className="text-[11px] text-red-600 dark:text-red-400 font-normal pl-6">
+                                      Tip: Open <span className="font-bold underline">View Run Results Storage</span> to inspect <span className="font-bold font-mono">execution.log</span> for complete diagnostic output.
+                                    </p>
+                                  </div>
+                                )}
                               </div>
 
                               <div className="flex items-center space-x-2">
