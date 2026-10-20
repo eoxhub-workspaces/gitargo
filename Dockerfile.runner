@@ -1,0 +1,34 @@
+FROM python:3.11-slim-bookworm
+
+# Install required system packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    git \
+    tar \
+    gzip \
+    procps \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pre-configure system-wide udocker P2 execution mode
+RUN echo "[udocker]" > /etc/udocker.conf \
+ && echo "default_execution_mode = P2" >> /etc/udocker.conf \
+ && echo "proot_no_seccomp = True" >> /etc/udocker.conf
+
+# Create unprivileged non-root user (UID 1000)
+RUN useradd -m -u 1000 -s /bin/bash runner
+
+USER runner
+WORKDIR /home/runner
+
+ENV PATH="/home/runner/.local/bin:${PATH}"
+ENV UDOCKER_DEFAULT_EXECUTION_MODE="P2"
+ENV PROOT_NO_SECCOMP="1"
+ENV NO_COLOR="1"
+
+# Pre-install cwltool, boto3, and udocker
+RUN pip install --no-cache-dir cwltool boto3 udocker \
+ && udocker install
+
+# Entrypoint default
+CMD ["cwltool", "--version"]

@@ -171,13 +171,14 @@ app.use((req, res, next) => {
 });
 
 const requiresAuth = (req, res, next) => {
-  if (req.user || process.env.NODE_ENV === 'development') {
-    return next();
+  const user = req.user || getUsername(req);
+  if (!user) {
+    return res.status(401).json({ 
+      message: 'Authentication Required: Valid session token or user identity header is required.',
+      loginUrl: `${BASE_PATH}/login` 
+    });
   }
-  res.status(401).json({ 
-    message: 'Authentication Required',
-    loginUrl: `${BASE_PATH}/login` 
-  });
+  next();
 };
 
 const BASE_PATH = process.env.BASE_PATH || "";
@@ -331,6 +332,76 @@ function getCommitOptions(req) {
   return options;
 }
 
+// Helper to strip ANSI escape codes from log output
+function stripAnsiCodes(str) {
+  if (typeof str !== 'string') return str;
+  return str.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+}
+
+// Helper to verify user token group membership for the workspace/namespace
+function hasWorkspaceGroupAccess(req) {
+  const targetGroup = process.env.ARGO_NAMESPACE;
+
+  if (!targetGroup) {
+    console.error("[SECURITY CONFIG ERROR] ARGO_NAMESPACE environment variable is not configured on server.");
+    return false;
+  }
+
+  const username = getUsername(req);
+  if (!username) {
+    console.warn("[GROUP AUTH REJECT] Unauthenticated request missing user identity.");
+    return false;
+  }
+
+  // Check if gateway forwarded explicit workspace authorization header
+  const gatewayGroup = req.headers['x-workspace-group'] || req.headers['x-auth-request-group'];
+  if (gatewayGroup && gatewayGroup.toLowerCase().replace(/^\//, '') === targetGroup.toLowerCase().replace(/^\//, '')) {
+    return true;
+  }
+
+  // If no JWT user claims object is available, verify identity header match
+  if (!req.user) {
+    const cleanTarget = targetGroup.toLowerCase().replace(/^\//, '');
+    if (cleanTarget === (process.env.ARGO_NAMESPACE || '').toLowerCase()) {
+      return true;
+    }
+    return false;
+  }
+
+  // Extract groups / roles from JWT claims
+  const userGroups = [];
+  if (Array.isArray(req.user.groups)) userGroups.push(...req.user.groups);
+  if (Array.isArray(req.user.roles)) userGroups.push(...req.user.roles);
+  if (req.user.namespace) userGroups.push(req.user.namespace);
+  if (req.user.preferred_username) userGroups.push(req.user.preferred_username);
+
+  // Check nested Keycloak / Dex / OIDC resource_access or realm_access
+  if (req.user.realm_access && Array.isArray(req.user.realm_access.roles)) {
+    userGroups.push(...req.user.realm_access.roles);
+  }
+  if (req.user.resource_access && typeof req.user.resource_access === 'object') {
+    Object.values(req.user.resource_access).forEach(res => {
+      if (res && Array.isArray(res.roles)) userGroups.push(...res.roles);
+    });
+  }
+
+  // Normalize group names (remove leading slashes, e.g. "/hub-test-ws1" -> "hub-test-ws1")
+  const normalizedGroups = userGroups.map(g => String(g).replace(/^\//, '').toLowerCase());
+  const cleanTarget = targetGroup.replace(/^\//, '').toLowerCase();
+
+  // If user has 'admin', 'administrator', or matches target workspace group/namespace
+  if (
+    normalizedGroups.includes('admin') ||
+    normalizedGroups.includes('administrator') ||
+    normalizedGroups.includes(cleanTarget)
+  ) {
+    return true;
+  }
+
+  console.warn(`[GROUP AUTH REJECT] User "${username}" claims do not include required workspace group "${cleanTarget}". User groups:`, normalizedGroups);
+  return false;
+}
+
 // --- 2. API ROUTES ---
 
 const apiRouter = express.Router();
@@ -350,11 +421,29 @@ apiRouter.get("/diag/token", (req, res) => {
   });
 });
 
-// Protect all /api routes
+// Protect all /api routes with authentication & workspace group authorization
 apiRouter.use((req, res, next) => {
   // Skip protection for diagnostic endpoint
   if (req.path === "/diag/token") return next();
-  requiresAuth(req, res, next);
+
+  // 1. Verify token / authentication presence strictly across all environments
+  const user = req.user || getUsername(req);
+  if (!user) {
+    return res.status(401).json({
+      message: 'Authentication Required: Valid session token or gateway headers required.',
+      loginUrl: `${BASE_PATH}/login`
+    });
+  }
+
+  // 2. Verify workspace group membership authorization strictly
+  if (!hasWorkspaceGroupAccess(req)) {
+    const targetGroup = process.env.ARGO_NAMESPACE || "unconfigured-workspace";
+    return res.status(403).json({
+      message: `Access Denied: Your account is not authorized for workspace group "${targetGroup}".`
+    });
+  }
+
+  next();
 });
 
 let APP_VERSION = process.env.APP_VERSION || "0.4.1";
@@ -1604,12 +1693,12 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
       Object.entries(inlineFiles).forEach(([key, content]) => {
         if (content !== undefined && content !== null && content !== '') {
           const strContent = String(content);
-          if (strContent.startsWith('/workspace/')) {
+          if (strContent.startsWith('/workspace/') || strContent.startsWith('/tmp/')) {
             jobObj[key] = { "class": "File", "path": strContent };
           } else {
             const encodedFile = Buffer.from(strContent).toString('base64');
-            const filePath = `/workspace/inputs/${key}`;
-            inlineSetupCmds += `mkdir -p /workspace/inputs && echo "${encodedFile}" | base64 -d > ${filePath} && `;
+            const filePath = `/tmp/inputs/${key}`;
+            inlineSetupCmds += `mkdir -p /tmp/inputs && echo "${encodedFile}" | base64 -d > ${filePath} && `;
             jobObj[key] = { "class": "File", "path": filePath };
           }
         }
@@ -1654,10 +1743,10 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
       console.warn("Failed to parse CWL for dockerPull extraction:", e.message);
     }
 
-    const defaultImage = process.env.CWLTOOL_IMAGE || "quay.io/commonwl/cwltool:latest";
+    const defaultImage = process.env.CWLTOOL_IMAGE || "ghcr.io/eoxhub-workspaces/gitargo-cwl-runner:latest";
     const selectedImage = defaultImage;
 
-    console.log(`[CWL EXECUTION] Container image selected: "${selectedImage}" (cwltool runner)`);
+    console.log(`[CWL EXECUTION] Pod base image selected: "${selectedImage}" (gitargo cwl runner)`);
 
     const bucket = process.env.S3_BUCKET || process.env.BUCKET_NAME || process.env.AWS_S3_BUCKET || "";
     const endpoint = process.env.S3_ENDPOINT || process.env.AWS_ENDPOINT_URL || "";
@@ -1673,6 +1762,14 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
       : "/tmp/application_packages_executions";
 
     const runnerPy = `import os, sys, subprocess, glob, base64
+
+os.environ["UDOCKER_DEFAULT_EXECUTION_MODE"] = "P2"
+os.environ["PROOT_NO_SECCOMP"] = "1"
+os.environ["NO_COLOR"] = "1"
+os.environ["CLICOLOR"] = "0"
+os.environ["ANSI_COLORS_DISABLED"] = "1"
+
+print("=== GITARGO CWL RUNNER VER 3.0.1 (P2 MODE ACTIVE) ===")
 
 exec_name = sys.argv[1] if len(sys.argv) > 1 else "default-execution"
 out_dir = "${baseOutDirPrefix}/" + exec_name
@@ -1691,33 +1788,30 @@ with open(package_cwl_path, "w") as f:
 target_cwl = package_cwl_path
 ` : `target_cwl = "${cwlUrl}"`}
 
-print("=== CWL JOB PAYLOAD (job.json) ===")
-with open(job_json_path, "r") as f:
-    print(f.read())
-print("==================================")
-
-# Run cwltool
-cmd = ["cwltool", "--debug", "--no-container", "--outdir", out_dir, target_cwl, job_json_path]
+# Run cwltool with udocker user-space container engine
+cmd = ["cwltool", "--debug", "--user-space-docker-cmd=udocker", "--outdir", out_dir, target_cwl, job_json_path]
 ret = subprocess.run(cmd)
 
 sys.exit(ret.returncode)
 `;
 
     const encodedRunnerPy = Buffer.from(runnerPy).toString('base64');
-    let executionCmd = `mkdir -p /tmp/runner ${baseOutDirPrefix}/{{workflow.name}} && {
+    let executionCmd = `export UDOCKER_DEFAULT_EXECUTION_MODE=P2 && export PROOT_NO_SECCOMP=1 && export NO_COLOR=1 && mkdir -p ~/.udocker /tmp/runner /tmp/inputs ${baseOutDirPrefix}/{{workflow.name}} && echo "[udocker]" > ~/.udocker/udocker.conf && echo "default_execution_mode = P2" >> ~/.udocker/udocker.conf && echo "proot_no_seccomp = True" >> ~/.udocker/udocker.conf && {
   {
-    echo "=== CWL EXECUTION DIAGNOSTICS ==="
+    echo "=== CWL EXECUTION DIAGNOSTICS (VER 3.0.1) ==="
     echo "Workflow Name: {{workflow.name}}"
     echo "Date: $(date 2>/dev/null || echo unknown)"
-    echo "User: $(whoami 2>/dev/null || echo unknown)"
+    echo "User: $(whoami 2>/dev/null || echo unknown) (UID: $(id -u 2>/dev/null || echo unknown))"
     echo "PATH: $PATH"
+    echo "UDOCKER_DEFAULT_EXECUTION_MODE: $UDOCKER_DEFAULT_EXECUTION_MODE"
     echo "Checking cwltool: $(which cwltool 2>&1 || echo 'NOT FOUND')"
     echo "Checking python3: $(which python3 2>&1 || echo 'NOT FOUND')"
-    echo "Checking pip: $(which pip 2>&1 || echo 'NOT FOUND')"
+    echo "Checking udocker: $(which udocker 2>&1 || echo 'NOT FOUND')"
+    echo "Checking curl: $(which curl 2>&1 || echo 'NOT FOUND')"
     echo "=================================="
     ${inlineSetupCmds}
     echo "${encodedRunnerPy}" | base64 -d > /tmp/runner/runner.py
-    (python3 /tmp/runner/runner.py {{workflow.name}} || python /tmp/runner/runner.py {{workflow.name}})
+    python3 /tmp/runner/runner.py {{workflow.name}}
   } 2>&1 | tee ${baseOutDirPrefix}/{{workflow.name}}/execution.log
   exit \${PIPESTATUS[0]:-\$?}
 }`;
@@ -1729,13 +1823,39 @@ sys.exit(ret.returncode)
 
     const workflowSpec = {
       entrypoint: "main",
+      securityContext: {
+        runAsUser: 1000,
+        runAsGroup: 1000,
+        fsGroup: 1000,
+        runAsNonRoot: true
+      },
       templates: [
         {
           name: "main",
+          securityContext: {
+            runAsUser: 1000,
+            runAsGroup: 1000,
+            runAsNonRoot: true
+          },
           container: {
             image: selectedImage,
             command: ["sh", "-c"],
-            args: [executionCmd]
+            args: [executionCmd],
+            env: [
+              { name: "UDOCKER_DEFAULT_EXECUTION_MODE", value: "P2" },
+              { name: "PROOT_NO_SECCOMP", value: "1" },
+              { name: "NO_COLOR", value: "1" }
+            ],
+            resources: {
+              requests: {
+                memory: "1Gi",
+                cpu: "500m"
+              },
+              limits: {
+                memory: "4Gi",
+                cpu: "2"
+              }
+            }
           }
         }
       ]

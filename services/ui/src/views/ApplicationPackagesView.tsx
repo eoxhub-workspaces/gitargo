@@ -60,6 +60,7 @@ export const ApplicationPackagesView: React.FC = () => {
   const [inputs, setInputs] = useState<CwlInputDef[]>([]);
   const [paramValues, setParamValues] = useState<Record<string, any>>({});
   const [paramTypes, setParamTypes] = useState<Record<string, string>>({});
+  const [enabledOptionalParams, setEnabledOptionalParams] = useState<Record<string, boolean>>({});
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
   const [executionName, setExecutionName] = useState<string>("");
   const [packageFileName, setPackageFileName] = useState<string>("");
@@ -397,11 +398,32 @@ outputs:
         .substring(0, 63)
         .replace(/-+$/, "");
 
+      // Filter active parameters, omitting disabled optional parameters
+      const activeParams: Record<string, any> = {};
+      const activeTypes: Record<string, string> = {};
+
+      inputs.forEach((input) => {
+        const typeLower = (input.type || "").toLowerCase();
+        const isOptional =
+          input.type.endsWith("?") ||
+          typeLower.includes("null") ||
+          typeLower.includes("optional");
+
+        const isEnabled = !isOptional || enabledOptionalParams[input.id] === true;
+
+        if (isEnabled && paramValues[input.id] !== undefined && paramValues[input.id] !== "") {
+          activeParams[input.id] = paramValues[input.id];
+        }
+        if (isEnabled && paramTypes[input.id]) {
+          activeTypes[input.id] = paramTypes[input.id];
+        }
+      });
+
       await submitCwlExecution({
         cwlUrl: selectedPackagePath ? undefined : getRawUrl(url),
         cwlContent: rawCwl,
-        parameters: paramValues,
-        inputTypes: paramTypes,
+        parameters: activeParams,
+        inputTypes: activeTypes,
         inlineFiles: fileContents,
         name: executionName || "cwl-execution",
         packageId: cleanPkgId
@@ -755,69 +777,115 @@ outputs:
                       </p>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {inputs.map((input) => (
-                          <div
-                            key={input.id}
-                            className="p-3.5 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700/60 space-y-2"
-                          >
-                            <div className="flex justify-between items-center">
-                              <span className="font-semibold text-xs text-gray-900 dark:text-white flex items-center space-x-1">
-                                {input.isFile && <KeyIcon className="w-3.5 h-3.5 text-amber-500" />}
-                                <span>{input.id}</span>
-                              </span>
-                              <span className="text-[10px] font-mono text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 px-1.5 py-0.5 rounded">
-                                {input.type}
-                              </span>
-                            </div>
+                        {inputs.map((input) => {
+                          const typeLower = (input.type || "").toLowerCase();
+                          const isOptional =
+                            input.type.endsWith("?") ||
+                            typeLower.includes("null") ||
+                            typeLower.includes("optional");
 
-                            {input.doc && (
-                              <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                                {input.doc}
-                              </p>
-                            )}
+                          const isEnabled = !isOptional || enabledOptionalParams[input.id] === true;
 
-                            {input.isFile ? (
-                              <div className="space-y-1">
-                                <div className="flex justify-between items-center text-[10px] text-gray-500">
-                                  <span>Paste file content (e.g. JSON/Secret) OR path (/workspace/...)</span>
-                                  <span className="font-mono text-amber-600 dark:text-amber-400 font-semibold bg-amber-50 dark:bg-amber-950/40 px-1 py-0.5 rounded">
-                                    File / Secret Input
+                          return (
+                            <div
+                              key={input.id}
+                              className={`p-3.5 rounded-lg border transition space-y-2 ${
+                                !isEnabled
+                                  ? "bg-gray-100/60 dark:bg-gray-900/20 border-gray-200 dark:border-gray-800 opacity-60"
+                                  : "bg-gray-50 dark:bg-gray-900/50 border-gray-200 dark:border-gray-700/60"
+                              }`}
+                            >
+                              <div className="flex justify-between items-center">
+                                <div className="flex items-center space-x-2">
+                                  {isOptional && (
+                                    <input
+                                      type="checkbox"
+                                      checked={isEnabled}
+                                      onChange={(e) =>
+                                        setEnabledOptionalParams((prev) => ({
+                                          ...prev,
+                                          [input.id]: e.target.checked
+                                        }))
+                                      }
+                                      title={
+                                        isEnabled
+                                          ? "Uncheck to disable/omit this optional parameter"
+                                          : "Check to enable and provide this optional parameter"
+                                      }
+                                      className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer"
+                                    />
+                                  )}
+                                  <span className="font-semibold text-xs text-gray-900 dark:text-white flex items-center space-x-1">
+                                    {input.isFile && <KeyIcon className="w-3.5 h-3.5 text-amber-500" />}
+                                    <span>{input.id}</span>
                                   </span>
                                 </div>
-                                <textarea
-                                  rows={3}
-                                  value={fileContents[input.id] ?? ""}
-                                  onChange={(e) =>
-                                    setFileContents((prev) => ({
-                                      ...prev,
-                                      [input.id]: e.target.value
-                                    }))
-                                  }
-                                  placeholder={
-                                    input.default !== undefined
-                                      ? `Default: ${input.default}`
-                                      : "Paste file/credentials content or path /workspace/file.json..."
-                                  }
-                                  className="w-full px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-xs font-mono text-gray-800 dark:text-gray-200 outline-none focus:ring-1 focus:ring-blue-500"
-                                />
+
+                                <div className="flex items-center space-x-1.5">
+                                  {isOptional && (
+                                    <span className="text-[9px] font-semibold font-mono text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/40 px-1.5 py-0.5 rounded">
+                                      Optional
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] font-mono text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 px-1.5 py-0.5 rounded">
+                                    {input.type}
+                                  </span>
+                                </div>
                               </div>
-                            ) : (
-                              <input
-                                type="text"
-                                value={paramValues[input.id] ?? ""}
-                                onChange={(e) =>
-                                  handleInputChange(input.id, e.target.value)
-                                }
-                                placeholder={
-                                  input.default !== undefined
-                                    ? `Default: ${input.default}`
-                                    : "Enter value..."
-                                }
-                                className="w-full px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-xs text-gray-800 dark:text-gray-200 outline-none focus:ring-1 focus:ring-blue-500"
-                              />
-                            )}
-                          </div>
-                        ))}
+
+                              {input.doc && (
+                                <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                                  {input.doc}
+                                </p>
+                              )}
+
+                              {isEnabled && (
+                                <>
+                                  {input.isFile ? (
+                                    <div className="space-y-1">
+                                      <div className="flex justify-between items-center text-[10px] text-gray-500">
+                                        <span>Paste file content (e.g. JSON/Secret) OR path (/workspace/...)</span>
+                                        <span className="font-mono text-amber-600 dark:text-amber-400 font-semibold bg-amber-50 dark:bg-amber-950/40 px-1 py-0.5 rounded">
+                                          File / Secret Input
+                                        </span>
+                                      </div>
+                                      <textarea
+                                        rows={3}
+                                        value={fileContents[input.id] ?? ""}
+                                        onChange={(e) =>
+                                          setFileContents((prev) => ({
+                                            ...prev,
+                                            [input.id]: e.target.value
+                                          }))
+                                        }
+                                        placeholder={
+                                          input.default !== undefined
+                                            ? `Default: ${input.default}`
+                                            : "Paste file/credentials content or path /workspace/file.json..."
+                                        }
+                                        className="w-full px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-xs font-mono text-gray-800 dark:text-gray-200 outline-none focus:ring-1 focus:ring-blue-500"
+                                      />
+                                    </div>
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      value={paramValues[input.id] ?? ""}
+                                      onChange={(e) =>
+                                        handleInputChange(input.id, e.target.value)
+                                      }
+                                      placeholder={
+                                        input.default !== undefined
+                                          ? `Default: ${input.default}`
+                                          : "Enter value..."
+                                      }
+                                      className="w-full px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-xs text-gray-800 dark:text-gray-200 outline-none focus:ring-1 focus:ring-blue-500"
+                                    />
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -936,10 +1004,12 @@ outputs:
                                 </p>
 
                                 {displayError && (
-                                  <div className="p-2.5 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 rounded text-xs text-red-700 dark:text-red-300 font-mono flex flex-col space-y-1 mt-1">
-                                    <div className="flex items-center space-x-2">
-                                      <ExclamationCircleIcon className="w-4 h-4 text-red-500 flex-shrink-0" />
-                                      <span className="font-semibold truncate">{displayError}</span>
+                                  <div className="p-2.5 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 rounded text-xs text-red-700 dark:text-red-300 font-mono flex flex-col space-y-1.5 mt-1 max-w-full overflow-hidden">
+                                    <div className="flex items-start space-x-2 min-w-0">
+                                      <ExclamationCircleIcon className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                                      <span className="font-semibold break-all max-h-28 overflow-y-auto block pr-1 leading-relaxed min-w-0">
+                                        {displayError}
+                                      </span>
                                     </div>
                                     <p className="text-[11px] text-red-600 dark:text-red-400 font-normal pl-6">
                                       Tip: Open <span className="font-bold underline">View Run Results Storage</span> to inspect <span className="font-bold font-mono">execution.log</span> for complete diagnostic output.
