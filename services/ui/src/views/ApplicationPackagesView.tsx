@@ -64,6 +64,8 @@ export const ApplicationPackagesView: React.FC = () => {
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
   const [executionName, setExecutionName] = useState<string>("");
   const [packageFileName, setPackageFileName] = useState<string>("");
+  const [graphProcesses, setGraphProcesses] = useState<{ id: string; label?: string; class?: string; inputs?: any }[]>([]);
+  const [selectedProcessId, setSelectedProcessId] = useState<string>("");
 
   // Tabs & Views
   const [activeTab, setActiveTab] = useState<"configure" | "edit" | "executions">("configure");
@@ -167,6 +169,80 @@ export const ApplicationPackagesView: React.FC = () => {
     return defVal;
   };
 
+  const parseInputsFromObject = (targetInputs: any) => {
+    const parsedInputs: CwlInputDef[] = [];
+    const defaultValues: Record<string, any> = {};
+    const typesMap: Record<string, string> = {};
+
+    if (targetInputs) {
+      if (Array.isArray(targetInputs)) {
+        targetInputs.forEach((input: any) => {
+          const inputId = String(input.id || input.name || "").replace(/^#/, "");
+          const inputType = formatTypeString(input.type);
+          const defVal = formatDefaultValue(input.default);
+
+          typesMap[inputId] = inputType;
+          parsedInputs.push({
+            id: inputId,
+            type: inputType,
+            doc: input.doc || input.label,
+            default: defVal,
+            isFile: isFileInput(inputId, inputType)
+          });
+          if (defVal !== undefined) {
+            defaultValues[inputId] = defVal;
+          }
+        });
+      } else if (typeof targetInputs === "object") {
+        Object.entries(targetInputs).forEach(([inputIdRaw, inputVal]: [string, any]) => {
+          const inputId = inputIdRaw.replace(/^#/, "");
+          let inputType = "string";
+          let doc = "";
+          let rawDefVal = undefined;
+
+          if (typeof inputVal === "string") {
+            inputType = inputVal;
+          } else if (typeof inputVal === "object") {
+            inputType = formatTypeString(inputVal.type);
+            doc = inputVal.doc || inputVal.label || "";
+            rawDefVal = inputVal.default;
+          }
+
+          const defVal = formatDefaultValue(rawDefVal);
+          typesMap[inputId] = inputType;
+
+          parsedInputs.push({
+            id: inputId,
+            type: inputType,
+            doc,
+            default: defVal,
+            isFile: isFileInput(inputId, inputType)
+          });
+
+          if (defVal !== undefined) {
+            defaultValues[inputId] = defVal;
+          }
+        });
+      }
+    }
+
+    setInputs(parsedInputs);
+    setParamValues(defaultValues);
+    setParamTypes(typesMap);
+  };
+
+  const handleProcessChange = (procId: string) => {
+    setSelectedProcessId(procId);
+    if (cwlDoc && Array.isArray(cwlDoc.$graph)) {
+      const selectedObj = cwlDoc.$graph.find(
+        (item: any) => String(item.id || "").replace(/^#/, "") === procId
+      );
+      if (selectedObj) {
+        parseInputsFromObject(selectedObj.inputs);
+      }
+    }
+  };
+
   // Helper to parse CWL text into state
   const parseCwlText = (textContent: string, sourceName?: string) => {
     setRawCwl(textContent);
@@ -180,79 +256,40 @@ export const ApplicationPackagesView: React.FC = () => {
 
       if (parsed && parsed.inputs) {
         targetInputs = parsed.inputs;
+        setGraphProcesses([]);
+        setSelectedProcessId("");
       } else if (parsed && Array.isArray(parsed.$graph)) {
+        const processes = parsed.$graph
+          .filter((item: any) => item && (item.id || item.class))
+          .map((item: any) => ({
+            id: String(item.id || "").replace(/^#/, ""),
+            label: item.label || item.id,
+            class: item.class || "Process",
+            inputs: item.inputs
+          }));
+
+        setGraphProcesses(processes);
+
         const mainObj =
           parsed.$graph.find(
-            (item: any) => item.id === "main" || item.class === "Workflow"
+            (item: any) => item.id === "main" || item.id === "#main" || item.class === "Workflow"
           ) ||
           parsed.$graph.find((item: any) => item.inputs) ||
           parsed.$graph[0];
 
         if (mainObj) {
+          const mainId = String(mainObj.id || "").replace(/^#/, "");
+          setSelectedProcessId(mainId);
           targetInputs = mainObj.inputs;
           if (mainObj.doc) targetDoc = mainObj.doc;
           if (mainObj.label || mainObj.id) targetLabel = mainObj.label || mainObj.id;
         }
+      } else {
+        setGraphProcesses([]);
+        setSelectedProcessId("");
       }
 
-      const parsedInputs: CwlInputDef[] = [];
-      const defaultValues: Record<string, any> = {};
-      const typesMap: Record<string, string> = {};
-
-      if (targetInputs) {
-        if (Array.isArray(targetInputs)) {
-          targetInputs.forEach((input: any) => {
-            const inputId = input.id || input.name;
-            const inputType = formatTypeString(input.type);
-            const defVal = formatDefaultValue(input.default);
-
-            typesMap[inputId] = inputType;
-            parsedInputs.push({
-              id: inputId,
-              type: inputType,
-              doc: input.doc || input.label,
-              default: defVal,
-              isFile: isFileInput(inputId, inputType)
-            });
-            if (defVal !== undefined) {
-              defaultValues[inputId] = defVal;
-            }
-          });
-        } else if (typeof targetInputs === "object") {
-          Object.entries(targetInputs).forEach(([inputId, inputVal]: [string, any]) => {
-            let inputType = "string";
-            let doc = "";
-            let rawDefVal = undefined;
-
-            if (typeof inputVal === "string") {
-              inputType = inputVal;
-            } else if (typeof inputVal === "object") {
-              inputType = formatTypeString(inputVal.type);
-              doc = inputVal.doc || inputVal.label || "";
-              rawDefVal = inputVal.default;
-            }
-
-            const defVal = formatDefaultValue(rawDefVal);
-            typesMap[inputId] = inputType;
-
-            parsedInputs.push({
-              id: inputId,
-              type: inputType,
-              doc,
-              default: defVal,
-              isFile: isFileInput(inputId, inputType)
-            });
-
-            if (defVal !== undefined) {
-              defaultValues[inputId] = defVal;
-            }
-          });
-        }
-      }
-
-      setInputs(parsedInputs);
-      setParamValues(defaultValues);
-      setParamTypes(typesMap);
+      parseInputsFromObject(targetInputs);
 
       let rawUrlFilename = "";
       if (url) {
@@ -422,6 +459,7 @@ outputs:
       await submitCwlExecution({
         cwlUrl: selectedPackagePath ? undefined : getRawUrl(url),
         cwlContent: rawCwl,
+        processId: selectedProcessId || undefined,
         parameters: activeParams,
         inputTypes: activeTypes,
         inlineFiles: fileContents,
@@ -764,6 +802,26 @@ outputs:
                       </p>
                     )}
                   </div>
+
+                  {/* Process Selector for $graph CWL Files */}
+                  {graphProcesses.length > 1 && (
+                    <div className="p-3.5 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-lg space-y-1.5">
+                      <label className="block text-xs font-bold text-blue-900 dark:text-blue-300">
+                        Target Process / Workflow (#id)
+                      </label>
+                      <select
+                        value={selectedProcessId}
+                        onChange={(e) => handleProcessChange(e.target.value)}
+                        className="w-full text-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-md px-3 py-2 text-gray-900 dark:text-white font-mono"
+                      >
+                        {graphProcesses.map((proc) => (
+                          <option key={proc.id} value={proc.id}>
+                            #{proc.id} ({proc.class}){proc.label ? ` - ${proc.label}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   {/* Input Parameters Form */}
                   <div className="space-y-4 pt-2">

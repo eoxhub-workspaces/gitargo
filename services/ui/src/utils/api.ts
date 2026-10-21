@@ -431,6 +431,7 @@ export const deletePackage = async (path: string) => {
 export interface CwlSubmissionPayload {
   cwlUrl?: string;
   cwlContent?: string;
+  processId?: string;
   parameters?: Record<string, any>;
   inputTypes?: Record<string, string>;
   inlineFiles?: Record<string, string>;

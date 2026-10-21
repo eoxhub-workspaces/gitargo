@@ -1638,7 +1638,7 @@ apiRouter.delete(/^\/packages\/(.+)$/, async (req, res, next) => {
 apiRouter.post("/executions/cwl", async (req, res, next) => {
   try {
     const namespace = process.env.ARGO_NAMESPACE || "default";
-    const { cwlUrl, cwlContent, parameters, inputTypes, inlineFiles, name, packageId } = req.body;
+    const { cwlUrl, cwlContent, processId: reqProcessId, parameters, inputTypes, inlineFiles, name, packageId } = req.body;
 
     if (!cwlUrl && !cwlContent) {
       return res.status(400).json({ message: "Either cwlUrl or cwlContent is required." });
@@ -1724,8 +1724,10 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
       return null;
     }
 
-    // Try to extract dockerPull image from cwlContent or cwlUrl
+    // Try to extract dockerPull image and processId from cwlContent or cwlUrl
     let customContainerImage = null;
+    let targetProcessId = reqProcessId || null;
+
     try {
       let rawCwlStr = cwlContent;
       if (!rawCwlStr && cwlUrl) {
@@ -1738,15 +1740,26 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
       if (rawCwlStr) {
         const parsedCwl = YAML.parse(rawCwlStr);
         customContainerImage = findDockerPullImage(parsedCwl);
+
+        // Auto-detect target process ID if document contains $graph with multiple objects
+        if (!targetProcessId && parsedCwl && Array.isArray(parsedCwl.$graph)) {
+          const mainObj =
+            parsedCwl.$graph.find((item) => item.id === "main" || item.class === "Workflow") ||
+            parsedCwl.$graph.find((item) => item.inputs) ||
+            parsedCwl.$graph[0];
+          if (mainObj && mainObj.id) {
+            targetProcessId = String(mainObj.id).replace(/^#/, '');
+          }
+        }
       }
     } catch (e) {
-      console.warn("Failed to parse CWL for dockerPull extraction:", e.message);
+      console.warn("Failed to parse CWL for dockerPull extraction / processId resolution:", e.message);
     }
 
     const defaultImage = process.env.CWLTOOL_IMAGE || "ghcr.io/eoxhub-workspaces/gitargo-cwl-runner:latest";
     const selectedImage = defaultImage;
 
-    console.log(`[CWL EXECUTION] Pod base image selected: "${selectedImage}" (gitargo cwl runner)`);
+    console.log(`[CWL EXECUTION] Pod base image selected: "${selectedImage}" (gitargo cwl runner) | targetProcessId: "${targetProcessId || 'none'}"`);
 
     const bucket = process.env.S3_BUCKET || process.env.BUCKET_NAME || process.env.AWS_S3_BUCKET || "";
     const endpoint = process.env.S3_ENDPOINT || process.env.AWS_ENDPOINT_URL || "";
@@ -1762,6 +1775,7 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
       : "/tmp/application_packages_executions";
 
     const udockerMode = process.env.UDOCKER_DEFAULT_EXECUTION_MODE || "F1";
+    const targetFragment = targetProcessId ? `#${targetProcessId}` : "";
 
     const runnerPy = `import os, sys, subprocess, glob, base64
 
@@ -1787,8 +1801,8 @@ with open(job_json_path, "w") as f:
 ${cwlContent ? `
 with open(package_cwl_path, "w") as f:
     f.write(base64.b64decode("${encodedCwl}").decode("utf-8"))
-target_cwl = package_cwl_path
-` : `target_cwl = "${cwlUrl}"`}
+target_cwl = package_cwl_path + "${targetFragment}"
+` : `target_cwl = "${cwlUrl}" + "${targetFragment}"`}
 
 # Run cwltool with udocker user-space container engine and --disable-color
 cmd = ["cwltool", "--disable-color", "--debug", "--user-space-docker-cmd=udocker", "--outdir", out_dir, target_cwl, job_json_path]
@@ -1808,6 +1822,7 @@ sys.exit(ret.returncode)
     echo "UDOCKER_DEFAULT_EXECUTION_MODE: $UDOCKER_DEFAULT_EXECUTION_MODE"
     echo "Checking cwltool: $(which cwltool 2>&1 || echo 'NOT FOUND')"
     echo "Checking python3: $(which python3 2>&1 || echo 'NOT FOUND')"
+    echo "Checking nodejs: $(which node 2>&1 || which nodejs 2>&1 || echo 'NOT FOUND')"
     echo "Checking udocker: $(which udocker 2>&1 || echo 'NOT FOUND')"
     echo "Checking curl: $(which curl 2>&1 || echo 'NOT FOUND')"
     echo "=================================="

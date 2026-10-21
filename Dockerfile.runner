@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     gzip \
     procps \
+    nodejs \
  && rm -rf /var/lib/apt/lists/*
 
 # Pre-configure system-wide udocker F1 execution mode
