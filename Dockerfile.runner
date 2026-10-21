@@ -10,9 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
  && rm -rf /var/lib/apt/lists/*
 
-# Pre-configure system-wide udocker P2 execution mode
+# Pre-configure system-wide udocker F1 execution mode
 RUN echo "[udocker]" > /etc/udocker.conf \
- && echo "default_execution_mode = P2" >> /etc/udocker.conf \
+ && echo "default_execution_mode = F1" >> /etc/udocker.conf \
  && echo "proot_no_seccomp = True" >> /etc/udocker.conf
 
 # Create unprivileged non-root user (UID 1000)
@@ -22,7 +22,7 @@ USER runner
 WORKDIR /home/runner
 
 ENV PATH="/home/runner/.local/bin:${PATH}"
-ENV UDOCKER_DEFAULT_EXECUTION_MODE="P2"
+ENV UDOCKER_DEFAULT_EXECUTION_MODE="F1"
 ENV PROOT_NO_SECCOMP="1"
 ENV NO_COLOR="1"
 

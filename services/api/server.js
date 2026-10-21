@@ -1761,15 +1761,17 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
       ? "/workspace/application_packages_executions"
       : "/tmp/application_packages_executions";
 
+    const udockerMode = process.env.UDOCKER_DEFAULT_EXECUTION_MODE || "F1";
+
     const runnerPy = `import os, sys, subprocess, glob, base64
 
-os.environ["UDOCKER_DEFAULT_EXECUTION_MODE"] = "P2"
+os.environ["UDOCKER_DEFAULT_EXECUTION_MODE"] = "${udockerMode}"
 os.environ["PROOT_NO_SECCOMP"] = "1"
 os.environ["NO_COLOR"] = "1"
 os.environ["CLICOLOR"] = "0"
 os.environ["ANSI_COLORS_DISABLED"] = "1"
 
-print("=== GITARGO CWL RUNNER VER 3.0.1 (P2 MODE ACTIVE) ===")
+print("=== GITARGO CWL RUNNER VER 3.0.2 (" + os.environ.get("UDOCKER_DEFAULT_EXECUTION_MODE", "${udockerMode}") + " MODE ACTIVE) ===")
 
 exec_name = sys.argv[1] if len(sys.argv) > 1 else "default-execution"
 out_dir = "${baseOutDirPrefix}/" + exec_name
@@ -1788,17 +1790,17 @@ with open(package_cwl_path, "w") as f:
 target_cwl = package_cwl_path
 ` : `target_cwl = "${cwlUrl}"`}
 
-# Run cwltool with udocker user-space container engine
-cmd = ["cwltool", "--debug", "--user-space-docker-cmd=udocker", "--outdir", out_dir, target_cwl, job_json_path]
+# Run cwltool with udocker user-space container engine and --disable-color
+cmd = ["cwltool", "--disable-color", "--debug", "--user-space-docker-cmd=udocker", "--outdir", out_dir, target_cwl, job_json_path]
 ret = subprocess.run(cmd)
 
 sys.exit(ret.returncode)
 `;
 
     const encodedRunnerPy = Buffer.from(runnerPy).toString('base64');
-    let executionCmd = `export UDOCKER_DEFAULT_EXECUTION_MODE=P2 && export PROOT_NO_SECCOMP=1 && export NO_COLOR=1 && mkdir -p ~/.udocker /tmp/runner /tmp/inputs ${baseOutDirPrefix}/{{workflow.name}} && echo "[udocker]" > ~/.udocker/udocker.conf && echo "default_execution_mode = P2" >> ~/.udocker/udocker.conf && echo "proot_no_seccomp = True" >> ~/.udocker/udocker.conf && {
+    let executionCmd = `export UDOCKER_DEFAULT_EXECUTION_MODE=${udockerMode} && export PROOT_NO_SECCOMP=1 && export NO_COLOR=1 && mkdir -p ~/.udocker /tmp/runner /tmp/inputs ${baseOutDirPrefix}/{{workflow.name}} && echo "[udocker]" > ~/.udocker/udocker.conf && echo "default_execution_mode = ${udockerMode}" >> ~/.udocker/udocker.conf && echo "proot_no_seccomp = True" >> ~/.udocker/udocker.conf && {
   {
-    echo "=== CWL EXECUTION DIAGNOSTICS (VER 3.0.1) ==="
+    echo "=== CWL EXECUTION DIAGNOSTICS (VER 3.0.2) ==="
     echo "Workflow Name: {{workflow.name}}"
     echo "Date: $(date 2>/dev/null || echo unknown)"
     echo "User: $(whoami 2>/dev/null || echo unknown) (UID: $(id -u 2>/dev/null || echo unknown))"
@@ -1842,7 +1844,7 @@ sys.exit(ret.returncode)
             command: ["sh", "-c"],
             args: [executionCmd],
             env: [
-              { name: "UDOCKER_DEFAULT_EXECUTION_MODE", value: "P2" },
+              { name: "UDOCKER_DEFAULT_EXECUTION_MODE", value: udockerMode },
               { name: "PROOT_NO_SECCOMP", value: "1" },
               { name: "NO_COLOR", value: "1" }
             ],
@@ -3112,6 +3114,9 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
                 line = msgMatch[1];
             }
 
+            // 4. Strip ANSI escape control codes (e.g., \x1b[1;30m, \x1b[0m, \x1b[32m)
+            line = line.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+
             parsedLogs.push(line);
           }
         }
@@ -3261,7 +3266,8 @@ apiRouter.get("/logs/:id", async (req, res, next) => {
 
         if (rawText && rawText.trim() !== '') {
           console.log(`[API LOGS] Successfully retrieved direct K8s Pod Logs for "${targetPodName}"`);
-          return res.send(rawText);
+          const cleanText = rawText.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+          return res.send(cleanText);
         }
       } catch (k8sErr) {
         console.warn(`[API LOGS] Direct K8s Pod Log fallback failed for "${safeId}":`, k8sErr.message);
