@@ -84,8 +84,8 @@ export const WorkspaceBrowser: React.FC<WorkspaceBrowserProps> = ({
   };
 
   return (
-    <Modal title="Workspace Results Storage" onHide={onClose}>
-      <div className="p-4 flex flex-col space-y-4 max-w-4xl w-full min-h-[400px]">
+    <Modal title="Execution Results Browser" onHide={onClose}>
+      <div className="p-4 flex flex-col space-y-4 max-w-4xl w-full flex-1 min-h-0 overflow-hidden dark:bg-gray-900 dark:text-gray-100">
         {/* Navigation Bar */}
         <div className="flex items-center justify-between border-b pb-3 dark:border-gray-700">
           <div className="flex items-center space-x-2">
@@ -134,17 +134,17 @@ export const WorkspaceBrowser: React.FC<WorkspaceBrowserProps> = ({
             This directory is empty.
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="flex-1 min-h-0 overflow-y-auto rounded border border-gray-200 dark:border-gray-700 max-h-[60vh]">
             <table className="w-full text-left text-sm text-gray-600 dark:text-gray-300">
-              <thead className="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-800 dark:text-gray-400">
+              <thead className="sticky top-0 z-10 text-xs text-gray-700 uppercase bg-gray-100 dark:bg-gray-800 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700 shadow-sm">
                 <tr>
-                  <th className="px-4 py-2">Name</th>
-                  <th className="px-4 py-2">Size</th>
-                  <th className="px-4 py-2">Modified</th>
-                  <th className="px-4 py-2 text-right">Action</th>
+                  <th className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800">Name</th>
+                  <th className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800">Size</th>
+                  <th className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800">Modified</th>
+                  <th className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800 text-right">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-900">
                 {files.map((file) => {
                   const filePath = currentPath
                     ? `${currentPath.replace(/\/$/, "")}/${file.name}`
@@ -173,7 +173,7 @@ export const WorkspaceBrowser: React.FC<WorkspaceBrowserProps> = ({
                         )}
                       </td>
                       <td className="px-4 py-3">{formatSize(file.size)}</td>
-                      <td className="px-4 py-3 text-xs text-gray-500">
+                      <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">
                         {file.mtime
                           ? new Date(file.mtime).toLocaleString()
                           : "-"}
@@ -184,7 +184,7 @@ export const WorkspaceBrowser: React.FC<WorkspaceBrowserProps> = ({
                             href={getWorkspaceFileDownloadUrl(filePath)}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center space-x-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                            className="inline-flex items-center space-x-1 text-xs text-blue-600 dark:text-blue-400 hover:underline font-semibold"
                             title="Download / View"
                           >
                             <ArrowDownTrayIcon className="w-4 h-4" />

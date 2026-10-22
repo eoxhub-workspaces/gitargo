@@ -1666,7 +1666,16 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
 
         if (typeStr.includes('[]') || typeStr.includes('array')) {
           if (typeof val === 'string') {
-            jobObj[key] = val.split(',').map(s => s.trim()).filter(Boolean);
+            const trimmed = val.trim();
+            if (trimmed.startsWith('[')) {
+              try {
+                jobObj[key] = JSON.parse(trimmed);
+              } catch (e) {
+                jobObj[key] = val.split(',').map(s => s.trim()).filter(Boolean);
+              }
+            } else {
+              jobObj[key] = val.split(',').map(s => s.trim()).filter(Boolean);
+            }
           } else if (Array.isArray(val)) {
             jobObj[key] = val;
           }
@@ -1679,11 +1688,36 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
         } else if (typeStr.includes('boolean')) {
           jobObj[key] = String(val) === 'true';
         } else if (typeStr.includes('directory')) {
-          jobObj[key] = { "class": "Directory", "path": String(val) };
+          jobObj[key] = typeof val === 'object' && val !== null ? val : { "class": "Directory", "path": String(val) };
         } else if (typeStr.includes('file')) {
-          jobObj[key] = { "class": "File", "path": String(val) };
+          jobObj[key] = typeof val === 'object' && val !== null ? val : { "class": "File", "path": String(val) };
+        } else if (typeStr.includes('uri') || typeStr.includes('record') || typeStr.includes('string_format') || typeStr.includes('#')) {
+          if (typeof val === 'object' && val !== null) {
+            jobObj[key] = val;
+          } else if (typeof val === 'string') {
+            const trimmed = val.trim();
+            if (trimmed.startsWith('{')) {
+              try {
+                jobObj[key] = JSON.parse(trimmed);
+              } catch (e) {
+                jobObj[key] = { "value": val };
+              }
+            } else {
+              jobObj[key] = { "value": val };
+            }
+          } else {
+            jobObj[key] = { "value": val };
+          }
         } else {
-          jobObj[key] = val;
+          if (typeof val === 'string' && val.trim().startsWith('{')) {
+            try {
+              jobObj[key] = JSON.parse(val.trim());
+            } catch (e) {
+              jobObj[key] = val;
+            }
+          } else {
+            jobObj[key] = val;
+          }
         }
       });
     }
@@ -1781,6 +1815,21 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
 
 os.environ["UDOCKER_DEFAULT_EXECUTION_MODE"] = "${udockerMode}"
 os.environ["PROOT_NO_SECCOMP"] = "1"
+os.environ["GOMP_OFFLOAD_TARGETS"] = "none"
+os.environ["ACC_DEVICE_TYPE"] = "none"
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["OMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["GOMP_RT_ERR_HANDLER"] = "ignore"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
+os.environ["OMP_NUM_THREADS"] = "2"
+if os.path.exists("/opt/gitargo/libgoacc_stub.so"):
+    os.environ["LD_PRELOAD"] = "/opt/gitargo/libgoacc_stub.so"
+    os.environ["UDOCKER_ENV"] = "LD_PRELOAD=/opt/gitargo/libgoacc_stub.so GOMP_OFFLOAD_TARGETS=none ACC_DEVICE_TYPE=none KMP_DUPLICATE_LIB_OK=TRUE OMP_DUPLICATE_LIB_OK=TRUE GOMP_RT_ERR_HANDLER=ignore OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2"
+else:
+    os.environ["UDOCKER_ENV"] = "GOMP_OFFLOAD_TARGETS=none ACC_DEVICE_TYPE=none KMP_DUPLICATE_LIB_OK=TRUE OMP_DUPLICATE_LIB_OK=TRUE GOMP_RT_ERR_HANDLER=ignore OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2"
+
+if "LD_LIBRARY_PATH" in os.environ:
+    del os.environ["LD_LIBRARY_PATH"]
 os.environ["NO_COLOR"] = "1"
 os.environ["CLICOLOR"] = "0"
 os.environ["ANSI_COLORS_DISABLED"] = "1"
@@ -1804,15 +1853,33 @@ with open(package_cwl_path, "w") as f:
 target_cwl = package_cwl_path + "${targetFragment}"
 ` : `target_cwl = "${cwlUrl}" + "${targetFragment}"`}
 
-# Run cwltool with udocker user-space container engine and --disable-color
-cmd = ["cwltool", "--disable-color", "--debug", "--user-space-docker-cmd=udocker", "--outdir", out_dir, target_cwl, job_json_path]
+# Run cwltool with udocker user-space container engine and selective environment preservation
+cmd = [
+    "cwltool",
+    "--disable-color",
+    "--debug",
+    "--preserve-environment", "LD_PRELOAD",
+    "--preserve-environment", "GOMP_OFFLOAD_TARGETS",
+    "--preserve-environment", "ACC_DEVICE_TYPE",
+    "--preserve-environment", "KMP_DUPLICATE_LIB_OK",
+    "--preserve-environment", "OMP_DUPLICATE_LIB_OK",
+    "--preserve-environment", "GOMP_RT_ERR_HANDLER",
+    "--preserve-environment", "OMP_NUM_THREADS",
+    "--preserve-environment", "OPENBLAS_NUM_THREADS",
+    "--preserve-environment", "UDOCKER_ENV",
+    "--preserve-environment", "UDOCKER_DEFAULT_EXECUTION_MODE",
+    "--user-space-docker-cmd=udocker",
+    "--outdir", out_dir,
+    target_cwl,
+    job_json_path
+]
 ret = subprocess.run(cmd)
 
 sys.exit(ret.returncode)
 `;
 
     const encodedRunnerPy = Buffer.from(runnerPy).toString('base64');
-    let executionCmd = `export UDOCKER_DEFAULT_EXECUTION_MODE=${udockerMode} && export PROOT_NO_SECCOMP=1 && export NO_COLOR=1 && mkdir -p ~/.udocker /tmp/runner /tmp/inputs ${baseOutDirPrefix}/{{workflow.name}} && echo "[udocker]" > ~/.udocker/udocker.conf && echo "default_execution_mode = ${udockerMode}" >> ~/.udocker/udocker.conf && echo "proot_no_seccomp = True" >> ~/.udocker/udocker.conf && {
+    let executionCmd = `export UDOCKER_DEFAULT_EXECUTION_MODE=${udockerMode} && export PROOT_NO_SECCOMP=1 && export GOMP_OFFLOAD_TARGETS=none && export ACC_DEVICE_TYPE=none && export KMP_DUPLICATE_LIB_OK=TRUE && export OMP_DUPLICATE_LIB_OK=TRUE && export GOMP_RT_ERR_HANDLER=ignore && export OPENBLAS_NUM_THREADS=2 && export OMP_NUM_THREADS=2 && { [ -f /opt/gitargo/libgoacc_stub.so ] && export LD_PRELOAD=/opt/gitargo/libgoacc_stub.so && export UDOCKER_ENV="LD_PRELOAD=/opt/gitargo/libgoacc_stub.so GOMP_OFFLOAD_TARGETS=none ACC_DEVICE_TYPE=none KMP_DUPLICATE_LIB_OK=TRUE OMP_DUPLICATE_LIB_OK=TRUE GOMP_RT_ERR_HANDLER=ignore OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2"; } || export UDOCKER_ENV="GOMP_OFFLOAD_TARGETS=none ACC_DEVICE_TYPE=none KMP_DUPLICATE_LIB_OK=TRUE OMP_DUPLICATE_LIB_OK=TRUE GOMP_RT_ERR_HANDLER=ignore OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2" && unset LD_LIBRARY_PATH && export NO_COLOR=1 && mkdir -p ~/.udocker /tmp/runner /tmp/inputs ${baseOutDirPrefix}/{{workflow.name}} && echo "[udocker]" > ~/.udocker/udocker.conf && echo "default_execution_mode = ${udockerMode}" >> ~/.udocker/udocker.conf && echo "proot_no_seccomp = True" >> ~/.udocker/udocker.conf && {
   {
     echo "=== CWL EXECUTION DIAGNOSTICS (VER 3.0.2) ==="
     echo "Workflow Name: {{workflow.name}}"

@@ -48,8 +48,11 @@ const Content = styled("div")`
   z-index: 50;
   margin-top: 1.5rem;
   margin-bottom: 1.5rem;
-  width: auto;
+  width: 90%;
   max-width: 64rem;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
 `;
 
 const Content2 = styled("div")`
@@ -58,6 +61,8 @@ const Content2 = styled("div")`
   background-color: #ffffff;
   flex-direction: column;
   width: 100%;
+  max-height: 85vh;
+  overflow: hidden;
   border-radius: 0.5rem;
   border-width: 0;
   outline: 0;

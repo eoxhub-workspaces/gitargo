@@ -10,6 +10,7 @@ import {
   submitCwlExecution,
   getExecutions,
   getLogs,
+  getWorkspaceFileDownloadUrl,
   PackageFile
 } from "../utils/api";
 import CodeEditor from "../components/CodeEditor";
@@ -31,7 +32,9 @@ import {
   CommandLineIcon,
   XMarkIcon,
   ExclamationTriangleIcon,
-  ExclamationCircleIcon
+  ExclamationCircleIcon,
+  EyeIcon,
+  EyeSlashIcon
 } from "@heroicons/react/24/outline";
 
 interface CwlInputDef {
@@ -62,7 +65,12 @@ export const ApplicationPackagesView: React.FC = () => {
   const [paramTypes, setParamTypes] = useState<Record<string, string>>({});
   const [enabledOptionalParams, setEnabledOptionalParams] = useState<Record<string, boolean>>({});
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
+  const [hiddenFields, setHiddenFields] = useState<Record<string, boolean>>({});
   const [executionName, setExecutionName] = useState<string>("");
+
+  const toggleHideField = (id: string) => {
+    setHiddenFields((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
   const [packageFileName, setPackageFileName] = useState<string>("");
   const [graphProcesses, setGraphProcesses] = useState<{ id: string; label?: string; class?: string; inputs?: any }[]>([]);
   const [selectedProcessId, setSelectedProcessId] = useState<string>("");
@@ -495,6 +503,21 @@ outputs:
     setShowLogModal(true);
 
     try {
+      // 1. Try reading execution.log from saved workspace execution directory
+      const logFilePath = `application_packages_executions/${execName}/execution.log`;
+      try {
+        const downloadUrl = getWorkspaceFileDownloadUrl(logFilePath);
+        const res = await axios.get(downloadUrl, { responseType: "text" });
+        if (res.data && String(res.data).trim().length > 0) {
+          setLogsText(String(res.data));
+          setLogsLoading(false);
+          return;
+        }
+      } catch (fileErr) {
+        // Fall back if file is not created yet
+      }
+
+      // 2. Fall back to live pod/workflow logs
       let startBuf = startTime;
       let endBuf = endTime;
       if (startBuf) {
@@ -606,7 +629,7 @@ outputs:
             className="inline-flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-900 text-white px-3.5 py-2 rounded-lg text-xs font-semibold transition"
           >
             <FolderOpenIcon className="w-4 h-4" />
-            <span>All Workspace Files</span>
+            <span>All Execution Results</span>
           </button>
         </div>
       </div>
@@ -901,11 +924,31 @@ outputs:
                                 <>
                                   {input.isFile ? (
                                     <div className="space-y-1">
-                                      <div className="flex justify-between items-center text-[10px] text-gray-500">
+                                      <div className="flex justify-between items-center text-[10px] text-gray-500 dark:text-gray-400">
                                         <span>Paste file content (e.g. JSON/Secret) OR path (/workspace/...)</span>
-                                        <span className="font-mono text-amber-600 dark:text-amber-400 font-semibold bg-amber-50 dark:bg-amber-950/40 px-1 py-0.5 rounded">
-                                          File / Secret Input
-                                        </span>
+                                        <div className="flex items-center space-x-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => toggleHideField(input.id)}
+                                            className="inline-flex items-center space-x-1 text-xs text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 px-2 py-0.5 rounded transition font-medium"
+                                            title={hiddenFields[input.id] ? "Click to reveal secret content" : "Click to hide sensitive keys/credentials for presentations"}
+                                          >
+                                            {hiddenFields[input.id] ? (
+                                              <>
+                                                <EyeSlashIcon className="w-3.5 h-3.5 text-amber-500" />
+                                                <span className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">Hidden</span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <EyeIcon className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
+                                                <span className="text-[11px]">Hide Content</span>
+                                              </>
+                                            )}
+                                          </button>
+                                          <span className="font-mono text-amber-600 dark:text-amber-400 font-semibold bg-amber-50 dark:bg-amber-950/40 px-1 py-0.5 rounded">
+                                            File / Secret Input
+                                          </span>
+                                        </div>
                                       </div>
                                       <textarea
                                         rows={3}
@@ -921,23 +964,48 @@ outputs:
                                             ? `Default: ${input.default}`
                                             : "Paste file/credentials content or path /workspace/file.json..."
                                         }
-                                        className="w-full px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-xs font-mono text-gray-800 dark:text-gray-200 outline-none focus:ring-1 focus:ring-blue-500"
+                                        style={{
+                                          WebkitTextSecurity: hiddenFields[input.id] ? ("disc" as any) : "none"
+                                        }}
+                                        className={`w-full px-3 py-1.5 rounded border text-xs font-mono outline-none focus:ring-1 focus:ring-blue-500 transition ${
+                                          hiddenFields[input.id]
+                                            ? "border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200"
+                                            : "border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-gray-800 dark:text-gray-200"
+                                        }`}
                                       />
                                     </div>
                                   ) : (
-                                    <input
-                                      type="text"
-                                      value={paramValues[input.id] ?? ""}
-                                      onChange={(e) =>
-                                        handleInputChange(input.id, e.target.value)
-                                      }
-                                      placeholder={
-                                        input.default !== undefined
-                                          ? `Default: ${input.default}`
-                                          : "Enter value..."
-                                      }
-                                      className="w-full px-3 py-1.5 rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-xs text-gray-800 dark:text-gray-200 outline-none focus:ring-1 focus:ring-blue-500"
-                                    />
+                                    <div className="relative flex items-center">
+                                      <input
+                                        type={hiddenFields[input.id] ? "password" : "text"}
+                                        value={paramValues[input.id] ?? ""}
+                                        onChange={(e) =>
+                                          handleInputChange(input.id, e.target.value)
+                                        }
+                                        placeholder={
+                                          input.default !== undefined
+                                            ? `Default: ${input.default}`
+                                            : "Enter value..."
+                                        }
+                                        className={`w-full pr-10 px-3 py-1.5 rounded border text-xs outline-none focus:ring-1 focus:ring-blue-500 font-mono transition ${
+                                          hiddenFields[input.id]
+                                            ? "border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200"
+                                            : "border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-gray-800 dark:text-gray-200"
+                                        }`}
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleHideField(input.id)}
+                                        className="absolute right-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1 rounded transition"
+                                        title={hiddenFields[input.id] ? "Reveal parameter value" : "Hide parameter value for presentation"}
+                                      >
+                                        {hiddenFields[input.id] ? (
+                                          <EyeSlashIcon className="w-4 h-4 text-amber-500" />
+                                        ) : (
+                                          <EyeIcon className="w-4 h-4 text-gray-400" />
+                                        )}
+                                      </button>
+                                    </div>
                                   )}
                                 </>
                               )}
@@ -1070,7 +1138,7 @@ outputs:
                                       </span>
                                     </div>
                                     <p className="text-[11px] text-red-600 dark:text-red-400 font-normal pl-6">
-                                      Tip: Open <span className="font-bold underline">View Run Results Storage</span> to inspect <span className="font-bold font-mono">execution.log</span> for complete diagnostic output.
+                                      Tip: Click <span className="font-bold underline">Saved Results</span> or <span className="font-bold underline">View Execution Logs</span> to inspect complete diagnostic logs.
                                     </p>
                                   </div>
                                 )}
@@ -1095,7 +1163,7 @@ outputs:
                                   className="inline-flex items-center space-x-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-semibold transition"
                                 >
                                   <FolderOpenIcon className="w-4 h-4" />
-                                  <span>View Run Results Storage</span>
+                                  <span>Saved Results</span>
                                 </button>
                               </div>
                             </div>
