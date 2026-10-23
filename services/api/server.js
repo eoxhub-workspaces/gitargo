@@ -1855,33 +1855,19 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
       : "/tmp/application_packages_executions";
 
     const containerEngine = (process.env.CONTAINER_ENGINE || "dind").toLowerCase();
-    const udockerMode = process.env.UDOCKER_DEFAULT_EXECUTION_MODE || "F1";
     const targetFragment = targetProcessId ? `#${targetProcessId}` : "";
 
     const runnerPy = `import os, sys, subprocess, glob, base64
 
-os.environ["UDOCKER_DEFAULT_EXECUTION_MODE"] = "${udockerMode}"
-os.environ["PROOT_NO_SECCOMP"] = "1"
-os.environ["GOMP_OFFLOAD_TARGETS"] = "none"
-os.environ["ACC_DEVICE_TYPE"] = "none"
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-os.environ["OMP_DUPLICATE_LIB_OK"] = "TRUE"
-os.environ["GOMP_RT_ERR_HANDLER"] = "ignore"
-os.environ["OPENBLAS_NUM_THREADS"] = "2"
-os.environ["OMP_NUM_THREADS"] = "2"
-if os.path.exists("/opt/gitargo/libgoacc_stub.so"):
-    os.environ["LD_PRELOAD"] = "/opt/gitargo/libgoacc_stub.so"
-    os.environ["UDOCKER_ENV"] = "LD_PRELOAD=/opt/gitargo/libgoacc_stub.so GOMP_OFFLOAD_TARGETS=none ACC_DEVICE_TYPE=none KMP_DUPLICATE_LIB_OK=TRUE OMP_DUPLICATE_LIB_OK=TRUE GOMP_RT_ERR_HANDLER=ignore OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2"
-else:
-    os.environ["UDOCKER_ENV"] = "GOMP_OFFLOAD_TARGETS=none ACC_DEVICE_TYPE=none KMP_DUPLICATE_LIB_OK=TRUE OMP_DUPLICATE_LIB_OK=TRUE GOMP_RT_ERR_HANDLER=ignore OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2"
-
-if "LD_LIBRARY_PATH" in os.environ:
-    del os.environ["LD_LIBRARY_PATH"]
 os.environ["NO_COLOR"] = "1"
 os.environ["CLICOLOR"] = "0"
 os.environ["ANSI_COLORS_DISABLED"] = "1"
 
-print("=== GITARGO CWL RUNNER VER 3.0.2 (" + ("NATIVE DOCKER (DIND)" if "${containerEngine}" in ["dind", "docker"] else "${udockerMode} UMODE") + ") ===")
+if "${containerEngine}" in ["dind", "docker"]:
+    os.environ["DOCKER_HOST"] = "tcp://127.0.0.1:2375"
+    os.environ["DOCKER_TLS_CERTDIR"] = ""
+
+print("=== GITARGO CWL RUNNER VER 3.0.3 (NATIVE DOCKER) ===")
 
 exec_name = sys.argv[1] if len(sys.argv) > 1 else "default-execution"
 out_dir = "${baseOutDirPrefix}/" + exec_name
@@ -1900,58 +1886,31 @@ with open(package_cwl_path, "w") as f:
 target_cwl = package_cwl_path + "${targetFragment}"
 ` : `target_cwl = "${cwlUrl}" + "${targetFragment}"`}
 
-# Run cwltool with native Docker or udocker based on containerEngine setting
-if "${containerEngine}" in ["dind", "docker"]:
-    os.environ["DOCKER_HOST"] = "tcp://127.0.0.1:2375"
-    os.environ["DOCKER_TLS_CERTDIR"] = ""
-    cmd = [
-        "cwltool",
-        "--disable-color",
-        "--debug",
-        "--outdir", out_dir,
-        target_cwl,
-        job_json_path
-    ]
-else:
-    cmd = [
-        "cwltool",
-        "--disable-color",
-        "--debug",
-        "--preserve-environment", "LD_PRELOAD",
-        "--preserve-environment", "GOMP_OFFLOAD_TARGETS",
-        "--preserve-environment", "ACC_DEVICE_TYPE",
-        "--preserve-environment", "KMP_DUPLICATE_LIB_OK",
-        "--preserve-environment", "OMP_DUPLICATE_LIB_OK",
-        "--preserve-environment", "GOMP_RT_ERR_HANDLER",
-        "--preserve-environment", "OMP_NUM_THREADS",
-        "--preserve-environment", "OPENBLAS_NUM_THREADS",
-        "--preserve-environment", "UDOCKER_ENV",
-        "--preserve-environment", "UDOCKER_DEFAULT_EXECUTION_MODE",
-        "--user-space-docker-cmd=udocker",
-        "--outdir", out_dir,
-        target_cwl,
-        job_json_path
-    ]
-ret = subprocess.run(cmd)
+# Run cwltool with native Docker
+cmd = [
+    "cwltool",
+    "--disable-color",
+    "--debug",
+    "--outdir", out_dir,
+    target_cwl,
+    job_json_path
+]
 
+ret = subprocess.run(cmd)
 sys.exit(ret.returncode)
 `;
 
     const encodedRunnerPy = Buffer.from(runnerPy).toString('base64');
-    let executionCmd = `export UDOCKER_DEFAULT_EXECUTION_MODE=${udockerMode} && export PROOT_NO_SECCOMP=1 && export GOMP_OFFLOAD_TARGETS=none && export ACC_DEVICE_TYPE=none && export KMP_DUPLICATE_LIB_OK=TRUE && export OMP_DUPLICATE_LIB_OK=TRUE && export GOMP_RT_ERR_HANDLER=ignore && export OPENBLAS_NUM_THREADS=2 && export OMP_NUM_THREADS=2 && { [ -f /opt/gitargo/libgoacc_stub.so ] && export LD_PRELOAD=/opt/gitargo/libgoacc_stub.so && export UDOCKER_ENV="LD_PRELOAD=/opt/gitargo/libgoacc_stub.so GOMP_OFFLOAD_TARGETS=none ACC_DEVICE_TYPE=none KMP_DUPLICATE_LIB_OK=TRUE OMP_DUPLICATE_LIB_OK=TRUE GOMP_RT_ERR_HANDLER=ignore OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2"; } || export UDOCKER_ENV="GOMP_OFFLOAD_TARGETS=none ACC_DEVICE_TYPE=none KMP_DUPLICATE_LIB_OK=TRUE OMP_DUPLICATE_LIB_OK=TRUE GOMP_RT_ERR_HANDLER=ignore OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2" && unset LD_LIBRARY_PATH && export NO_COLOR=1 && mkdir -p ~/.udocker /tmp/runner /tmp/inputs ${baseOutDirPrefix}/{{workflow.name}} && echo "[udocker]" > ~/.udocker/udocker.conf && echo "default_execution_mode = ${udockerMode}" >> ~/.udocker/udocker.conf && echo "proot_no_seccomp = True" >> ~/.udocker/udocker.conf && {
+    let executionCmd = `set -o pipefail && export NO_COLOR=1 && mkdir -p /tmp/runner /tmp/inputs ${baseOutDirPrefix}/{{workflow.name}} && {
   {
-    echo "=== CWL EXECUTION DIAGNOSTICS (VER 3.0.2) ==="
+    echo "=== CWL EXECUTION DIAGNOSTICS (VER 3.0.3) ==="
     echo "Workflow Name: {{workflow.name}}"
     echo "Date: $(date 2>/dev/null || echo unknown)"
     echo "User: $(whoami 2>/dev/null || echo unknown) (UID: $(id -u 2>/dev/null || echo unknown))"
     echo "PATH: $PATH"
     echo "CONTAINER_ENGINE: ${containerEngine}"
     if [ "${containerEngine}" = "dind" ]; then
-      if [ -S /var/run/docker.sock ]; then
-        export DOCKER_HOST="unix:///var/run/docker.sock"
-      else
-        export DOCKER_HOST="tcp://127.0.0.1:2375"
-      fi
+      export DOCKER_HOST="tcp://127.0.0.1:2375"
       export DOCKER_TLS_CERTDIR=""
       echo "Waiting for Docker-in-Docker sidecar daemon ($DOCKER_HOST)..."
       count=0
@@ -1969,9 +1928,8 @@ sys.exit(ret.returncode)
     ${inlineSetupCmds}
     echo "${encodedRunnerPy}" | base64 -d > /tmp/runner/runner.py
     python3 /tmp/runner/runner.py {{workflow.name}}
-    EC=\${PIPESTATUS[0]}
   } 2>&1 | tee ${baseOutDirPrefix}/{{workflow.name}}/execution.log
-  exit \${EC:-0}
+  exit $?
 }`;
 
     const ARGO_SERVICE_ACCOUNT = process.env.ARGO_SERVICE_ACCOUNT;
@@ -2005,8 +1963,6 @@ sys.exit(ret.returncode)
             command: ["/bin/bash", "-c"],
             args: [executionCmd],
             env: [
-              { name: "UDOCKER_DEFAULT_EXECUTION_MODE", value: udockerMode },
-              { name: "PROOT_NO_SECCOMP", value: "1" },
               { name: "NO_COLOR", value: "1" }
             ],
             resources: {
@@ -2028,14 +1984,16 @@ sys.exit(ret.returncode)
       if (!workflowSpec.volumes) workflowSpec.volumes = [];
       workflowSpec.volumes.push(
         { name: "dind-storage", emptyDir: {} },
-        { name: "dind-socket", emptyDir: {} }
+        { name: "dind-socket", emptyDir: {} },
+        { name: "cwl-tmp", emptyDir: {} }
       );
 
       if (!workflowSpec.templates[0].container.volumeMounts) {
         workflowSpec.templates[0].container.volumeMounts = [];
       }
       workflowSpec.templates[0].container.volumeMounts.push(
-        { name: "dind-socket", mountPath: "/var/run" }
+        { name: "dind-socket", mountPath: "/var/run" },
+        { name: "cwl-tmp", mountPath: "/tmp" }
       );
 
       workflowSpec.templates[0].sidecars = [
@@ -2045,8 +2003,7 @@ sys.exit(ret.returncode)
           command: ["dockerd-entrypoint.sh"],
           args: [
             "dockerd",
-            "--host=unix:///var/run/docker.sock",
-            "--host=tcp://0.0.0.0:2375",
+            "--host=tcp://127.0.0.1:2375",
             "--tls=false"
           ],
           env: [
@@ -2061,7 +2018,8 @@ sys.exit(ret.returncode)
           },
           volumeMounts: [
             { name: "dind-storage", mountPath: "/var/lib/docker" },
-            { name: "dind-socket", mountPath: "/var/run" }
+            { name: "dind-socket", mountPath: "/var/run" },
+            { name: "cwl-tmp", mountPath: "/tmp" }
           ],
           resources: {
             requests: { memory: cwlMemRequest, cpu: cwlCpuRequest },
@@ -3839,6 +3797,15 @@ app.use((err, req, res, next) => {
   res.status(status).json(message);
 });
 
+
+// Global safety error handlers to prevent Node.js process crashes
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[UNHANDLED REJECTION]', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT EXCEPTION]', err);
+});
 
 // --- 5. SERVER START ---
 

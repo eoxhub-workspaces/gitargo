@@ -1,6 +1,9 @@
 FROM python:3.11-slim-bookworm
 
-# Install required system packages & Docker CLI
+LABEL maintainer="EOXHub Workspaces <support@eox.at>" \
+      description="Gitargo CWL Runner container with Docker CLI and cwltool"
+
+# Install required system packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
@@ -8,76 +11,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     gzip \
     procps \
-    gcc \
-    libc6-dev \
-    nodejs \
+    bash \
  && rm -rf /var/lib/apt/lists/*
 
-# Install Docker CLI static binary for DinD / Docker sidecar communication
+# Install Docker CLI static binary for DinD / Docker daemon communication
 RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-24.0.7.tgz | tar -xz -C /tmp \
  && mv /tmp/docker/docker /usr/local/bin/ \
  && chmod +x /usr/local/bin/docker \
  && rm -rf /tmp/docker
 
-# -----------------------------------------------------------------------------
-# UDOCKER FAKECHROOT & GCC LIBGOMP FIX (/opt/gitargo/libgoacc_stub.so)
-#
-# ISSUE:
-#   When running CWL application packages that use Conda/Pixi GCC binaries
-#   (e.g., scikit-learn, satpy, numba, pygdal, scipy) inside udocker F1 (Fakechroot)
-#   mode, udocker injects LD_PRELOAD=libfakechroot.so to fake root/chroot paths.
-#   When C-extensions call dlopen() midway through Python execution, libfakechroot's
-#   dlopen wrapper causes GCC's libgomp.so.1 constructor to execute a second time.
-#   libgomp's constructor calls goacc_register(), which asserts that OpenACC device
-#   dispatchers are not already registered:
-#     "python: ../../../libgomp/oacc-init.c:84: goacc_register: Assertion '!dispatchers[disp->type]' failed."
-#
-# SOLUTION:
-#   We pre-build a 4KB shared library stub overriding goacc_register() with a NOP.
-#   When preloaded via LD_PRELOAD, goacc_register returns void immediately, preventing
-#   libgomp constructor re-execution crashes across all Conda/Pixi/GCC CWL packages.
-# -----------------------------------------------------------------------------
-RUN echo 'void goacc_register(void *d){}' > /tmp/goacc_stub.c \
- && mkdir -p /opt/gitargo \
- && gcc -shared -fPIC -o /opt/gitargo/libgoacc_stub.so /tmp/goacc_stub.c \
- && rm /tmp/goacc_stub.c
-
-# Pre-configure system-wide udocker F1 execution mode
-RUN echo "[udocker]" > /etc/udocker.conf \
- && echo "default_execution_mode = F1" >> /etc/udocker.conf \
- && echo "proot_no_seccomp = True" >> /etc/udocker.conf
-
 # Create unprivileged non-root user (UID 1000)
 RUN useradd -m -u 1000 -s /bin/bash runner \
- && chown -R runner:runner /opt/gitargo
+ && mkdir -p /workspace /tmp/runner /tmp/inputs \
+ && chown -R runner:runner /home/runner /workspace /tmp/runner /tmp/inputs
 
 USER runner
 WORKDIR /home/runner
 
-# -----------------------------------------------------------------------------
-# ENVIRONMENT CONFIGURATION FOR UDOCKER & CWLTOOL RUNNER
-#   - LD_PRELOAD: Preloads libgoacc_stub.so to override goacc_register NOP stub.
-#   - GOMP_OFFLOAD_TARGETS / ACC_DEVICE_TYPE: Disables OpenACC offload scanning.
-#   - KMP_DUPLICATE_LIB_OK / OMP_DUPLICATE_LIB_OK: Suppresses OpenMP library collision errors.
-#   - UDOCKER_ENV: Injects these variables directly into executed container processes.
-# -----------------------------------------------------------------------------
-ENV PATH="/home/runner/.local/bin:${PATH}"
-ENV UDOCKER_DEFAULT_EXECUTION_MODE="F1"
-ENV LD_PRELOAD="/opt/gitargo/libgoacc_stub.so"
-ENV GOMP_OFFLOAD_TARGETS="none"
-ENV ACC_DEVICE_TYPE="none"
-ENV KMP_DUPLICATE_LIB_OK="TRUE"
-ENV OMP_DUPLICATE_LIB_OK="TRUE"
-ENV GOMP_RT_ERR_HANDLER="ignore"
-ENV OMP_NUM_THREADS="2"
-ENV OPENBLAS_NUM_THREADS="2"
-ENV UDOCKER_ENV="LD_PRELOAD=/opt/gitargo/libgoacc_stub.so GOMP_OFFLOAD_TARGETS=none ACC_DEVICE_TYPE=none KMP_DUPLICATE_LIB_OK=TRUE OMP_DUPLICATE_LIB_OK=TRUE GOMP_RT_ERR_HANDLER=ignore OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2"
-ENV PROOT_NO_SECCOMP="1"
-ENV NO_COLOR="1"
+ENV PATH="/home/runner/.local/bin:${PATH}" \
+    DOCKER_HOST="tcp://127.0.0.1:2375" \
+    DOCKER_TLS_CERTDIR="" \
+    NO_COLOR="1" \
+    CLICOLOR="0" \
+    ANSI_COLORS_DISABLED="1"
 
-# Pre-install cwltool, boto3, and udocker
-RUN pip install --no-cache-dir cwltool boto3 udocker \
- && udocker install
+# Pre-install cwltool, boto3, and pyyaml
+RUN pip install --no-cache-dir \
+    cwltool \
+    boto3 \
+    pyyaml \
+    requests
 
-# Entrypoint default
+WORKDIR /workspace
+
+# Entrypoint default verification
 CMD ["cwltool", "--version"]
