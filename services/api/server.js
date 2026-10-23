@@ -2191,27 +2191,24 @@ apiRouter.get("/workspace/files", async (req, res, next) => {
     // Sanitize path against directory traversal
     const safePath = path.normalize(reqPath).replace(/^(\.\.[\/\\])+/, "").replace(/^\/+/, "");
 
-    // --- MULTI-TENANT MODE: Strict Aligned User PVC Storage ---
+    // --- MULTI-TENANT MODE: Strict User PVC Isolation ---
     if (MULTI_TENANT_MODE) {
-      const primaryUsername = getUsername(req);
-      if (!primaryUsername) {
+      const username = getUsername(req);
+      if (!username) {
         return res.status(403).json({ message: "Access denied. User session required in multi-tenant mode." });
       }
 
-      const candidateUsernames = getCandidateUsernames(req);
-      const candidateRoots = [];
-      
-      // 1. Candidate username subfolders under JUPYTER_PVC_MOUNT_PATH
-      candidateUsernames.forEach(uName => {
-        if (uName) candidateRoots.push(path.resolve(JUPYTER_PVC_MOUNT_PATH, uName));
-      });
-      // 2. Direct JUPYTER_PVC_MOUNT_PATH (for single-user volume mounts)
-      candidateRoots.push(path.resolve(JUPYTER_PVC_MOUNT_PATH));
+      const candidateUsernames = [username];
+      if (username.includes('@')) {
+        candidateUsernames.push(username.split('@')[0]);
+      }
 
       let targetPath = null;
-      for (const rootDir of candidateRoots) {
-        if (!fs.existsSync(rootDir)) continue;
+      for (const uName of candidateUsernames) {
+        const rootDir = path.resolve(JUPYTER_PVC_MOUNT_PATH, uName);
         const resolvedPath = path.resolve(rootDir, safePath);
+
+        // Security Enforcement: Target path MUST stay strictly inside user's directory
         if (resolvedPath.startsWith(rootDir) && fs.existsSync(resolvedPath)) {
           targetPath = resolvedPath;
           break;
@@ -2416,27 +2413,23 @@ apiRouter.get("/workspace/files/download", async (req, res, next) => {
       return res.status(400).json({ message: "path parameter is required." });
     }
 
-    // --- MULTI-TENANT MODE: Strict Aligned User PVC File Download ---
+    // --- MULTI-TENANT MODE: Strict User PVC File Download ---
     if (MULTI_TENANT_MODE) {
-      const primaryUsername = getUsername(req);
-      if (!primaryUsername) {
+      const username = getUsername(req);
+      if (!username) {
         return res.status(403).json({ message: "Access denied. User session required in multi-tenant mode." });
       }
 
-      const candidateUsernames = getCandidateUsernames(req);
-      const candidateRoots = [];
+      const candidateUsernames = [username];
+      if (username.includes('@')) {
+        candidateUsernames.push(username.split('@')[0]);
+      }
 
-      // 1. Candidate username subfolders under JUPYTER_PVC_MOUNT_PATH
-      candidateUsernames.forEach(uName => {
-        if (uName) candidateRoots.push(path.resolve(JUPYTER_PVC_MOUNT_PATH, uName));
-      });
-      // 2. Direct JUPYTER_PVC_MOUNT_PATH (for single-user volume mounts)
-      candidateRoots.push(path.resolve(JUPYTER_PVC_MOUNT_PATH));
-
-      for (const rootDir of candidateRoots) {
-        if (!fs.existsSync(rootDir)) continue;
+      for (const uName of candidateUsernames) {
+        const rootDir = path.resolve(JUPYTER_PVC_MOUNT_PATH, uName);
         const targetPath = path.resolve(rootDir, safePath);
 
+        // Security Enforcement: Target path MUST stay strictly inside user's directory
         if (targetPath.startsWith(rootDir) && fs.existsSync(targetPath) && fs.statSync(targetPath).isFile()) {
           return res.download(targetPath, path.basename(targetPath));
         }
