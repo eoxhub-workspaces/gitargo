@@ -1900,7 +1900,7 @@ sys.exit(ret.returncode)
 `;
 
     const encodedRunnerPy = Buffer.from(runnerPy).toString('base64');
-    let executionCmd = `set -o pipefail && export NO_COLOR=1 && mkdir -p /tmp/runner /tmp/inputs ${baseOutDirPrefix}/{{workflow.name}} && {
+    let executionCmd = `set -o pipefail && export PYTHONUNBUFFERED=1 && export NO_COLOR=1 && mkdir -p /tmp/runner /tmp/inputs ${baseOutDirPrefix}/{{workflow.name}} && {
   {
     echo "=== CWL EXECUTION DIAGNOSTICS (VER 3.0.3) ==="
     echo "Workflow Name: {{workflow.name}}"
