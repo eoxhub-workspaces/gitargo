@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 
 import CodeProject from "./components/CodeProject";
@@ -31,6 +31,12 @@ window.addEventListener("unhandledrejection", (event) => {
 });
 
 export default function App() {
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
+  const isCwlUrlPresent = Boolean(
+    searchParams.get("cwlUrl") || searchParams.get("url")
+  );
+
   const setViewHeight = () => {
     const vh = window.innerHeight * 0.01;
     document.documentElement.style.setProperty("--vh", `${vh}px`);
@@ -58,7 +64,13 @@ export default function App() {
           <Route
             path="/"
             element={
-              isApplicationsDeployment ? <ApplicationsView /> : <ListView />
+              isCwlUrlPresent ? (
+                <ApplicationPackagesView />
+              ) : isApplicationsDeployment ? (
+                <ApplicationsView />
+              ) : (
+                <ListView />
+              )
             }
           />
           <Route path="/executions" element={<ExecutionsView />} />

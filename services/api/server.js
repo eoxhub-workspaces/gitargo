@@ -483,20 +483,66 @@ apiRouter.get("/config", (req, res) => {
 // Helper to extract authenticated username
 function getUsername(req) {
   if (!req) return null;
+  let rawUser = null;
   if (req.user) {
-    const u = req.user.preferred_username || req.user.nickname || req.user.name || req.user.email || req.user.sub;
-    if (u) return u;
+    rawUser = req.user.preferred_username || req.user.nickname || req.user.name || req.user.email || req.user.sub;
   }
+  if (!rawUser && req.headers && typeof req.headers === 'object') {
+    rawUser = req.headers['x-authentik-username'] ||
+              req.headers['x-preferred-username'] ||
+              req.headers['x-user-claim-preferred-username'] ||
+              req.headers['x-auth-request-user'] ||
+              req.headers['x-forwarded-user'] ||
+              req.headers['x-oauth2-proxy-user'];
+  }
+  return rawUser ? String(rawUser).trim() : null;
+}
+
+// Helper to gather all possible username subfolder representations
+function getCandidateUsernames(req) {
+  const usernames = new Set();
+  const primary = getUsername(req);
+  if (primary) {
+    usernames.add(primary);
+    usernames.add(primary.toLowerCase());
+    if (primary.includes('@')) {
+      const shortName = primary.split('@')[0];
+      usernames.add(shortName);
+      usernames.add(shortName.toLowerCase());
+    }
+  }
+
+  if (req.user) {
+    ['preferred_username', 'nickname', 'name', 'email', 'sub'].forEach(k => {
+      const val = req.user[k];
+      if (val && typeof val === 'string') {
+        usernames.add(val);
+        usernames.add(val.toLowerCase());
+        if (val.includes('@')) {
+          const s = val.split('@')[0];
+          usernames.add(s);
+          usernames.add(s.toLowerCase());
+        }
+      }
+    });
+  }
+
   if (req.headers && typeof req.headers === 'object') {
-    const headerUser = req.headers['x-auth-request-user'] ||
-                       req.headers['x-forwarded-user'] ||
-                       req.headers['x-authentik-username'] ||
-                       req.headers['x-user-claim-preferred-username'] ||
-                       req.headers['x-preferred-username'] ||
-                       req.headers['x-oauth2-proxy-user'];
-    if (headerUser) return headerUser;
+    ['x-authentik-username', 'x-preferred-username', 'x-user-claim-preferred-username', 'x-auth-request-user', 'x-forwarded-user', 'x-oauth2-proxy-user'].forEach(h => {
+      const val = req.headers[h];
+      if (val && typeof val === 'string') {
+        usernames.add(val);
+        usernames.add(val.toLowerCase());
+        if (val.includes('@')) {
+          const s = val.split('@')[0];
+          usernames.add(s);
+          usernames.add(s.toLowerCase());
+        }
+      }
+    });
   }
-  return null;
+
+  return Array.from(usernames);
 }
 
 // Helper to convert a frontend virtual path to a physical GitLab path
@@ -1808,6 +1854,7 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
       ? "/workspace/application_packages_executions"
       : "/tmp/application_packages_executions";
 
+    const containerEngine = (process.env.CONTAINER_ENGINE || "dind").toLowerCase();
     const udockerMode = process.env.UDOCKER_DEFAULT_EXECUTION_MODE || "F1";
     const targetFragment = targetProcessId ? `#${targetProcessId}` : "";
 
@@ -1834,7 +1881,7 @@ os.environ["NO_COLOR"] = "1"
 os.environ["CLICOLOR"] = "0"
 os.environ["ANSI_COLORS_DISABLED"] = "1"
 
-print("=== GITARGO CWL RUNNER VER 3.0.2 (" + os.environ.get("UDOCKER_DEFAULT_EXECUTION_MODE", "${udockerMode}") + " MODE ACTIVE) ===")
+print("=== GITARGO CWL RUNNER VER 3.0.2 (" + ("NATIVE DOCKER (DIND)" if "${containerEngine}" in ["dind", "docker"] else "${udockerMode} UMODE") + ") ===")
 
 exec_name = sys.argv[1] if len(sys.argv) > 1 else "default-execution"
 out_dir = "${baseOutDirPrefix}/" + exec_name
@@ -1853,26 +1900,38 @@ with open(package_cwl_path, "w") as f:
 target_cwl = package_cwl_path + "${targetFragment}"
 ` : `target_cwl = "${cwlUrl}" + "${targetFragment}"`}
 
-# Run cwltool with udocker user-space container engine and selective environment preservation
-cmd = [
-    "cwltool",
-    "--disable-color",
-    "--debug",
-    "--preserve-environment", "LD_PRELOAD",
-    "--preserve-environment", "GOMP_OFFLOAD_TARGETS",
-    "--preserve-environment", "ACC_DEVICE_TYPE",
-    "--preserve-environment", "KMP_DUPLICATE_LIB_OK",
-    "--preserve-environment", "OMP_DUPLICATE_LIB_OK",
-    "--preserve-environment", "GOMP_RT_ERR_HANDLER",
-    "--preserve-environment", "OMP_NUM_THREADS",
-    "--preserve-environment", "OPENBLAS_NUM_THREADS",
-    "--preserve-environment", "UDOCKER_ENV",
-    "--preserve-environment", "UDOCKER_DEFAULT_EXECUTION_MODE",
-    "--user-space-docker-cmd=udocker",
-    "--outdir", out_dir,
-    target_cwl,
-    job_json_path
-]
+# Run cwltool with native Docker or udocker based on containerEngine setting
+if "${containerEngine}" in ["dind", "docker"]:
+    os.environ["DOCKER_HOST"] = "tcp://127.0.0.1:2375"
+    os.environ["DOCKER_TLS_CERTDIR"] = ""
+    cmd = [
+        "cwltool",
+        "--disable-color",
+        "--debug",
+        "--outdir", out_dir,
+        target_cwl,
+        job_json_path
+    ]
+else:
+    cmd = [
+        "cwltool",
+        "--disable-color",
+        "--debug",
+        "--preserve-environment", "LD_PRELOAD",
+        "--preserve-environment", "GOMP_OFFLOAD_TARGETS",
+        "--preserve-environment", "ACC_DEVICE_TYPE",
+        "--preserve-environment", "KMP_DUPLICATE_LIB_OK",
+        "--preserve-environment", "OMP_DUPLICATE_LIB_OK",
+        "--preserve-environment", "GOMP_RT_ERR_HANDLER",
+        "--preserve-environment", "OMP_NUM_THREADS",
+        "--preserve-environment", "OPENBLAS_NUM_THREADS",
+        "--preserve-environment", "UDOCKER_ENV",
+        "--preserve-environment", "UDOCKER_DEFAULT_EXECUTION_MODE",
+        "--user-space-docker-cmd=udocker",
+        "--outdir", out_dir,
+        target_cwl,
+        job_json_path
+    ]
 ret = subprocess.run(cmd)
 
 sys.exit(ret.returncode)
@@ -1886,24 +1945,44 @@ sys.exit(ret.returncode)
     echo "Date: $(date 2>/dev/null || echo unknown)"
     echo "User: $(whoami 2>/dev/null || echo unknown) (UID: $(id -u 2>/dev/null || echo unknown))"
     echo "PATH: $PATH"
-    echo "UDOCKER_DEFAULT_EXECUTION_MODE: $UDOCKER_DEFAULT_EXECUTION_MODE"
+    echo "CONTAINER_ENGINE: ${containerEngine}"
+    if [ "${containerEngine}" = "dind" ]; then
+      if [ -S /var/run/docker.sock ]; then
+        export DOCKER_HOST="unix:///var/run/docker.sock"
+      else
+        export DOCKER_HOST="tcp://127.0.0.1:2375"
+      fi
+      export DOCKER_TLS_CERTDIR=""
+      echo "Waiting for Docker-in-Docker sidecar daemon ($DOCKER_HOST)..."
+      count=0
+      until docker info >/dev/null 2>&1 || [ $count -gt 25 ]; do
+        sleep 2
+        count=$((count+1))
+      done
+      echo "Docker-in-Docker sidecar status:"
+      docker info || echo 'FAILED TO CONNECT TO DOCKER DAEMON'
+    fi
     echo "Checking cwltool: $(which cwltool 2>&1 || echo 'NOT FOUND')"
+    echo "Checking docker: $(which docker 2>&1 || echo 'NOT FOUND')"
     echo "Checking python3: $(which python3 2>&1 || echo 'NOT FOUND')"
-    echo "Checking nodejs: $(which node 2>&1 || which nodejs 2>&1 || echo 'NOT FOUND')"
-    echo "Checking udocker: $(which udocker 2>&1 || echo 'NOT FOUND')"
-    echo "Checking curl: $(which curl 2>&1 || echo 'NOT FOUND')"
     echo "=================================="
     ${inlineSetupCmds}
     echo "${encodedRunnerPy}" | base64 -d > /tmp/runner/runner.py
     python3 /tmp/runner/runner.py {{workflow.name}}
+    EC=\${PIPESTATUS[0]}
   } 2>&1 | tee ${baseOutDirPrefix}/{{workflow.name}}/execution.log
-  exit \${PIPESTATUS[0]:-\$?}
+  exit \${EC:-0}
 }`;
 
     const ARGO_SERVICE_ACCOUNT = process.env.ARGO_SERVICE_ACCOUNT;
     const ARGO_TOLERATIONS = process.env.ARGO_TOLERATIONS;
     const ARGO_NODE_SELECTOR = process.env.ARGO_NODE_SELECTOR;
     const ARGO_IMAGE_PULL_SECRETS = process.env.ARGO_IMAGE_PULL_SECRETS || process.env.IMAGE_PULL_SECRET;
+
+    const cwlCpuLimit = process.env.CWL_CPU_LIMIT || "1000m";
+    const cwlMemLimit = process.env.CWL_MEMORY_LIMIT || "2Gi";
+    const cwlCpuRequest = process.env.CWL_CPU_REQUEST || "100m";
+    const cwlMemRequest = process.env.CWL_MEMORY_REQUEST || "256Mi";
 
     const workflowSpec = {
       entrypoint: "main",
@@ -1923,7 +2002,7 @@ sys.exit(ret.returncode)
           },
           container: {
             image: selectedImage,
-            command: ["sh", "-c"],
+            command: ["/bin/bash", "-c"],
             args: [executionCmd],
             env: [
               { name: "UDOCKER_DEFAULT_EXECUTION_MODE", value: udockerMode },
@@ -1932,12 +2011,12 @@ sys.exit(ret.returncode)
             ],
             resources: {
               requests: {
-                memory: "1Gi",
-                cpu: "500m"
+                memory: cwlMemRequest,
+                cpu: cwlCpuRequest
               },
               limits: {
-                memory: "4Gi",
-                cpu: "2"
+                memory: cwlMemLimit,
+                cpu: cwlCpuLimit
               }
             }
           }
@@ -1945,7 +2024,75 @@ sys.exit(ret.returncode)
       ]
     };
 
-    if (!MULTI_TENANT_MODE) {
+    if (containerEngine === "dind") {
+      if (!workflowSpec.volumes) workflowSpec.volumes = [];
+      workflowSpec.volumes.push(
+        { name: "dind-storage", emptyDir: {} },
+        { name: "dind-socket", emptyDir: {} }
+      );
+
+      if (!workflowSpec.templates[0].container.volumeMounts) {
+        workflowSpec.templates[0].container.volumeMounts = [];
+      }
+      workflowSpec.templates[0].container.volumeMounts.push(
+        { name: "dind-socket", mountPath: "/var/run" }
+      );
+
+      workflowSpec.templates[0].sidecars = [
+        {
+          name: "dind",
+          image: process.env.DIND_IMAGE || "docker:24-dind",
+          command: ["dockerd-entrypoint.sh"],
+          args: [
+            "dockerd",
+            "--host=unix:///var/run/docker.sock",
+            "--host=tcp://0.0.0.0:2375",
+            "--tls=false"
+          ],
+          env: [
+            { name: "DOCKER_TLS_CERTDIR", value: "" },
+            { name: "DOCKER_DRIVER", value: "overlay2" }
+          ],
+          securityContext: {
+            privileged: true,
+            runAsUser: 0,
+            runAsGroup: 0,
+            runAsNonRoot: false
+          },
+          volumeMounts: [
+            { name: "dind-storage", mountPath: "/var/lib/docker" },
+            { name: "dind-socket", mountPath: "/var/run" }
+          ],
+          resources: {
+            requests: { memory: cwlMemRequest, cpu: cwlCpuRequest },
+            limits: { memory: cwlMemLimit, cpu: cwlCpuLimit }
+          }
+        }
+      ];
+
+      if (!workflowSpec.templates[0].container.env) {
+        workflowSpec.templates[0].container.env = [];
+      }
+      workflowSpec.templates[0].container.env.push(
+        { name: "DOCKER_HOST", value: "tcp://127.0.0.1:2375" },
+        { name: "DOCKER_TLS_CERTDIR", value: "" }
+      );
+    } else if (containerEngine === "docker") {
+      if (!workflowSpec.volumes) workflowSpec.volumes = [];
+      workflowSpec.volumes.push({
+        name: "docker-sock",
+        hostPath: { path: "/var/run/docker.sock", type: "Socket" }
+      });
+      if (!workflowSpec.templates[0].container.volumeMounts) {
+        workflowSpec.templates[0].container.volumeMounts = [];
+      }
+      workflowSpec.templates[0].container.volumeMounts.push({
+        name: "docker-sock",
+        mountPath: "/var/run/docker.sock"
+      });
+    }
+
+    if (!MULTI_TENANT_MODE && bucket && endpoint && accessKey && secretKey) {
       workflowSpec.templates[0].outputs = {
         artifacts: [
           {
@@ -1962,7 +2109,9 @@ sys.exit(ret.returncode)
       };
     }
 
-    if (ARGO_IMAGE_PULL_SECRETS) {
+    const disableImagePull = process.env.DISABLE_IMAGE_PULL_SECRETS === "true" || String(ARGO_IMAGE_PULL_SECRETS).toLowerCase() === "none" || String(ARGO_IMAGE_PULL_SECRETS).toLowerCase() === "disabled";
+
+    if (ARGO_IMAGE_PULL_SECRETS && !disableImagePull) {
       try {
         workflowSpec.imagePullSecrets = JSON.parse(ARGO_IMAGE_PULL_SECRETS);
       } catch (e) {
@@ -2042,24 +2191,34 @@ apiRouter.get("/workspace/files", async (req, res, next) => {
     // Sanitize path against directory traversal
     const safePath = path.normalize(reqPath).replace(/^(\.\.[\/\\])+/, "").replace(/^\/+/, "");
 
-    // --- MULTI-TENANT MODE: Strict User PVC Isolation ---
+    // --- MULTI-TENANT MODE: Strict Aligned User PVC Storage ---
     if (MULTI_TENANT_MODE) {
-      const username = getUsername(req);
-      if (!username) {
+      const primaryUsername = getUsername(req);
+      if (!primaryUsername) {
         return res.status(403).json({ message: "Access denied. User session required in multi-tenant mode." });
       }
 
-      // Root directory strictly restricted to this user
-      const userRootDir = path.resolve(JUPYTER_PVC_MOUNT_PATH, username);
-      const targetPath = path.resolve(userRootDir, safePath);
+      const candidateUsernames = getCandidateUsernames(req);
+      const candidateRoots = [];
+      
+      // 1. Candidate username subfolders under JUPYTER_PVC_MOUNT_PATH
+      candidateUsernames.forEach(uName => {
+        if (uName) candidateRoots.push(path.resolve(JUPYTER_PVC_MOUNT_PATH, uName));
+      });
+      // 2. Direct JUPYTER_PVC_MOUNT_PATH (for single-user volume mounts)
+      candidateRoots.push(path.resolve(JUPYTER_PVC_MOUNT_PATH));
 
-      // Security Check: Ensure targetPath is strictly inside userRootDir
-      if (!targetPath.startsWith(userRootDir)) {
-        console.warn(`[SECURITY RISK] User '${username}' attempted directory traversal outside assigned folder: '${reqPath}'`);
-        return res.status(403).json({ message: "Access denied." });
+      let targetPath = null;
+      for (const rootDir of candidateRoots) {
+        if (!fs.existsSync(rootDir)) continue;
+        const resolvedPath = path.resolve(rootDir, safePath);
+        if (resolvedPath.startsWith(rootDir) && fs.existsSync(resolvedPath)) {
+          targetPath = resolvedPath;
+          break;
+        }
       }
 
-      if (!fs.existsSync(userRootDir) || !fs.existsSync(targetPath)) {
+      if (!targetPath) {
         return res.json({ files: [], exists: false, currentPath: safePath });
       }
 
@@ -2069,7 +2228,7 @@ apiRouter.get("/workspace/files", async (req, res, next) => {
       }
 
       const entries = fs.readdirSync(targetPath, { withFileTypes: true });
-      const files = entries.map(entry => {
+      const pvcFiles = entries.map(entry => {
         const full = path.join(targetPath, entry.name);
         let size = 0;
         let mtime = null;
@@ -2087,7 +2246,7 @@ apiRouter.get("/workspace/files", async (req, res, next) => {
         };
       });
 
-      return res.json({ files, exists: true, currentPath: safePath });
+      return res.json({ files: pvcFiles, exists: true, currentPath: safePath });
     }
 
     // --- SINGLE-TENANT MODE: Primary S3 Bucket Storage ---
@@ -2257,25 +2416,33 @@ apiRouter.get("/workspace/files/download", async (req, res, next) => {
       return res.status(400).json({ message: "path parameter is required." });
     }
 
-    // --- MULTI-TENANT MODE: User PVC File Download ---
+    // --- MULTI-TENANT MODE: Strict Aligned User PVC File Download ---
     if (MULTI_TENANT_MODE) {
-      const username = getUsername(req);
-      if (!username) {
+      const primaryUsername = getUsername(req);
+      if (!primaryUsername) {
         return res.status(403).json({ message: "Access denied. User session required in multi-tenant mode." });
       }
 
-      const userRootDir = path.resolve(JUPYTER_PVC_MOUNT_PATH, username);
-      const targetPath = path.resolve(userRootDir, safePath);
+      const candidateUsernames = getCandidateUsernames(req);
+      const candidateRoots = [];
 
-      if (!targetPath.startsWith(userRootDir)) {
-        return res.status(403).json({ message: "Access denied." });
+      // 1. Candidate username subfolders under JUPYTER_PVC_MOUNT_PATH
+      candidateUsernames.forEach(uName => {
+        if (uName) candidateRoots.push(path.resolve(JUPYTER_PVC_MOUNT_PATH, uName));
+      });
+      // 2. Direct JUPYTER_PVC_MOUNT_PATH (for single-user volume mounts)
+      candidateRoots.push(path.resolve(JUPYTER_PVC_MOUNT_PATH));
+
+      for (const rootDir of candidateRoots) {
+        if (!fs.existsSync(rootDir)) continue;
+        const targetPath = path.resolve(rootDir, safePath);
+
+        if (targetPath.startsWith(rootDir) && fs.existsSync(targetPath) && fs.statSync(targetPath).isFile()) {
+          return res.download(targetPath, path.basename(targetPath));
+        }
       }
 
-      if (!fs.existsSync(targetPath)) {
-        return res.status(404).json({ message: "File not found on user workspace PVC." });
-      }
-
-      return res.download(targetPath, path.basename(targetPath));
+      return res.status(404).json({ message: "File not found on user workspace PVC." });
     }
 
     // --- SINGLE-TENANT MODE: S3 Bucket File Download or Local PVC ---

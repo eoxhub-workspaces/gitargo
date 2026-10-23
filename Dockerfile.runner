@@ -1,6 +1,6 @@
 FROM python:3.11-slim-bookworm
 
-# Install required system packages
+# Install required system packages & Docker CLI
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
@@ -12,6 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libc6-dev \
     nodejs \
  && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI static binary for DinD / Docker sidecar communication
+RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-24.0.7.tgz | tar -xz -C /tmp \
+ && mv /tmp/docker/docker /usr/local/bin/ \
+ && chmod +x /usr/local/bin/docker \
+ && rm -rf /tmp/docker
 
 # -----------------------------------------------------------------------------
 # UDOCKER FAKECHROOT & GCC LIBGOMP FIX (/opt/gitargo/libgoacc_stub.so)

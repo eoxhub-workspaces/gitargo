@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import YAML from "yaml";
 import axios from "axios";
 import toast from "react-hot-toast";
@@ -46,6 +47,9 @@ interface CwlInputDef {
 }
 
 export const ApplicationPackagesView: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const lastLoadedUrlRef = useRef<string>("");
+
   // Saved packages list
   const [packages, setPackages] = useState<PackageFile[]>([]);
   const [loadingPackages, setLoadingPackages] = useState<boolean>(true);
@@ -348,21 +352,21 @@ outputs:
     toast.success("Loaded File Output Sample!");
   };
 
-  // Load CWL from URL
-  const handleLoadUrl = async () => {
-    if (!url) {
-      toast.error("Please enter a CWL Package URL.");
-      return;
-    }
-
+  // Core helper to fetch and parse CWL from URL
+  const fetchAndParseUrl = async (targetUrl: string, silent = false) => {
+    if (!targetUrl) return;
+    lastLoadedUrlRef.current = targetUrl;
+    setUrl(targetUrl);
     setLoadingUrl(true);
     setSelectedPackagePath(null);
-    const rawUrl = getRawUrl(url);
+    const rawUrl = getRawUrl(targetUrl);
 
     try {
       const response = await axios.get(rawUrl, { responseType: "text" });
       parseCwlText(response.data);
-      toast.success("Remote OGC Application Package loaded!");
+      if (!silent) {
+        toast.success("Remote OGC Application Package loaded!");
+      }
     } catch (err: any) {
       console.error("Failed to load CWL:", err);
       toast.error(`Failed to fetch URL: ${err.message}`);
@@ -370,6 +374,23 @@ outputs:
       setLoadingUrl(false);
     }
   };
+
+  // Load CWL from user input URL
+  const handleLoadUrl = async () => {
+    if (!url) {
+      toast.error("Please enter a CWL Package URL.");
+      return;
+    }
+    await fetchAndParseUrl(url);
+  };
+
+  // Auto-load CWL URL from search parameter (e.g. ?cwlUrl=... or ?url=...)
+  useEffect(() => {
+    const queryCwlUrl = searchParams.get("cwlUrl") || searchParams.get("url");
+    if (queryCwlUrl && queryCwlUrl !== lastLoadedUrlRef.current) {
+      fetchAndParseUrl(queryCwlUrl);
+    }
+  }, [searchParams]);
 
   // Load saved package
   const handleSelectPackage = async (pkg: PackageFile) => {
