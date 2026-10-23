@@ -11,9 +11,15 @@ import { getConfig } from "../utils/api";
 const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [version, setVersion] = useState<string | null>(null);
   const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
+  const isCwlUrlPresent = Boolean(
+    searchParams.get("cwlUrl") || searchParams.get("url")
+  );
+
   const isExecutions = location.pathname.startsWith("/executions");
   const isResources = location.pathname.startsWith("/resources");
-  const isPackages = location.pathname.startsWith("/packages");
+  const isPackages =
+    location.pathname.startsWith("/packages") || isCwlUrlPresent;
   const isApplicationsDeployment =
     window.BASE_PATH?.includes("gitargo-applications") ||
     window.location.pathname.includes("gitargo-applications") ||

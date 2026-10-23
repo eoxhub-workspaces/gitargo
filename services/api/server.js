@@ -1890,7 +1890,6 @@ target_cwl = package_cwl_path + "${targetFragment}"
 cmd = [
     "cwltool",
     "--disable-color",
-    "--debug",
     "--outdir", out_dir,
     target_cwl,
     job_json_path
