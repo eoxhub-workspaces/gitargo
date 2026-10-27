@@ -53,7 +53,9 @@ export const ApplicationPackagesView: React.FC = () => {
   // Saved packages list
   const [packages, setPackages] = useState<PackageFile[]>([]);
   const [loadingPackages, setLoadingPackages] = useState<boolean>(true);
-  const [selectedPackagePath, setSelectedPackagePath] = useState<string | null>(null);
+  const [selectedPackagePath, setSelectedPackagePath] = useState<string | null>(
+    null
+  );
 
   // Active package state
   const [url, setUrl] = useState<string>(
@@ -67,7 +69,9 @@ export const ApplicationPackagesView: React.FC = () => {
   const [inputs, setInputs] = useState<CwlInputDef[]>([]);
   const [paramValues, setParamValues] = useState<Record<string, any>>({});
   const [paramTypes, setParamTypes] = useState<Record<string, string>>({});
-  const [enabledOptionalParams, setEnabledOptionalParams] = useState<Record<string, boolean>>({});
+  const [enabledOptionalParams, setEnabledOptionalParams] = useState<
+    Record<string, boolean>
+  >({});
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
   const [hiddenFields, setHiddenFields] = useState<Record<string, boolean>>({});
   const [executionName, setExecutionName] = useState<string>("");
@@ -76,14 +80,22 @@ export const ApplicationPackagesView: React.FC = () => {
     setHiddenFields((prev) => ({ ...prev, [id]: !prev[id] }));
   };
   const [packageFileName, setPackageFileName] = useState<string>("");
-  const [graphProcesses, setGraphProcesses] = useState<{ id: string; label?: string; class?: string; inputs?: any }[]>([]);
+  const [graphProcesses, setGraphProcesses] = useState<
+    { id: string; label?: string; class?: string; inputs?: any }[]
+  >([]);
   const [selectedProcessId, setSelectedProcessId] = useState<string>("");
 
   // Tabs & Views
-  const [activeTab, setActiveTab] = useState<"configure" | "edit" | "executions">("configure");
+  const [activeTab, setActiveTab] = useState<
+    "configure" | "edit" | "executions"
+  >("configure");
   const [showFileBrowser, setShowFileBrowser] = useState<boolean>(false);
-  const [fileBrowserPath, setFileBrowserPath] = useState<string>("application_packages_executions");
-  const [fileBrowserRoot, setFileBrowserRoot] = useState<string>("application_packages_executions");
+  const [fileBrowserPath, setFileBrowserPath] = useState<string>(
+    "application_packages_executions"
+  );
+  const [fileBrowserRoot, setFileBrowserRoot] = useState<string>(
+    "application_packages_executions"
+  );
 
   // Executions for selected package
   const [allExecutions, setAllExecutions] = useState<any[]>([]);
@@ -189,7 +201,10 @@ export const ApplicationPackagesView: React.FC = () => {
     if (targetInputs) {
       if (Array.isArray(targetInputs)) {
         targetInputs.forEach((input: any) => {
-          const inputId = String(input.id || input.name || "").replace(/^#/, "");
+          const inputId = String(input.id || input.name || "").replace(
+            /^#/,
+            ""
+          );
           const inputType = formatTypeString(input.type);
           const defVal = formatDefaultValue(input.default);
 
@@ -206,35 +221,37 @@ export const ApplicationPackagesView: React.FC = () => {
           }
         });
       } else if (typeof targetInputs === "object") {
-        Object.entries(targetInputs).forEach(([inputIdRaw, inputVal]: [string, any]) => {
-          const inputId = inputIdRaw.replace(/^#/, "");
-          let inputType = "string";
-          let doc = "";
-          let rawDefVal = undefined;
+        Object.entries(targetInputs).forEach(
+          ([inputIdRaw, inputVal]: [string, any]) => {
+            const inputId = inputIdRaw.replace(/^#/, "");
+            let inputType = "string";
+            let doc = "";
+            let rawDefVal = undefined;
 
-          if (typeof inputVal === "string") {
-            inputType = inputVal;
-          } else if (typeof inputVal === "object") {
-            inputType = formatTypeString(inputVal.type);
-            doc = inputVal.doc || inputVal.label || "";
-            rawDefVal = inputVal.default;
+            if (typeof inputVal === "string") {
+              inputType = inputVal;
+            } else if (typeof inputVal === "object") {
+              inputType = formatTypeString(inputVal.type);
+              doc = inputVal.doc || inputVal.label || "";
+              rawDefVal = inputVal.default;
+            }
+
+            const defVal = formatDefaultValue(rawDefVal);
+            typesMap[inputId] = inputType;
+
+            parsedInputs.push({
+              id: inputId,
+              type: inputType,
+              doc,
+              default: defVal,
+              isFile: isFileInput(inputId, inputType)
+            });
+
+            if (defVal !== undefined) {
+              defaultValues[inputId] = defVal;
+            }
           }
-
-          const defVal = formatDefaultValue(rawDefVal);
-          typesMap[inputId] = inputType;
-
-          parsedInputs.push({
-            id: inputId,
-            type: inputType,
-            doc,
-            default: defVal,
-            isFile: isFileInput(inputId, inputType)
-          });
-
-          if (defVal !== undefined) {
-            defaultValues[inputId] = defVal;
-          }
-        });
+        );
       }
     }
 
@@ -263,7 +280,6 @@ export const ApplicationPackagesView: React.FC = () => {
       setCwlDoc(parsed);
 
       let targetInputs: any = null;
-      let targetDoc = parsed?.doc || parsed?.label || "";
       let targetLabel = parsed?.label || parsed?.id || "";
 
       if (parsed && parsed.inputs) {
@@ -284,7 +300,10 @@ export const ApplicationPackagesView: React.FC = () => {
 
         const mainObj =
           parsed.$graph.find(
-            (item: any) => item.id === "main" || item.id === "#main" || item.class === "Workflow"
+            (item: any) =>
+              item.id === "main" ||
+              item.id === "#main" ||
+              item.class === "Workflow"
           ) ||
           parsed.$graph.find((item: any) => item.inputs) ||
           parsed.$graph[0];
@@ -293,8 +312,8 @@ export const ApplicationPackagesView: React.FC = () => {
           const mainId = String(mainObj.id || "").replace(/^#/, "");
           setSelectedProcessId(mainId);
           targetInputs = mainObj.inputs;
-          if (mainObj.doc) targetDoc = mainObj.doc;
-          if (mainObj.label || mainObj.id) targetLabel = mainObj.label || mainObj.id;
+          if (mainObj.label || mainObj.id)
+            targetLabel = mainObj.label || mainObj.id;
         }
       } else {
         setGraphProcesses([]);
@@ -307,13 +326,23 @@ export const ApplicationPackagesView: React.FC = () => {
       if (url) {
         const parts = url.trim().split("/");
         const last = parts[parts.length - 1];
-        if (last && (last.endsWith(".cwl") || last.endsWith(".yaml") || last.endsWith(".yml"))) {
+        if (
+          last &&
+          (last.endsWith(".cwl") ||
+            last.endsWith(".yaml") ||
+            last.endsWith(".yml"))
+        ) {
           rawUrlFilename = last;
         }
       }
 
-      let suggestedFileName = sourceName || rawUrlFilename || targetLabel || "package.cwl";
-      if (!suggestedFileName.endsWith(".cwl") && !suggestedFileName.endsWith(".yaml") && !suggestedFileName.endsWith(".yml")) {
+      let suggestedFileName =
+        sourceName || rawUrlFilename || targetLabel || "package.cwl";
+      if (
+        !suggestedFileName.endsWith(".cwl") &&
+        !suggestedFileName.endsWith(".yaml") &&
+        !suggestedFileName.endsWith(".yml")
+      ) {
         suggestedFileName += ".cwl";
       }
 
@@ -457,7 +486,11 @@ outputs:
 
     setExecuting(true);
     try {
-      const cleanPkgId = (selectedPackagePath || executionName || "cwl-execution")
+      const cleanPkgId = (
+        selectedPackagePath ||
+        executionName ||
+        "cwl-execution"
+      )
         .toLowerCase()
         .replace(/\.cwl$/i, "")
         .replace(/[^a-z0-9-]/g, "-")
@@ -475,9 +508,14 @@ outputs:
           typeLower.includes("null") ||
           typeLower.includes("optional");
 
-        const isEnabled = !isOptional || enabledOptionalParams[input.id] === true;
+        const isEnabled =
+          !isOptional || enabledOptionalParams[input.id] === true;
 
-        if (isEnabled && paramValues[input.id] !== undefined && paramValues[input.id] !== "") {
+        if (
+          isEnabled &&
+          paramValues[input.id] !== undefined &&
+          paramValues[input.id] !== ""
+        ) {
           activeParams[input.id] = paramValues[input.id];
         }
         if (isEnabled && paramTypes[input.id]) {
@@ -517,7 +555,11 @@ outputs:
   };
 
   // Fetch execution logs
-  const handleViewLogs = async (execName: string, startTime?: string, endTime?: string) => {
+  const handleViewLogs = async (
+    execName: string,
+    startTime?: string,
+    endTime?: string
+  ) => {
     setLogExecName(execName);
     setLogsText("Fetching execution logs...");
     setLogsLoading(true);
@@ -534,7 +576,7 @@ outputs:
           setLogsLoading(false);
           return;
         }
-      } catch (fileErr) {
+      } catch {
         // Fall back if file is not created yet
       }
 
@@ -542,13 +584,24 @@ outputs:
       let startBuf = startTime;
       let endBuf = endTime;
       if (startBuf) {
-        startBuf = new Date(new Date(startBuf).getTime() - 24 * 3600 * 1000).toISOString();
+        startBuf = new Date(
+          new Date(startBuf).getTime() - 24 * 3600 * 1000
+        ).toISOString();
       }
       if (endBuf) {
-        endBuf = new Date(new Date(endBuf).getTime() + 24 * 3600 * 1000).toISOString();
+        endBuf = new Date(
+          new Date(endBuf).getTime() + 24 * 3600 * 1000
+        ).toISOString();
       }
 
-      const logs = await getLogs(execName, "workflow", undefined, startBuf, endBuf, execName);
+      const logs = await getLogs(
+        execName,
+        "workflow",
+        undefined,
+        startBuf,
+        endBuf,
+        execName
+      );
       setLogsText(logs || "No logs recorded for this execution.");
     } catch (err: any) {
       setLogsText(
@@ -585,10 +638,22 @@ outputs:
       const name = (item.metadata?.name || "").toLowerCase();
 
       // 1. Direct label match or inclusion
-      if (pkgLabel && currentCleanPackageId && (pkgLabel === currentCleanPackageId || currentCleanPackageId.includes(pkgLabel) || pkgLabel.includes(currentCleanPackageId))) {
+      if (
+        pkgLabel &&
+        currentCleanPackageId &&
+        (pkgLabel === currentCleanPackageId ||
+          currentCleanPackageId.includes(pkgLabel) ||
+          pkgLabel.includes(currentCleanPackageId))
+      ) {
         return true;
       }
-      if (pkgLabel && packageFilenameSlug && (pkgLabel === packageFilenameSlug || packageFilenameSlug.includes(pkgLabel) || pkgLabel.includes(packageFilenameSlug))) {
+      if (
+        pkgLabel &&
+        packageFilenameSlug &&
+        (pkgLabel === packageFilenameSlug ||
+          packageFilenameSlug.includes(pkgLabel) ||
+          pkgLabel.includes(packageFilenameSlug))
+      ) {
         return true;
       }
 
@@ -608,8 +673,12 @@ outputs:
       return false;
     })
     .sort((a, b) => {
-      const timeA = new Date(a.metadata?.creationTimestamp || a.status?.startedAt || 0).getTime();
-      const timeB = new Date(b.metadata?.creationTimestamp || b.status?.startedAt || 0).getTime();
+      const timeA = new Date(
+        a.metadata?.creationTimestamp || a.status?.startedAt || 0
+      ).getTime();
+      const timeB = new Date(
+        b.metadata?.creationTimestamp || b.status?.startedAt || 0
+      ).getTime();
       return timeB - timeA;
     });
 
@@ -668,16 +737,21 @@ outputs:
               className="p-1 text-gray-500 hover:text-gray-800 dark:hover:text-white"
               title="Refresh package list"
             >
-              <ArrowPathIcon className={`w-4 h-4 ${loadingPackages ? "animate-spin" : ""}`} />
+              <ArrowPathIcon
+                className={`w-4 h-4 ${loadingPackages ? "animate-spin" : ""}`}
+              />
             </button>
           </div>
 
           <div className="flex-1 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700/60">
             {loadingPackages ? (
-              <div className="p-6 text-center text-xs text-gray-400">Loading packages...</div>
+              <div className="p-6 text-center text-xs text-gray-400">
+                Loading packages...
+              </div>
             ) : packages.length === 0 ? (
               <div className="p-6 text-center text-xs text-gray-400 italic">
-                No saved packages yet. Use "Import / New Package" to load or create one.
+                No saved packages yet. Use "Import / New Package" to load or
+                create one.
               </div>
             ) : (
               packages.map((pkg) => {
@@ -749,7 +823,9 @@ outputs:
               </div>
 
               <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-gray-500">
-                <span className="font-semibold text-gray-600 dark:text-gray-400">Examples:</span>
+                <span className="font-semibold text-gray-600 dark:text-gray-400">
+                  Examples:
+                </span>
                 <button
                   type="button"
                   onClick={handleLoadSampleFileOutput}
@@ -759,14 +835,22 @@ outputs:
                 </button>
                 <button
                   type="button"
-                  onClick={() => setUrl("https://raw.githubusercontent.com/common-workflow-language/cwltool/main/tests/echo.cwl")}
+                  onClick={() =>
+                    setUrl(
+                      "https://raw.githubusercontent.com/common-workflow-language/cwltool/main/tests/echo.cwl"
+                    )
+                  }
                   className="text-blue-600 hover:underline bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded font-mono"
                 >
                   Simple Echo Tool
                 </button>
                 <button
                   type="button"
-                  onClick={() => setUrl("https://github.com/sunnydean/lightning2earthcare/blob/main/cwl/package.cwl")}
+                  onClick={() =>
+                    setUrl(
+                      "https://github.com/sunnydean/lightning2earthcare/blob/main/cwl/package.cwl"
+                    )
+                  }
                   className="text-blue-600 hover:underline bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded font-mono"
                 >
                   Lightning2EarthCare Package
@@ -860,7 +944,8 @@ outputs:
                       >
                         {graphProcesses.map((proc) => (
                           <option key={proc.id} value={proc.id}>
-                            #{proc.id} ({proc.class}){proc.label ? ` - ${proc.label}` : ""}
+                            #{proc.id} ({proc.class})
+                            {proc.label ? ` - ${proc.label}` : ""}
                           </option>
                         ))}
                       </select>
@@ -875,7 +960,8 @@ outputs:
 
                     {inputs.length === 0 ? (
                       <p className="text-xs text-gray-400 italic">
-                        No input parameters required by this application package definition.
+                        No input parameters required by this application package
+                        definition.
                       </p>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -886,7 +972,9 @@ outputs:
                             typeLower.includes("null") ||
                             typeLower.includes("optional");
 
-                          const isEnabled = !isOptional || enabledOptionalParams[input.id] === true;
+                          const isEnabled =
+                            !isOptional ||
+                            enabledOptionalParams[input.id] === true;
 
                           return (
                             <div
@@ -918,7 +1006,9 @@ outputs:
                                     />
                                   )}
                                   <span className="font-semibold text-xs text-gray-900 dark:text-white flex items-center space-x-1">
-                                    {input.isFile && <KeyIcon className="w-3.5 h-3.5 text-amber-500" />}
+                                    {input.isFile && (
+                                      <KeyIcon className="w-3.5 h-3.5 text-amber-500" />
+                                    )}
                                     <span>{input.id}</span>
                                   </span>
                                 </div>
@@ -946,23 +1036,36 @@ outputs:
                                   {input.isFile ? (
                                     <div className="space-y-1">
                                       <div className="flex justify-between items-center text-[10px] text-gray-500 dark:text-gray-400">
-                                        <span>Paste file content (e.g. JSON/Secret) OR path (/workspace/...)</span>
+                                        <span>
+                                          Paste file content (e.g. JSON/Secret)
+                                          OR path (/workspace/...)
+                                        </span>
                                         <div className="flex items-center space-x-2">
                                           <button
                                             type="button"
-                                            onClick={() => toggleHideField(input.id)}
+                                            onClick={() =>
+                                              toggleHideField(input.id)
+                                            }
                                             className="inline-flex items-center space-x-1 text-xs text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 px-2 py-0.5 rounded transition font-medium"
-                                            title={hiddenFields[input.id] ? "Click to reveal secret content" : "Click to hide sensitive keys/credentials for presentations"}
+                                            title={
+                                              hiddenFields[input.id]
+                                                ? "Click to reveal secret content"
+                                                : "Click to hide sensitive keys/credentials for presentations"
+                                            }
                                           >
                                             {hiddenFields[input.id] ? (
                                               <>
                                                 <EyeSlashIcon className="w-3.5 h-3.5 text-amber-500" />
-                                                <span className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">Hidden</span>
+                                                <span className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                                                  Hidden
+                                                </span>
                                               </>
                                             ) : (
                                               <>
                                                 <EyeIcon className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
-                                                <span className="text-[11px]">Hide Content</span>
+                                                <span className="text-[11px]">
+                                                  Hide Content
+                                                </span>
                                               </>
                                             )}
                                           </button>
@@ -986,7 +1089,11 @@ outputs:
                                             : "Paste file/credentials content or path /workspace/file.json..."
                                         }
                                         style={{
-                                          WebkitTextSecurity: hiddenFields[input.id] ? ("disc" as any) : "none"
+                                          WebkitTextSecurity: hiddenFields[
+                                            input.id
+                                          ]
+                                            ? ("disc" as any)
+                                            : "none"
                                         }}
                                         className={`w-full px-3 py-1.5 rounded border text-xs font-mono outline-none focus:ring-1 focus:ring-blue-500 transition ${
                                           hiddenFields[input.id]
@@ -998,10 +1105,17 @@ outputs:
                                   ) : (
                                     <div className="relative flex items-center">
                                       <input
-                                        type={hiddenFields[input.id] ? "password" : "text"}
+                                        type={
+                                          hiddenFields[input.id]
+                                            ? "password"
+                                            : "text"
+                                        }
                                         value={paramValues[input.id] ?? ""}
                                         onChange={(e) =>
-                                          handleInputChange(input.id, e.target.value)
+                                          handleInputChange(
+                                            input.id,
+                                            e.target.value
+                                          )
                                         }
                                         placeholder={
                                           input.default !== undefined
@@ -1016,9 +1130,15 @@ outputs:
                                       />
                                       <button
                                         type="button"
-                                        onClick={() => toggleHideField(input.id)}
+                                        onClick={() =>
+                                          toggleHideField(input.id)
+                                        }
                                         className="absolute right-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1 rounded transition"
-                                        title={hiddenFields[input.id] ? "Reveal parameter value" : "Hide parameter value for presentation"}
+                                        title={
+                                          hiddenFields[input.id]
+                                            ? "Reveal parameter value"
+                                            : "Hide parameter value for presentation"
+                                        }
                                       >
                                         {hiddenFields[input.id] ? (
                                           <EyeSlashIcon className="w-4 h-4 text-amber-500" />
@@ -1060,10 +1180,13 @@ outputs:
                 <div className="p-4 flex flex-col flex-1 min-h-[450px]">
                   <div className="flex justify-between items-center pb-2">
                     <span className="text-xs text-gray-500">
-                      Adapt raw CWL YAML definition. Click "Reparse" to update input parameters.
+                      Adapt raw CWL YAML definition. Click "Reparse" to update
+                      input parameters.
                     </span>
                     <button
-                      onClick={() => parseCwlText(rawCwl, selectedPackagePath || undefined)}
+                      onClick={() =>
+                        parseCwlText(rawCwl, selectedPackagePath || undefined)
+                      }
                       className="px-3 py-1 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 text-xs font-semibold rounded text-gray-700 dark:text-gray-300"
                     >
                       Reparse Inputs
@@ -1095,7 +1218,9 @@ outputs:
                       onClick={fetchExecutions}
                       className="text-xs text-blue-600 hover:underline flex items-center space-x-1"
                     >
-                      <ArrowPathIcon className={`w-3.5 h-3.5 ${loadingExecutions ? "animate-spin" : ""}`} />
+                      <ArrowPathIcon
+                        className={`w-3.5 h-3.5 ${loadingExecutions ? "animate-spin" : ""}`}
+                      />
                       <span>Refresh Runs</span>
                     </button>
                   </div>
@@ -1109,19 +1234,26 @@ outputs:
                       {packageExecutions.map((exec) => {
                         const execName = exec.metadata?.name;
                         const phase = exec.status?.phase || "Unknown";
-                        const creationTimestamp = exec.metadata?.creationTimestamp;
+                        const creationTimestamp =
+                          exec.metadata?.creationTimestamp;
 
                         // Extract error message from exec status or failed nodes
                         const statusMessage = exec.status?.message || "";
                         const nodes = exec.status?.nodes || {};
-                        const failedNode = Object.values(nodes).find((n: any) => n.message || n.phase === "Failed" || n.phase === "Error") as any;
+                        const failedNode = Object.values(nodes).find(
+                          (n: any) =>
+                            n.message ||
+                            n.phase === "Failed" ||
+                            n.phase === "Error"
+                        ) as any;
                         const nodeMessage = failedNode?.message || "";
                         const displayError = statusMessage || nodeMessage;
 
                         const execStr = JSON.stringify(exec).toLowerCase();
                         const isArchMismatch =
                           execStr.includes("exec format error") ||
-                          (execStr.includes("exec format") && execStr.includes("error"));
+                          (execStr.includes("exec format") &&
+                            execStr.includes("error"));
 
                         return (
                           <div
@@ -1133,7 +1265,8 @@ outputs:
                                 <div className="flex items-center space-x-2">
                                   {phase === "Succeeded" ? (
                                     <CheckCircleIcon className="w-5 h-5 text-emerald-500" />
-                                  ) : phase === "Failed" || phase === "Error" ? (
+                                  ) : phase === "Failed" ||
+                                    phase === "Error" ? (
                                     <XCircleIcon className="w-5 h-5 text-red-500" />
                                   ) : (
                                     <ClockIcon className="w-5 h-5 text-amber-500 animate-pulse" />
@@ -1147,7 +1280,12 @@ outputs:
                                 </div>
 
                                 <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                                  Started: {creationTimestamp ? new Date(creationTimestamp).toLocaleString() : "-"}
+                                  Started:{" "}
+                                  {creationTimestamp
+                                    ? new Date(
+                                        creationTimestamp
+                                      ).toLocaleString()
+                                    : "-"}
                                 </p>
 
                                 {displayError && (
@@ -1159,7 +1297,15 @@ outputs:
                                       </span>
                                     </div>
                                     <p className="text-[11px] text-red-600 dark:text-red-400 font-normal pl-6">
-                                      Tip: Click <span className="font-bold underline">Saved Results</span> or <span className="font-bold underline">View Execution Logs</span> to inspect complete diagnostic logs.
+                                      Tip: Click{" "}
+                                      <span className="font-bold underline">
+                                        Saved Results
+                                      </span>{" "}
+                                      or{" "}
+                                      <span className="font-bold underline">
+                                        View Execution Logs
+                                      </span>{" "}
+                                      to inspect complete diagnostic logs.
                                     </p>
                                   </div>
                                 )}
@@ -1167,7 +1313,9 @@ outputs:
 
                               <div className="flex items-center space-x-2">
                                 <button
-                                  onClick={() => handleViewLogs(execName, creationTimestamp)}
+                                  onClick={() =>
+                                    handleViewLogs(execName, creationTimestamp)
+                                  }
                                   className="inline-flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-900 text-white px-3 py-1.5 rounded text-xs font-semibold transition"
                                 >
                                   <CommandLineIcon className="w-4 h-4" />
@@ -1193,13 +1341,23 @@ outputs:
                               <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300 space-y-1">
                                 <div className="font-bold flex items-center space-x-1 text-amber-800 dark:text-amber-200">
                                   <ExclamationTriangleIcon className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                                  <span>CPU Architecture Mismatch Detected</span>
+                                  <span>
+                                    CPU Architecture Mismatch Detected
+                                  </span>
                                 </div>
                                 <p className="text-[11px]">
-                                  The container image requested by this CWL package (e.g. ghcr.io/...) was compiled for a different CPU architecture (such as ARM64) than your Kubernetes cluster worker node (x86_64 / amd64).
+                                  The container image requested by this CWL
+                                  package (e.g. ghcr.io/...) was compiled for a
+                                  different CPU architecture (such as ARM64)
+                                  than your Kubernetes cluster worker node
+                                  (x86_64 / amd64).
                                 </p>
                                 <p className="text-[11px] font-mono bg-amber-100/70 dark:bg-amber-900/40 p-1.5 rounded text-amber-950 dark:text-amber-200">
-                                  Fix: Rebuild image for amd64: <code>docker buildx build --platform linux/amd64 ...</code>
+                                  Fix: Rebuild image for amd64:{" "}
+                                  <code>
+                                    docker buildx build --platform linux/amd64
+                                    ...
+                                  </code>
                                 </p>
                               </div>
                             )}
@@ -1214,9 +1372,12 @@ outputs:
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center py-16 text-gray-400 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
               <Square3Stack3DIcon className="w-12 h-12 text-gray-300 dark:text-gray-600 mb-2" />
-              <p className="text-sm font-semibold">No Application Package Selected</p>
+              <p className="text-sm font-semibold">
+                No Application Package Selected
+              </p>
               <p className="text-xs text-gray-400 mt-1">
-                Select a saved package from the sidebar or fetch a URL to start configuring.
+                Select a saved package from the sidebar or fetch a URL to start
+                configuring.
               </p>
             </div>
           )}
@@ -1250,7 +1411,10 @@ outputs:
                 <div className="flex items-center space-x-2 text-gray-200">
                   <CommandLineIcon className="w-5 h-5 text-blue-400" />
                   <span className="text-sm font-semibold">
-                    Execution Logs: <span className="font-mono text-blue-300">{logExecName}</span>
+                    Execution Logs:{" "}
+                    <span className="font-mono text-blue-300">
+                      {logExecName}
+                    </span>
                   </span>
                 </div>
 
@@ -1262,7 +1426,10 @@ outputs:
                 </button>
               </div>
 
-              <div className="p-4 bg-gray-950 font-mono text-xs leading-relaxed" style={{ height: "480px" }}>
+              <div
+                className="p-4 bg-gray-950 font-mono text-xs leading-relaxed"
+                style={{ height: "480px" }}
+              >
                 {logsLoading ? (
                   <div className="flex items-center space-x-2 text-gray-400 p-4">
                     <ArrowPathIcon className="w-4 h-4 animate-spin text-blue-500" />

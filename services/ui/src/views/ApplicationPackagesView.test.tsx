@@ -13,5 +13,7 @@ test("renders OGC Application Packages page title and input field", () => {
     screen.getByRole("heading", { name: /OGC Application Packages/i })
   ).toBeInTheDocument();
   expect(screen.getByPlaceholderText(/package.cwl/i)).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /Fetch Package/i })).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: /Fetch Package/i })
+  ).toBeInTheDocument();
 });

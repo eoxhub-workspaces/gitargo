@@ -109,7 +109,9 @@ export const WorkspaceBrowser: React.FC<WorkspaceBrowserProps> = ({
             className="p-1.5 rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
             title="Refresh"
           >
-            <ArrowPathIcon className={`w-5 h-5 ${loading ? "animate-spin" : ""}`} />
+            <ArrowPathIcon
+              className={`w-5 h-5 ${loading ? "animate-spin" : ""}`}
+            />
           </button>
         </div>
 
@@ -138,10 +140,18 @@ export const WorkspaceBrowser: React.FC<WorkspaceBrowserProps> = ({
             <table className="w-full text-left text-sm text-gray-600 dark:text-gray-300">
               <thead className="sticky top-0 z-10 text-xs text-gray-700 uppercase bg-gray-100 dark:bg-gray-800 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700 shadow-sm">
                 <tr>
-                  <th className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800">Name</th>
-                  <th className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800">Size</th>
-                  <th className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800">Modified</th>
-                  <th className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800 text-right">Action</th>
+                  <th className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800">
+                    Name
+                  </th>
+                  <th className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800">
+                    Size
+                  </th>
+                  <th className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800">
+                    Modified
+                  </th>
+                  <th className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800 text-right">
+                    Action
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-900">
