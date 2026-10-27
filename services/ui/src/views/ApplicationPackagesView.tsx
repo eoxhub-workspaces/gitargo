@@ -62,9 +62,8 @@ export const ApplicationPackagesView: React.FC = () => {
   );
 
   // Active package state
-  const [url, setUrl] = useState<string>(
-    "https://github.com/sunnydean/lightning2earthcare/blob/main/cwl/package.cwl"
-  );
+  const [url, setUrl] = useState<string>("");
+  const [showExamplesMenu, setShowExamplesMenu] = useState<boolean>(false);
   const [loadingUrl, setLoadingUrl] = useState<boolean>(false);
   const [executing, setExecuting] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
@@ -803,16 +802,80 @@ outputs:
           {/* URL Import Card if no package loaded or creating new */}
           {!selectedPackagePath && !hasCwlQueryUrl && (
             <div className="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm space-y-3">
-              <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">
-                Import Application Package URL
-              </label>
+              <div className="flex justify-between items-center">
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">
+                  Import Application Package URL
+                </label>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowExamplesMenu(!showExamplesMenu)}
+                    className="inline-flex items-center space-x-1 text-xs font-semibold text-blue-600 hover:text-blue-800 dark:text-blue-400 hover:underline"
+                  >
+                    <span>Load Sample ▾</span>
+                  </button>
+                  {showExamplesMenu && (
+                    <div
+                      className="absolute right-0 mt-1 w-64 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 py-1 z-30 text-xs"
+                      onClick={() => setShowExamplesMenu(false)}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleLoadSampleFileOutput();
+                        }}
+                        className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 flex flex-col"
+                      >
+                        <span className="font-semibold text-blue-600 dark:text-blue-400">
+                          File Output Sample
+                        </span>
+                        <span className="text-[10px] text-gray-400">
+                          Storage Test tool
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setUrl(
+                            "https://raw.githubusercontent.com/common-workflow-language/cwltool/main/tests/echo.cwl"
+                          )
+                        }
+                        className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 flex flex-col border-t border-gray-100 dark:border-gray-700/60"
+                      >
+                        <span className="font-semibold text-blue-600 dark:text-blue-400">
+                          Simple Echo Tool
+                        </span>
+                        <span className="text-[10px] text-gray-400 font-mono truncate">
+                          common-workflow-language/echo.cwl
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setUrl(
+                            "https://github.com/sunnydean/lightning2earthcare/blob/main/cwl/package.cwl"
+                          )
+                        }
+                        className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 flex flex-col border-t border-gray-100 dark:border-gray-700/60"
+                      >
+                        <span className="font-semibold text-blue-600 dark:text-blue-400">
+                          Lightning2EarthCare
+                        </span>
+                        <span className="text-[10px] text-gray-400 font-mono truncate">
+                          lightning2earthcare/package.cwl
+                        </span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
               <div className="flex gap-3">
                 <input
                   type="text"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://github.com/owner/repo/blob/main/cwl/package.cwl"
-                  className="flex-1 px-3.5 py-2 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-white text-xs outline-none focus:ring-2 focus:ring-blue-500"
+                  className="flex-1 px-3.5 py-2 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-gray-900 dark:text-white text-xs outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                 />
                 <button
                   onClick={handleLoadUrl}
@@ -825,41 +888,6 @@ outputs:
                     <CloudArrowDownIcon className="w-4 h-4" />
                   )}
                   <span>Fetch Package</span>
-                </button>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-gray-500">
-                <span className="font-semibold text-gray-600 dark:text-gray-400">
-                  Examples:
-                </span>
-                <button
-                  type="button"
-                  onClick={handleLoadSampleFileOutput}
-                  className="text-emerald-700 dark:text-emerald-400 hover:underline bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded font-mono font-semibold"
-                >
-                  File Output Sample (Storage Test)
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setUrl(
-                      "https://raw.githubusercontent.com/common-workflow-language/cwltool/main/tests/echo.cwl"
-                    )
-                  }
-                  className="text-blue-600 hover:underline bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded font-mono"
-                >
-                  Simple Echo Tool
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setUrl(
-                      "https://github.com/sunnydean/lightning2earthcare/blob/main/cwl/package.cwl"
-                    )
-                  }
-                  className="text-blue-600 hover:underline bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded font-mono"
-                >
-                  Lightning2EarthCare Package
                 </button>
               </div>
             </div>

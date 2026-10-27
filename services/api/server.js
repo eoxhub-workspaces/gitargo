@@ -19,6 +19,8 @@ const GITLAB_TOKEN = process.env.GITLAB_TOKEN;
 const GITLAB_PROJECT_ID = process.env.GITLAB_PROJECT_ID;
 const GITLAB_BRANCH = process.env.GITLAB_BRANCH || 'main';
 const GITLAB_WORKFLOWS_PATH = process.env.GITLAB_WORKFLOWS_PATH || '.';
+const ENABLE_WORKFLOWS = process.env.ENABLE_WORKFLOWS !== 'false' && process.env.DISABLE_WORKFLOWS !== 'true';
+const ENABLE_OGC_PACKAGES = process.env.ENABLE_OGC_PACKAGES === 'true' || process.env.ENABLE_PACKAGES === 'true';
 const ENABLE_APPLICATIONS = process.env.ENABLE_APPLICATIONS === 'true';
 const GITLAB_APPLICATIONS_PATH = process.env.GITLAB_APPLICATIONS_PATH || 'applications';
 const ALLOW_PUBLIC_INGRESS = process.env.ALLOW_PUBLIC_INGRESS === 'true';
@@ -469,7 +471,14 @@ apiRouter.get("/config", (req, res) => {
     availableNodeSelectors: ARGO_AVAILABLE_NODE_SELECTORS,
     ephemeralVolume: EPHEMERAL_VOLUME_CONFIG,
     allowPublishing: process.env.ALLOW_PUBLISHING === "true",
+    enableWorkflows: ENABLE_WORKFLOWS,
+    enableOgcPackages: ENABLE_OGC_PACKAGES,
     enableApplications: ENABLE_APPLICATIONS,
+    features: {
+      workflows: ENABLE_WORKFLOWS,
+      ogcPackages: ENABLE_OGC_PACKAGES,
+      applications: ENABLE_APPLICATIONS
+    },
     allowPublicIngress: ALLOW_PUBLIC_INGRESS,
     ingress: ingressClusterConfig,
     logViewerUrl: process.env.LOG_VIEWER_URL || `https://hub-test.eox.at/services/eoxhub-gateway/cif/log-viewer/search`,

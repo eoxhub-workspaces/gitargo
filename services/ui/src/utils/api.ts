@@ -82,6 +82,14 @@ export interface IngressConfig {
 
 export interface AppConfig {
   version?: string;
+  enableWorkflows?: boolean;
+  enableOgcPackages?: boolean;
+  enableApplications?: boolean;
+  features?: {
+    workflows?: boolean;
+    ogcPackages?: boolean;
+    applications?: boolean;
+  };
   profiles: Record<
     string,
     {
