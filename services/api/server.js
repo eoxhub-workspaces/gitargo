@@ -1857,6 +1857,20 @@ apiRouter.post("/executions/cwl", async (req, res, next) => {
     const containerEngine = (process.env.CONTAINER_ENGINE || "dind").toLowerCase();
     const targetFragment = targetProcessId ? `#${targetProcessId}` : "";
 
+    const isDevImage =
+      process.env.CWL_ENABLE_DIAGNOSTICS === "true" ||
+      process.env.NODE_ENV === "development" ||
+      selectedImage.includes(":dev") ||
+      selectedImage.includes("-dev") ||
+      selectedImage.includes(":staging") ||
+      selectedImage.includes(":test") ||
+      selectedImage.includes(":alpha") ||
+      selectedImage.includes(":beta");
+
+    const startBanner = isDevImage
+      ? "=== GITARGO CWL RUNNER (DEV MODE) ==="
+      : "=== OGC Application Package Execution Started ===";
+
     const runnerPy = `import os, sys, subprocess, glob, base64
 
 os.environ["NO_COLOR"] = "1"
@@ -1867,7 +1881,7 @@ if "${containerEngine}" in ["dind", "docker"]:
     os.environ["DOCKER_HOST"] = "tcp://127.0.0.1:2375"
     os.environ["DOCKER_TLS_CERTDIR"] = ""
 
-print("=== GITARGO CWL RUNNER VER 3.0.3 (NATIVE DOCKER) ===")
+print("${startBanner}")
 
 exec_name = sys.argv[1] if len(sys.argv) > 1 else "default-execution"
 out_dir = "${baseOutDirPrefix}/" + exec_name
@@ -1900,9 +1914,9 @@ sys.exit(ret.returncode)
 `;
 
     const encodedRunnerPy = Buffer.from(runnerPy).toString('base64');
-    let executionCmd = `set -o pipefail && export PYTHONUNBUFFERED=1 && export NO_COLOR=1 && mkdir -p /tmp/runner /tmp/inputs ${baseOutDirPrefix}/{{workflow.name}} && {
-  {
-    echo "=== CWL EXECUTION DIAGNOSTICS (VER 3.0.3) ==="
+
+    const devDiagnosticsScript = `
+    echo "=== CWL EXECUTION DIAGNOSTICS ==="
     echo "Workflow Name: {{workflow.name}}"
     echo "Date: $(date 2>/dev/null || echo unknown)"
     echo "User: $(whoami 2>/dev/null || echo unknown) (UID: $(id -u 2>/dev/null || echo unknown))"
@@ -1923,7 +1937,21 @@ sys.exit(ret.returncode)
     echo "Checking cwltool: $(which cwltool 2>&1 || echo 'NOT FOUND')"
     echo "Checking docker: $(which docker 2>&1 || echo 'NOT FOUND')"
     echo "Checking python3: $(which python3 2>&1 || echo 'NOT FOUND')"
-    echo "=================================="
+    echo "=================================="`;
+
+    const prodQuietScript = `
+    if [ "${containerEngine}" = "dind" ]; then
+      export DOCKER_HOST="tcp://127.0.0.1:2375"
+      export DOCKER_TLS_CERTDIR=""
+      count=0
+      until docker info >/dev/null 2>&1 || [ $count -gt 25 ]; do
+        sleep 2
+        count=$((count+1))
+      done
+    fi`;
+
+    let executionCmd = `set -o pipefail && export PYTHONUNBUFFERED=1 && export NO_COLOR=1 && mkdir -p /tmp/runner /tmp/inputs ${baseOutDirPrefix}/{{workflow.name}} && {
+  {${isDevImage ? devDiagnosticsScript : prodQuietScript}
     ${inlineSetupCmds}
     echo "${encodedRunnerPy}" | base64 -d > /tmp/runner/runner.py
     python3 /tmp/runner/runner.py {{workflow.name}}
