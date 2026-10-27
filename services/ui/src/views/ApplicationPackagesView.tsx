@@ -47,8 +47,12 @@ interface CwlInputDef {
 }
 
 export const ApplicationPackagesView: React.FC = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const lastLoadedUrlRef = useRef<string>("");
+
+  const hasCwlQueryUrl = Boolean(
+    searchParams.get("cwlUrl") || searchParams.get("url")
+  );
 
   // Saved packages list
   const [packages, setPackages] = useState<PackageFile[]>([]);
@@ -702,6 +706,8 @@ outputs:
               setSelectedPackagePath(null);
               setCwlDoc(null);
               setRawCwl("");
+              setUrl("");
+              setSearchParams({});
               setActiveTab("configure");
             }}
             className="inline-flex items-center space-x-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-400 px-3.5 py-2 rounded-lg text-xs font-semibold transition"
@@ -795,7 +801,7 @@ outputs:
         {/* Right Main Content */}
         <div className="flex-1 flex flex-col overflow-y-auto p-6 space-y-6">
           {/* URL Import Card if no package loaded or creating new */}
-          {!selectedPackagePath && (
+          {!selectedPackagePath && !hasCwlQueryUrl && (
             <div className="bg-white dark:bg-gray-800 p-5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm space-y-3">
               <label className="block text-xs font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">
                 Import Application Package URL
