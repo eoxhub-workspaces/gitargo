@@ -338,7 +338,7 @@ const ExecutionsView: React.FC = () => {
 
   useEffect(() => {
     fetchExecutions();
-    const interval = setInterval(fetchExecutions, 10000); // Refresh every 10s
+    const interval = setInterval(fetchExecutions, 5000); // Refresh every 5s
     return () => clearInterval(interval);
   }, [selectedExe?.metadata.name, runFilter]);
 
@@ -670,10 +670,10 @@ const ExecutionsView: React.FC = () => {
                           if (!msgObj) return null;
                           return (
                             <p
-                              className={`text-[10px] mt-1 italic truncate max-w-md ${
+                              className={`text-[10px] mt-1 italic break-all max-w-full max-h-16 overflow-y-auto block ${
                                 msgObj.type === "warning"
-                                  ? "text-yellow-600"
-                                  : "text-red-600"
+                                  ? "text-yellow-600 dark:text-yellow-400"
+                                  : "text-red-600 dark:text-red-400"
                               }`}
                               title={msgObj.original}
                             >
@@ -736,7 +736,7 @@ const ExecutionsView: React.FC = () => {
                     if (!msgObj) return null;
                     return (
                       <p
-                        className={`text-sm font-medium mt-2 p-2 rounded border ${
+                        className={`text-xs font-medium mt-2 p-2.5 rounded border break-all max-h-32 overflow-y-auto ${
                           msgObj.type === "warning"
                             ? "text-yellow-700 bg-yellow-50 border-yellow-200"
                             : "text-red-600 bg-red-50 border-red-100"

@@ -1,6 +1,6 @@
 {
   "name": "gitargo-api",
-  "version": "0.4.1",
+  "version": "0.5.0-dev.2",
   "description": "Backend API for gitargo",
   "main": "server.js",
   "scripts": {

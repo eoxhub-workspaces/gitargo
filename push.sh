@@ -3,11 +3,15 @@
 # Usage: ./push.sh <namespace>
 NAMESPACE=${1:-default}
 
-# Find the pod
-POD=$(kubectl -n $NAMESPACE get po -l "app=gitargo-dev" -o name | head -n1 | cut -d/ -f2)
+# Target ALL pods matching app=gitargo-dev or name containing gitargo-dev
+PODS=$(kubectl -n $NAMESPACE get po -l "app=gitargo-dev" -o name 2>/dev/null | cut -d/ -f2 || true)
 
-if [ -z "$POD" ]; then
-  echo "Error: No pod found matching label app=gitargo-dev"
+if [ -z "$PODS" ]; then
+  PODS=$(kubectl -n $NAMESPACE get po -o name 2>/dev/null | grep -i gitargo-dev | cut -d/ -f2 || true)
+fi
+
+if [ -z "$PODS" ]; then
+  echo "Error: No pods found matching label app=gitargo-dev or name containing gitargo-dev in namespace $NAMESPACE"
   exit 1
 fi
 
@@ -17,25 +21,25 @@ npm install
 npm run build
 cd ../..
 
-echo "Pushing services/api and built UI to $POD in $NAMESPACE..."
+for POD in $PODS; do
+  echo "--------------------------------------------------------"
+  echo "Pushing services/api and built UI to pod: $POD in namespace $NAMESPACE..."
 
-# Create a temporary staging area to match the production container layout
-rm -rf /tmp/gitargo-push
-mkdir -p /tmp/gitargo-push
-cp -r services/api/* /tmp/gitargo-push/
-# Remove the stub index.html and copy the built frontend assets
-rm -rf /tmp/gitargo-push/public/*
-cp -r services/ui/dist/* /tmp/gitargo-push/public/
+  # Copy backend files explicitly to /app
+  kubectl cp services/api/server.js $NAMESPACE/${POD}:/app/server.js
+  kubectl cp services/api/package.json $NAMESPACE/${POD}:/app/package.json
 
-# Copy the staged files to the container's working directory (/app)
-kubectl cp /tmp/gitargo-push/. $NAMESPACE/${POD}:/app
+  # Copy built frontend dist files explicitly to /app/public/
+  kubectl cp services/ui/dist/. $NAMESPACE/${POD}:/app/public/
 
-# Clean up
-rm -rf /tmp/gitargo-push
+  echo "Verifying /app/server.js inside $POD:"
+  kubectl -n $NAMESPACE exec ${POD} -- ls -la /app/server.js
 
-# Restart the server
-echo "IMPORTANT: To apply changes, delete the pod so it restarts and runs the new files (if your volume setup supports it),"
-echo "OR ensure your container command runs 'npm run dev' (nodemon) which will auto-restart."
-kubectl -n $NAMESPACE exec ${POD} -- sh -c "echo 'Restarting server...' && touch /app/server.js" || true
+  # Touch both server.js and package.json to guarantee nodemon detects the file update
+  echo "Notifying nodemon of updated files in $POD..."
+  kubectl -n $NAMESPACE exec ${POD} -- sh -c "echo '' >> /app/server.js && touch /app/package.json" || true
+  echo "Done updating $POD."
+done
 
-echo "Done. If the pod is running a dev loop, the server has restarted internally."
+echo "========================================================"
+echo "All development pods successfully updated and reloaded."

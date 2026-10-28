@@ -27,8 +27,15 @@ import {
   ApplicationStatus,
   getConfig,
   AppConfig,
+  IngressConfig,
   getLogs
 } from "../utils/api";
+import {
+  validateDeploymentSecurity,
+  autoFixDeploymentSecurity,
+  applySecurityFix,
+  SecurityWarning
+} from "../utils/k8sValidation";
 
 const defaultDeploymentYaml = (name: string) => `apiVersion: apps/v1
 kind: Deployment
@@ -48,21 +55,45 @@ spec:
       labels:
         app.kubernetes.io/service: ${name}
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        fsGroup: 101
       containers:
         - name: ${name}
-          image: nginx:alpine
+          image: nginx/nginx-unprivileged:1.31
           imagePullPolicy: Always
           ports:
             - name: http
-              containerPort: 80
+              containerPort: 8080
               protocol: TCP
           resources:
             limits:
-              cpu: "1"
-              memory: 2Gi
+              cpu: "500m"
+              memory: 512Mi
             requests:
-              cpu: "0.1"
-              memory: 0.5Gi`;
+              cpu: "100m"
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp-vol
+              mountPath: /tmp
+            - name: cache-vol
+              mountPath: /var/cache/nginx
+            - name: run-vol
+              mountPath: /var/run
+      volumes:
+        - name: tmp-vol
+          emptyDir: {}
+        - name: cache-vol
+          emptyDir: {}
+        - name: run-vol
+          emptyDir: {}`;
 
 const defaultServiceYaml = (name: string) => `apiVersion: v1
 kind: Service
@@ -156,6 +187,266 @@ spec:
   return ingressYaml;
 };
 
+const mergeFormToDeploymentYaml = (
+  existingYaml: string,
+  appName: string,
+  formImage: string,
+  formPort: number,
+  formCpuLimit: string,
+  formMemLimit: string,
+  formCpuReq: string,
+  formMemReq: string,
+  formEnv: { key: string; value: string }[],
+  formCommand: string,
+  formVolumes: { name: string; mountPath: string }[] = []
+): string => {
+  let doc: any;
+  if (existingYaml && existingYaml.trim()) {
+    try {
+      doc = YAML.parseDocument(existingYaml);
+    } catch {
+      doc = null;
+    }
+  }
+
+  if (!doc || !doc.contents || doc.get("kind") !== "Deployment") {
+    doc = YAML.parseDocument(defaultDeploymentYaml(appName));
+  }
+
+  doc.setIn(["metadata", "name"], appName);
+  doc.setIn(
+    ["spec", "selector", "matchLabels", "app.kubernetes.io/service"],
+    appName
+  );
+  doc.setIn(
+    ["spec", "template", "metadata", "labels", "app.kubernetes.io/service"],
+    appName
+  );
+
+  const cPath = ["spec", "template", "spec", "containers", 0];
+
+  doc.setIn([...cPath, "name"], appName);
+  doc.setIn([...cPath, "image"], formImage);
+
+  const portsNode = doc.getIn([...cPath, "ports"]);
+  if (portsNode && portsNode.items && portsNode.items.length > 0) {
+    doc.setIn([...cPath, "ports", 0, "containerPort"], formPort);
+  } else {
+    doc.setIn(
+      [...cPath, "ports"],
+      [{ name: "http", containerPort: formPort, protocol: "TCP" }]
+    );
+  }
+
+  doc.setIn([...cPath, "resources", "limits", "cpu"], formCpuLimit);
+  doc.setIn([...cPath, "resources", "limits", "memory"], formMemLimit);
+  doc.setIn([...cPath, "resources", "requests", "cpu"], formCpuReq);
+  doc.setIn([...cPath, "resources", "requests", "memory"], formMemReq);
+
+  if (formCommand.trim()) {
+    const lines = formCommand.trim().split("\n");
+    if (lines.length === 1) {
+      doc.setIn([...cPath, "command"], ["/bin/sh", "-c", lines[0]]);
+    } else {
+      doc.setIn([...cPath, "command"], ["/bin/sh", "-c", formCommand.trim()]);
+    }
+  } else if (doc.hasIn([...cPath, "command"])) {
+    doc.deleteIn([...cPath, "command"]);
+  }
+
+  if (formEnv.length > 0) {
+    const envNode = doc.getIn([...cPath, "env"]);
+    const existingEnvs =
+      envNode && typeof envNode.toJSON === "function"
+        ? envNode.toJSON()
+        : Array.isArray(envNode)
+          ? envNode
+          : [];
+
+    const nonFormEnvs = existingEnvs.filter(
+      (e: any) => e && (e.valueFrom || !e.name)
+    );
+
+    const updatedFormEnvs = formEnv
+      .filter((e) => e.key.trim())
+      .map(({ key, value }) => ({ name: key.trim(), value: String(value) }));
+
+    doc.setIn([...cPath, "env"], [...updatedFormEnvs, ...nonFormEnvs]);
+  }
+
+  if (formVolumes.length > 0) {
+    const updatedMounts = formVolumes
+      .filter((v) => v.name.trim() && v.mountPath.trim())
+      .map((v) => ({ name: v.name.trim(), mountPath: v.mountPath.trim() }));
+
+    doc.setIn([...cPath, "volumeMounts"], updatedMounts);
+
+    const existingVolsNode = doc.getIn(["spec", "template", "spec", "volumes"]);
+    const existingVols =
+      existingVolsNode && typeof existingVolsNode.toJSON === "function"
+        ? existingVolsNode.toJSON()
+        : Array.isArray(existingVolsNode)
+          ? existingVolsNode
+          : [];
+
+    const nonEmptyDirVols = existingVols.filter((v: any) => v && !v.emptyDir);
+
+    const updatedEmptyDirVols = updatedMounts.map((v) => ({
+      name: v.name,
+      emptyDir: {}
+    }));
+
+    doc.setIn(
+      ["spec", "template", "spec", "volumes"],
+      [...updatedEmptyDirVols, ...nonEmptyDirVols]
+    );
+  }
+
+  return doc.toString();
+};
+
+const mergeFormToServiceYaml = (
+  existingYaml: string,
+  appName: string,
+  formPort: number,
+  annServiceName: string,
+  annAllowAnon: boolean,
+  annStopUnused: boolean
+): string => {
+  let doc: any;
+  if (existingYaml && existingYaml.trim()) {
+    try {
+      doc = YAML.parseDocument(existingYaml);
+    } catch {
+      doc = null;
+    }
+  }
+
+  if (!doc || !doc.contents || doc.get("kind") !== "Service") {
+    doc = YAML.parseDocument(defaultServiceYaml(appName));
+  }
+
+  doc.setIn(["metadata", "name"], appName);
+  doc.setIn(["spec", "selector", "app.kubernetes.io/service"], appName);
+
+  const hasAnnotations = doc.hasIn(["metadata", "annotations"]);
+
+  if (annServiceName) {
+    doc.setIn(
+      ["metadata", "annotations", "eoxhub/service-name"],
+      annServiceName
+    );
+  } else if (hasAnnotations) {
+    doc.deleteIn(["metadata", "annotations", "eoxhub/service-name"]);
+  }
+
+  if (annAllowAnon) {
+    doc.setIn(["metadata", "annotations", "eoxhub/allow-anonymous"], "true");
+  } else if (hasAnnotations) {
+    doc.deleteIn(["metadata", "annotations", "eoxhub/allow-anonymous"]);
+  }
+
+  if (annStopUnused) {
+    doc.setIn(["metadata", "annotations", "eoxhub/stop-if-unused"], "true");
+  } else if (hasAnnotations) {
+    doc.deleteIn(["metadata", "annotations", "eoxhub/stop-if-unused"]);
+  }
+
+  if (doc.hasIn(["metadata", "annotations"])) {
+    const ann = doc.getIn(["metadata", "annotations"]);
+    if (ann && typeof ann.toJSON === "function") {
+      const annObj = ann.toJSON();
+      if (annObj && Object.keys(annObj).length === 0) {
+        doc.deleteIn(["metadata", "annotations"]);
+      }
+    }
+  }
+
+  const portsNode = doc.getIn(["spec", "ports"]);
+  if (portsNode && portsNode.items && portsNode.items.length > 0) {
+    doc.setIn(["spec", "ports", 0, "targetPort"], formPort);
+  } else {
+    doc.setIn(
+      ["spec", "ports"],
+      [{ port: 80, targetPort: formPort, protocol: "TCP", name: "http" }]
+    );
+  }
+
+  return doc.toString();
+};
+
+const mergeFormToIngressYaml = (
+  existingYaml: string,
+  appName: string,
+  namespace: string,
+  ingressConfig?: IngressConfig
+): string => {
+  let doc: any;
+  if (existingYaml && existingYaml.trim()) {
+    try {
+      doc = YAML.parseDocument(existingYaml);
+    } catch {
+      doc = null;
+    }
+  }
+
+  if (!doc || !doc.contents || doc.get("kind") !== "Ingress") {
+    return generateIngressYaml(appName, namespace, ingressConfig);
+  }
+
+  const domain = ingressConfig?.domain || "local";
+  const expectedHost =
+    namespace && namespace !== "default"
+      ? `${appName}.${namespace}.${domain}`
+      : `${appName}.${domain}`;
+
+  doc.setIn(["metadata", "name"], appName);
+
+  const rulesNode = doc.getIn(["spec", "rules"]);
+  if (rulesNode && rulesNode.items && rulesNode.items.length > 0) {
+    rulesNode.items.forEach((rule: any, rIdx: number) => {
+      const currentHost = String(rule.get("host") || "");
+      if (
+        !currentHost ||
+        currentHost.endsWith(`.${domain}`) ||
+        currentHost.includes("my-app")
+      ) {
+        doc.setIn(["spec", "rules", rIdx, "host"], expectedHost);
+      }
+
+      const pathsNode = rule.getIn(["http", "paths"]);
+      if (pathsNode && pathsNode.items && pathsNode.items.length > 0) {
+        pathsNode.items.forEach((p: any, pIdx: number) => {
+          doc.setIn(
+            [
+              "spec",
+              "rules",
+              rIdx,
+              "http",
+              "paths",
+              pIdx,
+              "backend",
+              "service",
+              "name"
+            ],
+            appName
+          );
+        });
+      }
+    });
+  }
+
+  const tlsNode = doc.getIn(["spec", "tls"]);
+  if (tlsNode && tlsNode.items && tlsNode.items.length > 0) {
+    tlsNode.items.forEach((t: any, tIdx: number) => {
+      doc.setIn(["spec", "tls", tIdx, "hosts", 0], expectedHost);
+      doc.setIn(["spec", "tls", tIdx, "secretName"], `${expectedHost}-tls`);
+    });
+  }
+
+  return doc.toString();
+};
+
 const commentOutYaml = (yaml: string) => {
   if (!yaml) return "";
   return yaml
@@ -216,6 +507,28 @@ const ApplicationsView: React.FC = () => {
   const [formEnv, setFormEnv] = useState<{ key: string; value: string }[]>([]);
   const [formCommand, setFormCommand] = useState("");
 
+  // Warning modal state
+  const [showWarningModal, setShowWarningModal] = useState(false);
+  const [securityWarnings, setSecurityWarnings] = useState<SecurityWarning[]>(
+    []
+  );
+  const [ignoreWarningsChecked, setIgnoreWarningsChecked] = useState(false);
+  const [pendingSaveParams, setPendingSaveParams] = useState<{
+    appName: string;
+    yamls: ApplicationYamls;
+  } | null>(null);
+
+  // Security Overview Modal state
+  const [showSecurityOverviewModal, setShowSecurityOverviewModal] =
+    useState(false);
+  const [selectedSecurityAppName, setSelectedSecurityAppName] =
+    useState<string>("");
+
+  const handleOpenSecurityModal = (appName: string) => {
+    setSelectedSecurityAppName(appName);
+    setShowSecurityOverviewModal(true);
+  };
+
   // Logs modal state
   const [logPodName, setLogPodName] = useState("");
   const [logsText, setLogsText] = useState("Loading logs...");
@@ -223,13 +536,20 @@ const ApplicationsView: React.FC = () => {
 
   // Form Mode Inputs
   const [formName, setFormName] = useState("");
-  const [formImage, setFormImage] = useState("nginx:alpine");
-  const [formPort, setFormPort] = useState(80);
-  const [formCpuLimit, setFormCpuLimit] = useState("1");
-  const [formMemLimit, setFormMemLimit] = useState("2Gi");
-  const [formCpuReq, setFormCpuReq] = useState("0.1");
-  const [formMemReq, setFormMemReq] = useState("0.5Gi");
+  const [formImage, setFormImage] = useState("nginx/nginx-unprivileged:1.31");
+  const [formPort, setFormPort] = useState(8080);
+  const [formCpuLimit, setFormCpuLimit] = useState("500m");
+  const [formMemLimit, setFormMemLimit] = useState("512Mi");
+  const [formCpuReq, setFormCpuReq] = useState("100m");
+  const [formMemReq, setFormMemReq] = useState("128Mi");
   const [formIsPublic, setFormIsPublic] = useState(false);
+  const [formVolumes, setFormVolumes] = useState<
+    { name: string; mountPath: string }[]
+  >([
+    { name: "tmp-vol", mountPath: "/tmp" },
+    { name: "cache-vol", mountPath: "/var/cache/nginx" },
+    { name: "run-vol", mountPath: "/var/run" }
+  ]);
 
   // EOXHub service annotations
   const [annServiceName, setAnnServiceName] = useState("");
@@ -324,12 +644,17 @@ const ApplicationsView: React.FC = () => {
     setExpertMode(false);
     setIsParseable(true);
     setFormName("");
-    setFormImage("nginx:alpine");
-    setFormPort(80);
-    setFormCpuLimit("1");
-    setFormMemLimit("2Gi");
-    setFormCpuReq("0.1");
-    setFormMemReq("0.5Gi");
+    setFormImage("nginx/nginx-unprivileged:1.31");
+    setFormPort(8080);
+    setFormCpuLimit("500m");
+    setFormMemLimit("512Mi");
+    setFormCpuReq("100m");
+    setFormMemReq("128Mi");
+    setFormVolumes([
+      { name: "tmp-vol", mountPath: "/tmp" },
+      { name: "cache-vol", mountPath: "/var/cache/nginx" },
+      { name: "run-vol", mountPath: "/var/run" }
+    ]);
     setFormIsPublic(false);
     setAnnServiceName("");
     setAnnAllowAnon(false);
@@ -365,10 +690,10 @@ const ApplicationsView: React.FC = () => {
       const name = dep.metadata?.name || "";
       const image = container.image || "";
       const port = container.ports?.[0]?.containerPort || 80;
-      const cpuLimit = container.resources?.limits?.cpu || "1";
-      const memLimit = container.resources?.limits?.memory || "2Gi";
-      const cpuReq = container.resources?.requests?.cpu || "0.1";
-      const memReq = container.resources?.requests?.memory || "0.5Gi";
+      const cpuLimit = container.resources?.limits?.cpu || "500m";
+      const memLimit = container.resources?.limits?.memory || "512Mi";
+      const cpuReq = container.resources?.requests?.cpu || "100m";
+      const memReq = container.resources?.requests?.memory || "128Mi";
 
       // Extract env variables
       const envs: { key: string; value: string }[] = [];
@@ -394,6 +719,19 @@ const ApplicationsView: React.FC = () => {
         }
       }
 
+      // Extract volumeMounts
+      const volumeMounts: { name: string; mountPath: string }[] = [];
+      if (Array.isArray(container.volumeMounts)) {
+        container.volumeMounts.forEach((vm: any) => {
+          if (vm && vm.name && vm.mountPath) {
+            volumeMounts.push({
+              name: String(vm.name),
+              mountPath: String(vm.mountPath)
+            });
+          }
+        });
+      }
+
       // Extract service annotations
       const svcAnnotations = svc?.metadata?.annotations || {};
       const serviceName = svcAnnotations["eoxhub/service-name"] || "";
@@ -409,6 +747,7 @@ const ApplicationsView: React.FC = () => {
       setFormMemReq(memReq);
       setFormEnv(envs);
       setFormCommand(command);
+      setFormVolumes(volumeMounts);
       setAnnServiceName(serviceName);
       setAnnAllowAnon(allowAnon);
       setAnnStopUnused(stopUnused);
@@ -607,105 +946,35 @@ const ApplicationsView: React.FC = () => {
   const syncFormToYaml = (nameToUse?: string) => {
     const name = nameToUse || formName.trim() || "my-app";
 
-    let commandSection = "";
-    if (formCommand.trim()) {
-      const lines = formCommand.trim().split("\n");
-      if (lines.length === 1) {
-        commandSection = `\n          command: ["/bin/sh", "-c", ${JSON.stringify(
-          lines[0]
-        )}]`;
-      } else {
-        const indentedCommand = lines
-          .map((l) => `              ${l}`)
-          .join("\n");
-        commandSection = `\n          command:\n            - /bin/sh\n            - -c\n            - |\n${indentedCommand}`;
-      }
-    }
-
-    let envSection = "";
-    if (formEnv.length > 0) {
-      envSection = "\n          env:";
-      formEnv.forEach(({ key, value }) => {
-        if (key.trim()) {
-          envSection += `\n            - name: ${key.trim()}\n              value: ${JSON.stringify(
-            value
-          )}`;
-        }
-      });
-    }
-
-    // Deployment YAML Generation
-    const depYaml = `apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ${name}
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/service: ${name}
-  strategy:
-    rollingUpdate:
-      maxUnavailable: 0
-    type: RollingUpdate
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/service: ${name}
-    spec:
-      containers:
-        - name: ${name}
-          image: ${formImage}
-          imagePullPolicy: Always
-          ports:
-            - name: http
-              containerPort: ${formPort}
-              protocol: TCP${commandSection}${envSection}
-          resources:
-            limits:
-              cpu: "${formCpuLimit}"
-              memory: "${formMemLimit}"
-            requests:
-              cpu: "${formCpuReq}"
-              memory: "${formMemReq}"`;
-
+    const depYaml = mergeFormToDeploymentYaml(
+      yamlDeployment,
+      name,
+      formImage,
+      formPort,
+      formCpuLimit,
+      formMemLimit,
+      formCpuReq,
+      formMemReq,
+      formEnv,
+      formCommand,
+      formVolumes
+    );
     setYamlDeployment(depYaml);
 
-    // Service YAML Generation
-    let svcAnnotations = "";
-    if (annServiceName || annAllowAnon || annStopUnused) {
-      svcAnnotations = "\n  annotations:";
-      if (annServiceName) {
-        svcAnnotations += `\n    eoxhub/service-name: "${annServiceName}"`;
-      }
-      if (annAllowAnon) {
-        svcAnnotations += `\n    eoxhub/allow-anonymous: "true"`;
-      }
-      if (annStopUnused) {
-        svcAnnotations += `\n    eoxhub/stop-if-unused: "true"`;
-      }
-    }
-
-    const svcYaml = `apiVersion: v1
-kind: Service
-metadata:
-  name: ${name}${svcAnnotations}
-spec:
-  type: ClusterIP
-  ports:
-    - port: 80
-      targetPort: ${formPort}
-      protocol: TCP
-      name: http
-  selector:
-    app.kubernetes.io/service: ${name}`;
-
+    const svcYaml = mergeFormToServiceYaml(
+      yamlService,
+      name,
+      formPort,
+      annServiceName,
+      annAllowAnon,
+      annStopUnused
+    );
     setYamlService(svcYaml);
 
-    // Ingress YAML Generation
     let ingYaml = "";
     if (formIsPublic) {
-      ingYaml = generateIngressYaml(
+      ingYaml = mergeFormToIngressYaml(
+        yamlIngress,
         name,
         config?.defaults?.namespace || "default",
         config?.ingress
@@ -722,13 +991,43 @@ spec:
     };
   };
 
+  const executeSaveApplication = async (
+    appName: string,
+    yamls: ApplicationYamls
+  ) => {
+    const saveToast = toast.loading("Saving application deployment...");
+    try {
+      if (isEditing) {
+        await updateApplication(appName, yamls);
+        toast.success(`Application "${appName}" updated successfully.`, {
+          id: saveToast
+        });
+      } else {
+        await createApplication(appName, yamls);
+        toast.success(`Application "${appName}" created successfully.`, {
+          id: saveToast
+        });
+      }
+
+      setShowFormModal(false);
+      setShowWarningModal(false);
+      setPendingSaveParams(null);
+      loadData();
+    } catch (err: any) {
+      const serverMsg =
+        err.response?.data?.message || err.message || "Unknown error";
+      toast.error(`Failed to save application: ${serverMsg}`, {
+        id: saveToast
+      });
+    }
+  };
+
   const handleSaveApplication = async (e: React.FormEvent) => {
     e.preventDefault();
 
     let appName = isEditing ? selectedAppName : formName.trim();
     if (!appName) {
       if (expertMode) {
-        // Try to parse deployment name
         try {
           const parsed = YAML.parse(yamlDeployment);
           appName = parsed?.metadata?.name || "";
@@ -750,7 +1049,6 @@ spec:
     let finalService = yamlService;
     let finalIngress = yamlIngress;
 
-    // In Form mode, synchronize right before saving
     if (!expertMode) {
       const synced = syncFormToYaml(appName);
       finalDeployment = synced.deployment;
@@ -758,55 +1056,269 @@ spec:
       finalIngress = synced.ingress;
     }
 
-    const saveToast = toast.loading("Saving application deployment...");
+    const yamls: ApplicationYamls = {
+      deployment: finalDeployment,
+      service: finalService,
+      ingress:
+        formIsPublic || (expertMode && finalIngress) ? finalIngress : undefined
+    };
+
+    let ignoreWarnings = false;
     try {
-      const yamls: ApplicationYamls = {
-        deployment: finalDeployment,
-        service: finalService,
-        ingress:
-          formIsPublic || (expertMode && finalIngress)
-            ? finalIngress
-            : undefined
+      const parsedDep = YAML.parse(finalDeployment);
+      ignoreWarnings =
+        parsedDep?.metadata?.annotations?.["gitargo.eox.at/ignore-warnings"] ===
+        "true";
+    } catch {
+      // Ignore parse errors
+    }
+
+    if (!ignoreWarnings) {
+      const warnings = validateDeploymentSecurity(finalDeployment);
+      if (warnings.length > 0) {
+        setSecurityWarnings(warnings);
+        setPendingSaveParams({ appName, yamls });
+        setIgnoreWarningsChecked(false);
+        setShowWarningModal(true);
+        return;
+      }
+    }
+
+    await executeSaveApplication(appName, yamls);
+  };
+
+  const handleSaveAnywayClick = () => {
+    if (!pendingSaveParams) return;
+    const { appName } = pendingSaveParams;
+    let yamls = pendingSaveParams.yamls;
+
+    if (ignoreWarningsChecked) {
+      try {
+        const doc = YAML.parseDocument(yamls.deployment);
+        doc.setIn(
+          ["metadata", "annotations", "gitargo.eox.at/ignore-warnings"],
+          "true"
+        );
+        yamls = {
+          ...yamls,
+          deployment: doc.toString()
+        };
+      } catch (e) {
+        console.error("Failed to add ignore warnings annotation", e);
+      }
+    }
+
+    executeSaveApplication(appName, yamls);
+  };
+
+  const handleFixSpecificIssueInModal = (issueId: string) => {
+    if (!pendingSaveParams) return;
+    const { appName, yamls } = pendingSaveParams;
+    const fixedDep = applySecurityFix(yamls.deployment, issueId);
+
+    const updatedYamls = { ...yamls, deployment: fixedDep };
+    const remainingWarnings = validateDeploymentSecurity(fixedDep);
+
+    setPendingSaveParams({ appName, yamls: updatedYamls });
+    setSecurityWarnings(remainingWarnings);
+    setYamlDeployment(fixedDep);
+
+    if (remainingWarnings.length === 0) {
+      toast.success("All security issues resolved!");
+    } else {
+      toast.success("Security issue resolved!");
+    }
+  };
+
+  const handleAutoFixInModal = () => {
+    if (!pendingSaveParams) return;
+    const { appName } = pendingSaveParams;
+    let yamls = pendingSaveParams.yamls;
+
+    const fixedDep = autoFixDeploymentSecurity(yamls.deployment);
+    yamls = { ...yamls, deployment: fixedDep };
+
+    if (ignoreWarningsChecked) {
+      try {
+        const doc = YAML.parseDocument(yamls.deployment);
+        doc.setIn(
+          ["metadata", "annotations", "gitargo.eox.at/ignore-warnings"],
+          "true"
+        );
+        yamls = {
+          ...yamls,
+          deployment: doc.toString()
+        };
+      } catch (e) {
+        console.error("Failed to add ignore warnings annotation", e);
+      }
+    }
+
+    executeSaveApplication(appName, yamls);
+  };
+
+  const handleFixSpecificIssueForApp = async (
+    appName: string,
+    issueId: string
+  ) => {
+    const yamls = appYamls[appName];
+    if (!yamls || !yamls.deployment) {
+      toast.error(`Application configuration for "${appName}" not found.`);
+      return;
+    }
+
+    const fixToast = toast.loading(
+      `Resolving security issue for "${appName}"...`
+    );
+    try {
+      const fixedDep = applySecurityFix(yamls.deployment, issueId);
+      const updatedYamls: ApplicationYamls = {
+        ...yamls,
+        deployment: fixedDep
       };
 
-      if (isEditing) {
-        await updateApplication(appName, yamls);
-        toast.success(`Application "${appName}" updated successfully.`, {
-          id: saveToast
-        });
-      } else {
-        await createApplication(appName, yamls);
-        toast.success(`Application "${appName}" created successfully.`, {
-          id: saveToast
-        });
-      }
+      await updateApplication(
+        appName,
+        updatedYamls,
+        `Fix security issue ${issueId} for ${appName}`
+      );
+      toast.success(`Security issue resolved for "${appName}"!`, {
+        id: fixToast
+      });
 
-      setShowFormModal(false);
+      const remaining = validateDeploymentSecurity(fixedDep);
+      if (remaining.length === 0) {
+        setShowSecurityOverviewModal(false);
+      }
       loadData();
     } catch (err: any) {
-      const serverMsg =
-        err.response?.data?.message || err.message || "Unknown error";
-      toast.error(`Failed to save application: ${serverMsg}`, {
-        id: saveToast
+      toast.error(`Failed to resolve security issue: ${err.message}`, {
+        id: fixToast
       });
     }
   };
 
-  const getIngressUrl = (app: Application) => {
-    if (!config?.ingress?.domain) return null;
-    const hasIngress = app.files.includes("ingress.yaml");
-    if (!hasIngress) return null;
+  const handleAutoFixForApp = async (appName: string) => {
+    const yamls = appYamls[appName];
+    if (!yamls || !yamls.deployment) {
+      toast.error(`Application configuration for "${appName}" not found.`);
+      return;
+    }
 
-    const domain = config.ingress.domain;
-    const proto = config.ingress.tlsEnabled ? "https" : "http";
-    const namespace = config.defaults?.namespace || "default";
+    const fixToast = toast.loading(
+      `Applying security fixes to "${appName}"...`
+    );
+    try {
+      const fixedDep = autoFixDeploymentSecurity(yamls.deployment);
+      const updatedYamls: ApplicationYamls = {
+        ...yamls,
+        deployment: fixedDep
+      };
 
-    const hostDomain =
+      await updateApplication(
+        appName,
+        updatedYamls,
+        `Auto-fix security context for ${appName}`
+      );
+      toast.success(
+        `Security configuration for "${appName}" automatically fixed & deployed!`,
+        { id: fixToast }
+      );
+      setShowSecurityOverviewModal(false);
+      loadData();
+    } catch (err: any) {
+      toast.error(`Failed to auto-fix security: ${err.message}`, {
+        id: fixToast
+      });
+    }
+  };
+
+  const getAppSecurityWarnings = (appName: string): SecurityWarning[] => {
+    const yamls = appYamls[appName];
+    if (!yamls || !yamls.deployment) return [];
+    try {
+      const disabled = isYamlDisabled(yamls.deployment);
+      const rawDep = disabled
+        ? uncommentYaml(yamls.deployment)
+        : yamls.deployment;
+
+      const parsedDep = YAML.parse(rawDep);
+      if (
+        parsedDep?.metadata?.annotations?.["gitargo.eox.at/ignore-warnings"] ===
+        "true"
+      ) {
+        return [];
+      }
+      return validateDeploymentSecurity(rawDep);
+    } catch {
+      return [];
+    }
+  };
+
+  const getIngressUrls = (appName: string): { url: string; host: string }[] => {
+    const yamls = appYamls[appName];
+    const domain = config?.ingress?.domain || "local";
+    const defaultProto = config?.ingress?.tlsEnabled ? "https" : "http";
+    const namespace = config?.defaults?.namespace || "default";
+
+    const defaultHost =
       namespace && namespace !== "default"
-        ? `${app.name}.${namespace}.${domain}`
-        : `${app.name}.${domain}`;
+        ? `${appName}.${namespace}.${domain}`
+        : `${appName}.${domain}`;
+    const defaultUrl = `${defaultProto}://${defaultHost}`;
 
-    return `${proto}://${hostDomain}`;
+    if (!yamls || !yamls.ingress) {
+      if (
+        apps.find((a) => a.name === appName)?.files.includes("ingress.yaml")
+      ) {
+        return [{ url: defaultUrl, host: defaultHost }];
+      }
+      return [];
+    }
+
+    try {
+      const disabled = isYamlDisabled(yamls.ingress);
+      const rawIngress = disabled
+        ? uncommentYaml(yamls.ingress)
+        : yamls.ingress;
+      const parsed = YAML.parse(rawIngress);
+
+      if (!parsed || parsed.kind !== "Ingress") {
+        return [{ url: defaultUrl, host: defaultHost }];
+      }
+
+      const tlsHosts = new Set<string>();
+      if (Array.isArray(parsed.spec?.tls)) {
+        parsed.spec.tls.forEach((t: any) => {
+          if (Array.isArray(t?.hosts)) {
+            t.hosts.forEach((h: string) => h && tlsHosts.add(h));
+          }
+        });
+      }
+
+      const urls: { url: string; host: string }[] = [];
+      const seenHosts = new Set<string>();
+
+      if (Array.isArray(parsed.spec?.rules)) {
+        parsed.spec.rules.forEach((rule: any) => {
+          const host = rule?.host;
+          if (host && !seenHosts.has(host)) {
+            seenHosts.add(host);
+            const isTls = tlsHosts.has(host) || config?.ingress?.tlsEnabled;
+            const proto = isTls ? "https" : "http";
+            urls.push({ url: `${proto}://${host}`, host });
+          }
+        });
+      }
+
+      if (urls.length === 0) {
+        return [{ url: defaultUrl, host: defaultHost }];
+      }
+
+      return urls;
+    } catch {
+      return [{ url: defaultUrl, host: defaultHost }];
+    }
   };
 
   const getSevereVulnerabilitiesCount = (appName: string) => {
@@ -983,32 +1495,37 @@ spec:
                         <div className="text-sm font-semibold text-gray-900 break-words">
                           {app.name}
                         </div>
-                        {!isAppDisabled(app.name) && getIngressUrl(app) && (
-                          <div className="text-xs mt-0.5">
-                            {statuses[app.name]?.ingress?.ready ? (
-                              <a
-                                href={getIngressUrl(app)!}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:text-blue-800 hover:underline flex items-center max-w-xs sm:max-w-md truncate"
-                                title={getIngressUrl(app)}
-                              >
-                                <EyeIcon className="h-3 w-3 mr-1 inline-block flex-shrink-0" />
-                                <span className="truncate">
-                                  {getIngressUrl(app)}
-                                </span>
-                              </a>
-                            ) : (
-                              <span
-                                className="text-gray-400 flex items-center animate-pulse select-none"
-                                title="Ingress is currently being reconciled and DNS routing allocated by the cluster. This link will activate automatically once ready."
-                              >
-                                <ArrowPathIcon className="h-3 w-3 mr-1 inline-block animate-spin flex-shrink-0" />
-                                Routing (Configuring DNS)...
-                              </span>
-                            )}
-                          </div>
-                        )}
+                        {!isAppDisabled(app.name) &&
+                          getIngressUrls(app.name).length > 0 && (
+                            <div className="mt-1 space-y-1">
+                              {getIngressUrls(app.name).map((ing, idx) => (
+                                <div key={idx} className="text-xs">
+                                  {statuses[app.name]?.ingress?.ready ? (
+                                    <a
+                                      href={ing.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-blue-600 hover:text-blue-800 hover:underline flex items-center max-w-xs sm:max-w-md truncate"
+                                      title={ing.url}
+                                    >
+                                      <EyeIcon className="h-3 w-3 mr-1 inline-block flex-shrink-0" />
+                                      <span className="truncate">
+                                        {ing.url}
+                                      </span>
+                                    </a>
+                                  ) : (
+                                    <span
+                                      className="text-gray-400 flex items-center animate-pulse select-none"
+                                      title="Ingress is currently being reconciled and DNS routing allocated by the cluster. This link will activate automatically once ready."
+                                    >
+                                      <ArrowPathIcon className="h-3 w-3 mr-1 inline-block animate-spin flex-shrink-0" />
+                                      Routing ({ing.host})...
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         <div className="text-xs text-gray-400 truncate">
                           Folder: applications/{app.name}
                         </div>
@@ -1037,8 +1554,19 @@ spec:
                           title="Critical or High vulnerabilities detected by security audit. Click Manage to view details."
                         >
                           <ExclamationTriangleIcon className="h-3.5 w-3.5 mr-1 text-red-500 inline-block animate-pulse" />
-                          Security Warning (
+                          Audit Warning (
                           {getSevereVulnerabilitiesCount(app.name)})
+                        </span>
+                      )}
+                      {getAppSecurityWarnings(app.name).length > 0 && (
+                        <span
+                          className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 flex items-center w-max cursor-pointer hover:bg-amber-100 transition-colors"
+                          onClick={() => handleOpenSecurityModal(app.name)}
+                          title="Click to view security compliance issues & auto-fix configuration"
+                        >
+                          <ExclamationTriangleIcon className="h-3.5 w-3.5 mr-1 text-amber-600 inline-block" />
+                          Security Issues (
+                          {getAppSecurityWarnings(app.name).length})
                         </span>
                       )}
                     </div>
@@ -1264,6 +1792,88 @@ spec:
                             className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-[#004170] focus:border-[#004170] sm:text-sm"
                           />
                         </div>
+                      </div>
+
+                      {/* Ephemeral Volume Mounts */}
+                      <div className="border-t border-gray-100 pt-4 mt-4">
+                        <div className="flex justify-between items-center mb-3">
+                          <div>
+                            <h4 className="text-sm font-bold text-gray-800">
+                              Volume Mounts (Ephemeral / emptyDir Volumes)
+                            </h4>
+                            <p className="text-xs text-gray-500">
+                              Required for read-only root filesystems to store
+                              runtime temporary files (e.g. /tmp,
+                              /var/cache/nginx)
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setFormVolumes([
+                                ...formVolumes,
+                                {
+                                  name: `vol-${formVolumes.length + 1}`,
+                                  mountPath: "/mnt/data"
+                                }
+                              ])
+                            }
+                            className="px-2.5 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold rounded flex items-center shadow-xs transition-colors"
+                          >
+                            <PlusIcon className="h-3.5 w-3.5 mr-1" />
+                            Add Volume
+                          </button>
+                        </div>
+
+                        {formVolumes.length === 0 ? (
+                          <p className="text-xs text-gray-400 italic">
+                            No volume mounts configured.
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {formVolumes.map((vol, idx) => (
+                              <div
+                                key={idx}
+                                className="flex items-center space-x-2"
+                              >
+                                <input
+                                  type="text"
+                                  placeholder="Volume Name (e.g. tmp-vol)"
+                                  value={vol.name}
+                                  onChange={(e) => {
+                                    const updated = [...formVolumes];
+                                    updated[idx].name = e.target.value;
+                                    setFormVolumes(updated);
+                                  }}
+                                  className="w-1/2 text-xs border border-gray-300 rounded-md px-3 py-2 focus:ring-[#004170] focus:border-[#004170] font-mono"
+                                />
+                                <input
+                                  type="text"
+                                  placeholder="Mount Path (e.g. /tmp)"
+                                  value={vol.mountPath}
+                                  onChange={(e) => {
+                                    const updated = [...formVolumes];
+                                    updated[idx].mountPath = e.target.value;
+                                    setFormVolumes(updated);
+                                  }}
+                                  className="w-1/2 text-xs border border-gray-300 rounded-md px-3 py-2 focus:ring-[#004170] focus:border-[#004170] font-mono"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setFormVolumes(
+                                      formVolumes.filter((_, i) => i !== idx)
+                                    )
+                                  }
+                                  className="text-gray-400 hover:text-red-600 p-1.5 rounded"
+                                  title="Remove Volume Mount"
+                                >
+                                  <TrashIcon className="h-4 w-4" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
 
                       {/* EOXHub Integrations */}
@@ -2025,6 +2635,238 @@ spec:
                 >
                   Close
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Modal: Security Warnings Confirmation */}
+      {showWarningModal && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto"
+          aria-labelledby="modal-title"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div
+              className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+              onClick={() => setShowWarningModal(false)}
+            ></div>
+            <span
+              className="hidden sm:inline-block sm:align-middle sm:h-screen"
+              aria-hidden="true"
+            >
+              &#8203;
+            </span>
+            <div className="inline-block align-middle bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 bg-amber-50 border-b border-amber-100">
+                <h3 className="text-base font-bold text-amber-800 flex items-center">
+                  <ExclamationTriangleIcon className="h-5 w-5 mr-2 text-amber-600" />
+                  Deployment Security Warnings
+                </h3>
+                <button
+                  onClick={() => setShowWarningModal(false)}
+                  className="text-amber-500 hover:text-amber-700"
+                >
+                  <XMarkIcon className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="px-6 py-5 bg-white space-y-4 text-sm text-gray-700">
+                <p className="text-sm font-medium text-gray-800">
+                  The deployment specification for{" "}
+                  <span className="font-bold">
+                    {pendingSaveParams?.appName}
+                  </span>{" "}
+                  deviates from recommended security standards:
+                </p>
+                <ul className="space-y-2 text-xs bg-amber-50/50 p-3 rounded-lg border border-amber-200/60 max-h-60 overflow-y-auto">
+                  {securityWarnings.map((warn) => (
+                    <li
+                      key={warn.id}
+                      className="flex items-center justify-between p-2 rounded bg-white border border-amber-200/80 shadow-2xs"
+                    >
+                      <div className="flex items-start text-amber-900 pr-2">
+                        <span className="mr-2 text-amber-600 font-bold">•</span>
+                        <span>{warn.message}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleFixSpecificIssueInModal(warn.id)}
+                        className="px-2.5 py-1 text-[11px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded transition-colors flex-shrink-0 flex items-center"
+                      >
+                        <CheckCircleIcon className="h-3.5 w-3.5 mr-1 text-blue-600 inline-block" />
+                        Fix
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+
+                <label className="flex items-start space-x-3 mt-4 p-2.5 bg-gray-50 border border-gray-200 rounded-lg cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={ignoreWarningsChecked}
+                    onChange={(e) => setIgnoreWarningsChecked(e.target.checked)}
+                    className="h-4 w-4 mt-0.5 text-[#004170] focus:ring-[#004170] border-gray-300 rounded"
+                  />
+                  <span className="text-xs text-gray-600 leading-normal">
+                    Do not warn me again for this application. (Writes an ignore
+                    annotation to the deployment metadata).
+                  </span>
+                </label>
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between px-6 py-4 bg-gray-50 border-t border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowWarningModal(false);
+                    setExpertMode(true);
+                  }}
+                  className="px-3.5 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors shadow-sm"
+                >
+                  Review YAML
+                </button>
+                <div className="flex space-x-2">
+                  <button
+                    type="button"
+                    onClick={handleAutoFixInModal}
+                    className="px-3.5 py-2 text-xs font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-sm flex items-center"
+                  >
+                    <CheckCircleIcon className="h-4 w-4 mr-1" />
+                    Auto-Fix & Deploy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveAnywayClick}
+                    className="px-3.5 py-2 text-xs font-medium text-white bg-amber-600 rounded-md hover:bg-amber-700 transition-colors shadow-sm"
+                  >
+                    Save Anyway
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Modal: Overview Security Details & Auto-Fix */}
+      {showSecurityOverviewModal && selectedSecurityAppName && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto"
+          aria-labelledby="modal-title"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div
+              className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+              onClick={() => setShowSecurityOverviewModal(false)}
+            ></div>
+            <span
+              className="hidden sm:inline-block sm:align-middle sm:h-screen"
+              aria-hidden="true"
+            >
+              &#8203;
+            </span>
+            <div className="inline-block align-middle bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 bg-amber-50 border-b border-amber-100">
+                <h3 className="text-base font-bold text-amber-800 flex items-center">
+                  <ExclamationTriangleIcon className="h-5 w-5 mr-2 text-amber-600" />
+                  Security Configuration Issues
+                </h3>
+                <button
+                  onClick={() => setShowSecurityOverviewModal(false)}
+                  className="text-amber-500 hover:text-amber-700"
+                >
+                  <XMarkIcon className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="px-6 py-5 bg-white space-y-4 text-sm text-gray-700">
+                <p className="text-sm font-medium text-gray-800">
+                  Application{" "}
+                  <span className="font-bold">{selectedSecurityAppName}</span>{" "}
+                  has the following security compliance issues:
+                </p>
+                <ul className="space-y-2 text-xs bg-amber-50/50 p-3 rounded-lg border border-amber-200/60 max-h-60 overflow-y-auto">
+                  {getAppSecurityWarnings(selectedSecurityAppName).map(
+                    (warn) => (
+                      <li
+                        key={warn.id}
+                        className="flex items-center justify-between p-2 rounded bg-white border border-amber-200/80 shadow-2xs"
+                      >
+                        <div className="flex items-start text-amber-900 pr-2">
+                          <span className="mr-2 text-amber-600 font-bold">
+                            •
+                          </span>
+                          <span>{warn.message}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleFixSpecificIssueForApp(
+                              selectedSecurityAppName,
+                              warn.id
+                            )
+                          }
+                          className="px-2.5 py-1 text-[11px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded transition-colors flex-shrink-0 flex items-center"
+                        >
+                          <CheckCircleIcon className="h-3.5 w-3.5 mr-1 text-blue-600 inline-block" />
+                          Fix
+                        </button>
+                      </li>
+                    )
+                  )}
+                </ul>
+
+                <p className="text-xs text-gray-500 leading-relaxed bg-blue-50/60 p-3 rounded-lg border border-blue-100">
+                  💡 Use the{" "}
+                  <span className="font-semibold text-blue-900">Fix</span>{" "}
+                  button next to any issue to resolve it individually, or click{" "}
+                  <span className="font-semibold text-blue-900">
+                    Fix All & Deploy
+                  </span>{" "}
+                  to apply all security fixes at once.
+                </p>
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between px-6 py-4 bg-gray-50 border-t border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSecurityOverviewModal(false);
+                    handleOpenEditModal(selectedSecurityAppName);
+                  }}
+                  className="px-3.5 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors shadow-sm"
+                >
+                  Edit Manually
+                </button>
+                <div className="flex space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowSecurityOverviewModal(false)}
+                    className="px-3.5 py-2 text-xs font-medium text-gray-600 hover:text-gray-800"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAutoFixForApp(selectedSecurityAppName)}
+                    className="px-4 py-2 text-xs font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-sm flex items-center"
+                  >
+                    <CheckCircleIcon className="h-4 w-4 mr-1.5" />
+                    Fix All & Deploy
+                  </button>
+                </div>
               </div>
             </div>
           </div>

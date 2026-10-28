@@ -1,0 +1,48 @@
+FROM python:3.11-slim-bookworm
+
+LABEL maintainer="EOXHub Workspaces <support@eox.at>" \
+      description="Gitargo CWL Runner container with Docker CLI and cwltool"
+
+# Install required system packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    git \
+    tar \
+    gzip \
+    procps \
+    bash \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI static binary for DinD / Docker daemon communication
+RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-24.0.7.tgz | tar -xz -C /tmp \
+ && mv /tmp/docker/docker /usr/local/bin/ \
+ && chmod +x /usr/local/bin/docker \
+ && rm -rf /tmp/docker
+
+# Create unprivileged non-root user (UID 1000)
+RUN useradd -m -u 1000 -s /bin/bash runner \
+ && mkdir -p /workspace /tmp/runner /tmp/inputs \
+ && chown -R runner:runner /home/runner /workspace /tmp/runner /tmp/inputs
+
+USER runner
+WORKDIR /home/runner
+
+ENV PATH="/home/runner/.local/bin:${PATH}" \
+    DOCKER_HOST="tcp://127.0.0.1:2375" \
+    DOCKER_TLS_CERTDIR="" \
+    NO_COLOR="1" \
+    CLICOLOR="0" \
+    ANSI_COLORS_DISABLED="1"
+
+# Pre-install cwltool, boto3, and pyyaml
+RUN pip install --no-cache-dir \
+    cwltool \
+    boto3 \
+    pyyaml \
+    requests
+
+WORKDIR /workspace
+
+# Entrypoint default verification
+CMD ["cwltool", "--version"]
