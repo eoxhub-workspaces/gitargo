@@ -1,13 +1,13 @@
 {
   "name": "gitargo-root",
-  "version": "0.5.0-dev.5",
+  "version": "0.5.0",
   "private": true,
   "scripts": {
     "start": "concurrently \"npm run start:api\" \"npm run start:ui\"",
     "start:api": "cd services/api && npm install && node server.js",
     "start:ui": "cd services/ui && PORT=3001 npm start",
     "install:all": "cd services/api && npm install && cd ../ui && npm install",
-    "version": "node -e \"const v = require('./package.json').version; ['services/api/package.json', 'services/ui/package.json'].forEach(f => { const p = require('./' + f); p.version = v; require('fs').writeFileSync(f, JSON.stringify(p, null, 2) + '\\n'); });\" && git add services/api/package*.json services/ui/package*.json"
+    "version": "node -e \"const fs = require('fs'); const v = process.env.npm_package_version || JSON.parse(fs.readFileSync('./package.json', 'utf8')).version; ['services/api/package.json', 'services/ui/package.json', 'services/api/package-lock.json', 'services/ui/package-lock.json'].forEach(f => { if (fs.existsSync(f)) { const p = JSON.parse(fs.readFileSync(f, 'utf8')); p.version = v; if (p.packages && p.packages['']) p.packages[''].version = v; fs.writeFileSync(f, JSON.stringify(p, null, 2) + '\\n'); } });\" && git add package.json services/api/package*.json services/ui/package*.json"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
