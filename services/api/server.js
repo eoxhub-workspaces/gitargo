@@ -3835,39 +3835,31 @@ if (BASE_PATH !== "") {
 
 // Basic error handler
 app.use((err, req, res, next) => {
-  // If this is an auth error from requiresAuth and we're on an API route
-  if (err.status === 401 || err.statusCode === 401) {
-    return res.status(401).json({ 
-      message: 'Authentication Required',
-      loginUrl: `${BASE_PATH}/login` 
-    });
-  }
+  console.error(err.stack || err.message);
 
-  console.error(err.stack);
-
-  // Check if this error originated from the GitLab Axios client
-  const isGitLabError = err.config && (
+  // Check if this error originated from an external Axios request (e.g. GitLab API client)
+  const isAxiosOrGitLabError = axios.isAxiosError(err) || (err.config && (
     err.config.headers?.['PRIVATE-TOKEN'] || 
-    (err.config.url && err.config.url.includes('/projects/')) ||
+    (err.config.url && (err.config.url.includes('/projects/') || err.config.url.includes('/api/v4'))) ||
     (err.config.baseURL && err.config.baseURL.includes('/api/v4'))
-  );
+  ));
 
-  if (isGitLabError) {
+  if (isAxiosOrGitLabError) {
     let status = 502; // Use 502 Bad Gateway to signal backend integration failure
-    let customMessage = "An error occurred while communicating with GitLab.";
+    let customMessage = "An error occurred while communicating with an external service.";
 
     if (err.response) {
       const gitlabStatus = err.response.status;
       if (gitlabStatus === 401) {
-        customMessage = "GitLab Authentication Failed: The configured GITLAB_TOKEN is invalid, expired, or does not have access rights.";
+        customMessage = `GitLab Authentication Failed: The configured GITLAB_TOKEN is invalid, expired, or does not have access rights for project "${process.env.GITLAB_PROJECT_ID || ''}".`;
       } else if (gitlabStatus === 403) {
         customMessage = "GitLab Access Forbidden: The configured GITLAB_TOKEN does not have permissions for the project/repository.";
       } else if (gitlabStatus === 404) {
-        customMessage = `GitLab Resource Not Found: The configured GITLAB_PROJECT_ID ("${process.env.GITLAB_PROJECT_ID}") or branch ("${process.env.GITLAB_BRANCH}") could not be found.`;
+        customMessage = `GitLab Resource Not Found: The configured GITLAB_PROJECT_ID ("${process.env.GITLAB_PROJECT_ID || ''}") or branch ("${process.env.GITLAB_BRANCH || ''}") could not be found.`;
       } else {
-        customMessage = `GitLab Error (${gitlabStatus}): ${err.response.data?.message || err.response.data?.error || err.message}`;
+        customMessage = `GitLab Integration Error (${gitlabStatus}): ${err.response.data?.message || err.response.data?.error || err.message}`;
       }
-    } else if (err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED' || err.message.includes('getaddrinfo')) {
+    } else if (err.code === 'ENOTFOUND' || err.code === 'ECONNREFUSED' || (err.message && err.message.includes('getaddrinfo'))) {
       customMessage = `GitLab Unreachable: Failed to resolve or connect to GITLAB_URL ("${process.env.GITLAB_URL || 'https://gitlab.com'}"). Please check your network and configuration.`;
     } else {
       customMessage = `GitLab Connection Error: ${err.message}`;
@@ -3879,7 +3871,15 @@ app.use((err, req, res, next) => {
     });
   }
 
-  const status = err.response ? err.response.status : 500;
+  // If this is an auth error from internal authentication middleware and we're on an API route
+  if (err.status === 401 || err.statusCode === 401) {
+    return res.status(401).json({ 
+      message: 'Authentication Required',
+      loginUrl: `${BASE_PATH}/login` 
+    });
+  }
+
+  const status = err.response ? err.response.status : (err.status || err.statusCode || 500);
   const message = err.response ? err.response.data : { message: err.message };
   res.status(status).json(message);
 });
