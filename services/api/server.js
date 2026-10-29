@@ -11,6 +11,7 @@ const tar = require('tar-stream');
 const zlib = require('zlib');
 
 const app = express();
+app.set('trust proxy', true);
 const PORT = process.env.PORT || 3000;
 
 // Environment variables
@@ -107,7 +108,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Workspace-Group', 'X-Auth-Request-Group', 'X-Requested-With']
 }));
 app.use(express.json());
 
@@ -140,9 +141,15 @@ app.use((req, res, next) => {
 // Helper to decode JWT payload without verification (for logging claims only)
 function decodeJwt(token) {
   try {
-    const parts = token.split('.');
+    if (!token || typeof token !== 'string') return null;
+    let cleanToken = token.trim();
+    if (cleanToken.startsWith('Bearer ')) cleanToken = cleanToken.substring(7);
+    try {
+      if (cleanToken.includes('%')) cleanToken = decodeURIComponent(cleanToken);
+    } catch (e) {}
+    const parts = cleanToken.split('.');
     if (parts.length !== 3) return null;
-    const payload = Buffer.from(parts[1], 'base64').toString();
+    const payload = Buffer.from(parts[1], 'base64').toString('utf8');
     return JSON.parse(payload);
   } catch (e) {
     return null;
@@ -157,12 +164,24 @@ app.use((req, res, next) => {
   if (authHeader && authHeader.startsWith('Bearer ')) {
     token = authHeader.substring(7);
   } else if (req.headers.cookie) {
-    const cookies = req.headers.cookie.split(';').reduce((acc, cookie) => {
-      const [key, value] = cookie.trim().split('=');
-      acc[key] = value;
-      return acc;
-    }, {});
-    token = cookies['access_token'] || cookies['id_token'] || cookies['appSession'];
+    const cookies = {};
+    req.headers.cookie.split(';').forEach(cookieStr => {
+      const eqIdx = cookieStr.indexOf('=');
+      if (eqIdx !== -1) {
+        const key = cookieStr.substring(0, eqIdx).trim();
+        const value = cookieStr.substring(eqIdx + 1).trim();
+        cookies[key] = value;
+      }
+    });
+    token = cookies['access_token'] ||
+            cookies['id_token'] ||
+            cookies['appSession'] ||
+            cookies['_oauth2_proxy'] ||
+            cookies['session'] ||
+            cookies['token'] ||
+            cookies['_forward_auth'] ||
+            cookies['authentik_session'] ||
+            cookies['authorization'];
   }
 
   if (token) {
@@ -494,15 +513,31 @@ function getUsername(req) {
   if (!req) return null;
   let rawUser = null;
   if (req.user) {
-    rawUser = req.user.preferred_username || req.user.nickname || req.user.name || req.user.email || req.user.sub;
+    rawUser = req.user.preferred_username ||
+              req.user.nickname ||
+              req.user.name ||
+              req.user.email ||
+              req.user.sub ||
+              req.user.username ||
+              req.user.upn ||
+              req.user.unique_name;
   }
   if (!rawUser && req.headers && typeof req.headers === 'object') {
     rawUser = req.headers['x-authentik-username'] ||
               req.headers['x-preferred-username'] ||
               req.headers['x-user-claim-preferred-username'] ||
+              req.headers['x-auth-request-preferred-username'] ||
               req.headers['x-auth-request-user'] ||
+              req.headers['x-auth-request-email'] ||
+              req.headers['x-forwarded-preferred-username'] ||
               req.headers['x-forwarded-user'] ||
-              req.headers['x-oauth2-proxy-user'];
+              req.headers['x-forwarded-email'] ||
+              req.headers['x-oauth2-proxy-user'] ||
+              req.headers['x-oauth2-proxy-email'] ||
+              req.headers['x-remote-user'] ||
+              req.headers['x-user'] ||
+              req.headers['x-username'] ||
+              req.headers['remote-user'];
   }
   return rawUser ? String(rawUser).trim() : null;
 }
@@ -522,7 +557,7 @@ function getCandidateUsernames(req) {
   }
 
   if (req.user) {
-    ['preferred_username', 'nickname', 'name', 'email', 'sub'].forEach(k => {
+    ['preferred_username', 'nickname', 'name', 'email', 'sub', 'username', 'upn', 'unique_name'].forEach(k => {
       const val = req.user[k];
       if (val && typeof val === 'string') {
         usernames.add(val);
@@ -537,7 +572,23 @@ function getCandidateUsernames(req) {
   }
 
   if (req.headers && typeof req.headers === 'object') {
-    ['x-authentik-username', 'x-preferred-username', 'x-user-claim-preferred-username', 'x-auth-request-user', 'x-forwarded-user', 'x-oauth2-proxy-user'].forEach(h => {
+    [
+      'x-authentik-username',
+      'x-preferred-username',
+      'x-user-claim-preferred-username',
+      'x-auth-request-preferred-username',
+      'x-auth-request-user',
+      'x-auth-request-email',
+      'x-forwarded-preferred-username',
+      'x-forwarded-user',
+      'x-forwarded-email',
+      'x-oauth2-proxy-user',
+      'x-oauth2-proxy-email',
+      'x-remote-user',
+      'x-user',
+      'x-username',
+      'remote-user'
+    ].forEach(h => {
       const val = req.headers[h];
       if (val && typeof val === 'string') {
         usernames.add(val);
@@ -3845,8 +3896,9 @@ process.on('uncaughtException', (err) => {
 
 // --- 5. SERVER START ---
 
-const server = app.listen(PORT, '::', () => {
-  console.log(`Server is running on port ${PORT}`);
+const HOST = process.env.HOST || '::';
+const server = app.listen(PORT, HOST, () => {
+  console.log(`Server is running on ${HOST}:${PORT}`);
 });
 
 // Handle graceful shutdown
