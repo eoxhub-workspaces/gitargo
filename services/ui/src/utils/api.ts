@@ -293,6 +293,13 @@ export interface ApplicationYamls {
   ingress?: string;
 }
 
+export interface PodWarningEvent {
+  reason: string;
+  message: string;
+  count?: number;
+  lastTimestamp?: string;
+}
+
 export interface ApplicationStatus {
   name: string;
   deployed: boolean;
@@ -322,6 +329,8 @@ export interface ApplicationStatus {
     restarts: number;
     age: string;
     containerStatus: Array<{ name: string; ready: boolean; state: any }>;
+    events?: PodWarningEvent[];
+    lastWarning?: string;
   }>;
   vulnerabilities?: Array<{
     container: string;

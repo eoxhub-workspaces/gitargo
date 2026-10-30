@@ -2890,17 +2890,47 @@ apiRouter.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, asy
         }
       }
 
-      pods = Array.from(podMap.values()).map(p => ({
-        name: p.metadata?.name,
-        phase: p.status?.phase,
-        restarts: p.status?.containerStatuses?.reduce((acc, c) => acc + (c.restartCount || 0), 0) || 0,
-        age: p.metadata?.creationTimestamp,
-        containerStatus: p.status?.containerStatuses?.map(c => ({
-          name: c.name,
-          ready: c.ready,
-          state: c.state
-        })) || []
-      }));
+      let k8sEvents = [];
+      try {
+        const eventsRes = await coreV1Api.listNamespacedEvent({ namespace });
+        k8sEvents = eventsRes.body?.items || eventsRes.items || [];
+      } catch (e) {
+        // Ignore if events listing is not permitted
+      }
+
+      pods = Array.from(podMap.values()).map(p => {
+        const pName = p.metadata?.name;
+        const pUid = p.metadata?.uid;
+
+        const podEvents = k8sEvents.filter(e => {
+          const inv = e.involvedObject || {};
+          return inv.name === pName || (pUid && inv.uid === pUid);
+        });
+
+        const warnings = podEvents
+          .filter(e => e.type === 'Warning' || (e.reason && (e.reason.includes('Failed') || e.reason.includes('Error') || e.reason.includes('Unscheduled') || e.reason.includes('BackOff'))))
+          .sort((a, b) => new Date(b.lastTimestamp || b.eventTime || b.metadata?.creationTimestamp || 0).getTime() - new Date(a.lastTimestamp || a.eventTime || a.metadata?.creationTimestamp || 0).getTime())
+          .map(e => ({
+            reason: e.reason,
+            message: e.message,
+            count: e.count || 1,
+            lastTimestamp: e.lastTimestamp || e.eventTime || e.metadata?.creationTimestamp
+          }));
+
+        return {
+          name: pName,
+          phase: p.status?.phase,
+          restarts: p.status?.containerStatuses?.reduce((acc, c) => acc + (c.restartCount || 0), 0) || 0,
+          age: p.metadata?.creationTimestamp,
+          containerStatus: p.status?.containerStatuses?.map(c => ({
+            name: c.name,
+            ready: c.ready,
+            state: c.state
+          })) || [],
+          events: warnings.length > 0 ? warnings : undefined,
+          lastWarning: warnings.length > 0 ? warnings[0].message : undefined
+        };
+      });
     } catch (err) {
       console.error("Failed to list pods from K8s:", err.message);
     }
@@ -3429,17 +3459,47 @@ apiRouter.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, asy
         }
       }
 
-      pods = Array.from(podMap.values()).map(p => ({
-        name: p.metadata?.name,
-        phase: p.status?.phase,
-        restarts: p.status?.containerStatuses?.reduce((acc, c) => acc + (c.restartCount || 0), 0) || 0,
-        age: p.metadata?.creationTimestamp,
-        containerStatus: p.status?.containerStatuses?.map(c => ({
-          name: c.name,
-          ready: c.ready,
-          state: c.state
-        })) || []
-      }));
+      let k8sEvents = [];
+      try {
+        const eventsRes = await coreV1Api.listNamespacedEvent({ namespace });
+        k8sEvents = eventsRes.body?.items || eventsRes.items || [];
+      } catch (e) {
+        // Ignore if events listing is not permitted
+      }
+
+      pods = Array.from(podMap.values()).map(p => {
+        const pName = p.metadata?.name;
+        const pUid = p.metadata?.uid;
+
+        const podEvents = k8sEvents.filter(e => {
+          const inv = e.involvedObject || {};
+          return inv.name === pName || (pUid && inv.uid === pUid);
+        });
+
+        const warnings = podEvents
+          .filter(e => e.type === 'Warning' || (e.reason && (e.reason.includes('Failed') || e.reason.includes('Error') || e.reason.includes('Unscheduled') || e.reason.includes('BackOff'))))
+          .sort((a, b) => new Date(b.lastTimestamp || b.eventTime || b.metadata?.creationTimestamp || 0).getTime() - new Date(a.lastTimestamp || a.eventTime || a.metadata?.creationTimestamp || 0).getTime())
+          .map(e => ({
+            reason: e.reason,
+            message: e.message,
+            count: e.count || 1,
+            lastTimestamp: e.lastTimestamp || e.eventTime || e.metadata?.creationTimestamp
+          }));
+
+        return {
+          name: pName,
+          phase: p.status?.phase,
+          restarts: p.status?.containerStatuses?.reduce((acc, c) => acc + (c.restartCount || 0), 0) || 0,
+          age: p.metadata?.creationTimestamp,
+          containerStatus: p.status?.containerStatuses?.map(c => ({
+            name: c.name,
+            ready: c.ready,
+            state: c.state
+          })) || [],
+          events: warnings.length > 0 ? warnings : undefined,
+          lastWarning: warnings.length > 0 ? warnings[0].message : undefined
+        };
+      });
     } catch (err) {
       console.error("Failed to list pods from K8s:", err.message);
     }

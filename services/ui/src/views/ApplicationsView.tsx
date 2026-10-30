@@ -2366,6 +2366,18 @@ const ApplicationsView: React.FC = () => {
                                   })}
                                 </div>
                               )}
+
+                            {pod.lastWarning && (
+                              <div className="mt-2 p-2.5 bg-red-50/90 border border-red-200 rounded text-xs text-red-800 space-y-1">
+                                <div className="font-bold flex items-center text-red-900">
+                                  <ExclamationTriangleIcon className="h-4 w-4 mr-1.5 text-red-600 flex-shrink-0" />
+                                  Kubernetes Event Warning
+                                </div>
+                                <div className="text-red-700 font-mono text-[11px] leading-relaxed break-words bg-white/70 p-2 rounded border border-red-100 select-text">
+                                  {pod.lastWarning}
+                                </div>
+                              </div>
+                            )}
                           </div>
                           <div className="flex space-x-2">
                             <button
