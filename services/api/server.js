@@ -467,15 +467,13 @@ apiRouter.use((req, res, next) => {
   next();
 });
 
-let APP_VERSION = process.env.APP_VERSION || "0.4.1";
-try {
-  const apiPkg = require("./package.json");
-  if (apiPkg && apiPkg.version) APP_VERSION = apiPkg.version;
-} catch (e) {
+let APP_VERSION = process.env.APP_VERSION;
+if (!APP_VERSION) {
   try {
-    const rootPkg = require("../../package.json");
-    if (rootPkg && rootPkg.version) APP_VERSION = rootPkg.version;
-  } catch (err) {}
+    APP_VERSION = require("./package.json").version;
+  } catch (e) {
+    APP_VERSION = null;
+  }
 }
 
 /**

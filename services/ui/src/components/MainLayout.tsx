@@ -108,9 +108,11 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </nav>
       )}
       <div className="flex-1 bg-gray-50">{children}</div>
-      <div className="fixed bottom-1 right-2 text-[10px] font-mono text-gray-400 opacity-60 hover:opacity-100 transition-opacity select-none pointer-events-none z-50">
-        v{version || "0.4.1"}
-      </div>
+      {version && (
+        <div className="fixed bottom-1 right-2 text-[10px] font-mono text-gray-400 opacity-60 hover:opacity-100 transition-opacity select-none pointer-events-none z-50">
+          v{version}
+        </div>
+      )}
     </div>
   );
 };
