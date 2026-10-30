@@ -283,6 +283,8 @@ export const restoreWorkflow = async (path: string) => {
 export interface Application {
   name: string;
   files: string[];
+  folder?: string;
+  component?: string;
 }
 
 export interface ApplicationYamls {
@@ -349,7 +351,9 @@ export const getApplications = async (): Promise<Application[]> => {
 export const getApplication = async (
   name: string
 ): Promise<ApplicationYamls> => {
-  const response = await api.get<ApplicationYamls>(`/applications/${name}`);
+  const response = await api.get<ApplicationYamls>(
+    `/applications/${encodeURIComponent(name)}`
+  );
   return response.data;
 };
 
@@ -358,7 +362,7 @@ export const createApplication = async (
   yamls: ApplicationYamls,
   commitMessage?: string
 ) => {
-  const response = await api.post(`/applications/${name}`, {
+  const response = await api.post(`/applications/${encodeURIComponent(name)}`, {
     ...yamls,
     commit_message: commitMessage
   });
@@ -370,7 +374,7 @@ export const updateApplication = async (
   yamls: ApplicationYamls,
   commitMessage?: string
 ) => {
-  const response = await api.put(`/applications/${name}`, {
+  const response = await api.put(`/applications/${encodeURIComponent(name)}`, {
     ...yamls,
     commit_message: commitMessage
   });
@@ -378,7 +382,7 @@ export const updateApplication = async (
 };
 
 export const deleteApplication = async (name: string) => {
-  const response = await api.delete(`/applications/${name}`);
+  const response = await api.delete(`/applications/${encodeURIComponent(name)}`);
   return response.data;
 };
 
@@ -386,7 +390,7 @@ export const getApplicationStatus = async (
   name: string
 ): Promise<ApplicationStatus> => {
   const response = await api.get<ApplicationStatus>(
-    `/applications/${name}/status`
+    `/applications/${encodeURIComponent(name)}/status`
   );
   return response.data;
 };
@@ -395,7 +399,11 @@ export const deleteApplicationPod = async (
   appName: string,
   podName: string
 ) => {
-  const response = await api.delete(`/applications/${appName}/pods/${podName}`);
+  const response = await api.delete(
+    `/applications/${encodeURIComponent(appName)}/pods/${encodeURIComponent(
+      podName
+    )}`
+  );
   return response.data;
 };
 

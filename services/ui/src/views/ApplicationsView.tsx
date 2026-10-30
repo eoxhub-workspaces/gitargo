@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   CpuChipIcon,
   PlusIcon,
@@ -9,7 +9,9 @@ import {
   XMarkIcon,
   EyeIcon,
   ExclamationTriangleIcon,
-  CheckCircleIcon
+  CheckCircleIcon,
+  ChevronDownIcon,
+  ChevronRightIcon
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import Editor from "@monaco-editor/react";
@@ -556,6 +558,18 @@ const ApplicationsView: React.FC = () => {
   const [annAllowAnon, setAnnAllowAnon] = useState(false);
   const [annStopUnused, setAnnStopUnused] = useState(false);
 
+  // Multi-component application breakdown expansion state
+  const [expandedMultiApps, setExpandedMultiApps] = useState<
+    Record<string, boolean>
+  >({});
+
+  const toggleMultiAppExpanded = (appName: string) => {
+    setExpandedMultiApps((prev) => ({
+      ...prev,
+      [appName]: !prev[appName]
+    }));
+  };
+
   // YAML input states for Expert mode
   const [yamlDeployment, setYamlDeployment] = useState("");
   const [yamlService, setYamlService] = useState("");
@@ -564,7 +578,11 @@ const ApplicationsView: React.FC = () => {
     "deployment" | "service" | "ingress"
   >("deployment");
 
+  const isFetchingRef = useRef(false);
+
   const loadData = async () => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
     try {
       setRefreshing(true);
       const [applications, appConfig] = await Promise.all([
@@ -574,70 +592,51 @@ const ApplicationsView: React.FC = () => {
       setApps(applications);
       setConfig(appConfig);
 
-      // Fetch status for each application
-      const statusPromises = applications.map((app) =>
-        getApplicationStatus(app.name)
-          .then((status) => ({ name: app.name, status }))
-          .catch((err) => {
-            console.error(`Error loading status for ${app.name}`, err);
-            return { name: app.name, status: null };
-          })
-      );
-
-      // Fetch YAML for each application
-      const yamlPromises = applications.map((app) =>
-        getApplication(app.name)
-          .then((yamls) => ({ name: app.name, yamls }))
-          .catch((err) => {
-            console.error(`Error loading YAML for ${app.name}`, err);
-            return { name: app.name, yamls: null };
-          })
-      );
-
-      const [statusResults, yamlResults] = await Promise.all([
-        Promise.all(statusPromises),
-        Promise.all(yamlPromises)
-      ]);
-
+      // Fetch statuses in small concurrency batches (3 at a time)
       const newStatuses: Record<string, ApplicationStatus> = {};
-      for (const res of statusResults) {
-        if (res.status) {
-          newStatuses[res.name] = res.status;
-        }
+      const batchSize = 3;
+      for (let i = 0; i < applications.length; i += batchSize) {
+        const batch = applications.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(async (app) => {
+            try {
+              const status = await getApplicationStatus(app.name);
+              if (status) newStatuses[app.name] = status;
+            } catch (err) {
+              console.error(`Error loading status for ${app.name}`, err);
+            }
+          })
+        );
       }
-      setStatuses(newStatuses);
-
-      const newYamls: Record<string, ApplicationYamls> = {};
-      for (const res of yamlResults) {
-        if (res.yamls) {
-          newYamls[res.name] = res.yamls;
-        }
-      }
-      setAppYamls(newYamls);
+      setStatuses((prev) => ({ ...prev, ...newStatuses }));
     } catch (err: any) {
       toast.error("Failed to fetch applications list: " + err.message);
     } finally {
       setLoading(false);
       setRefreshing(false);
+      isFetchingRef.current = false;
     }
   };
 
   useEffect(() => {
     loadData();
-    // Poll status every 10 seconds
-    const interval = setInterval(() => {
-      if (apps.length > 0) {
-        apps.forEach((app) => {
-          getApplicationStatus(app.name)
-            .then((status) => {
+    // Poll status every 15 seconds sequentially
+    const interval = setInterval(async () => {
+      if (apps.length > 0 && !isFetchingRef.current) {
+        for (const app of apps) {
+          try {
+            const status = await getApplicationStatus(app.name);
+            if (status) {
               setStatuses((prev) => ({ ...prev, [app.name]: status }));
-            })
-            .catch(() => {});
-        });
+            }
+          } catch (err) {
+            // Ignore background polling errors
+          }
+        }
       }
-    }, 10000);
+    }, 15000);
     return () => clearInterval(interval);
-  }, [apps.length]);
+  }, []);
 
   const handleOpenNewModal = () => {
     setIsEditing(false);
@@ -1390,7 +1389,7 @@ const ApplicationsView: React.FC = () => {
   };
 
   return (
-    <div className="max-w-[96%] max-w-[1600px] mx-auto py-6 sm:px-6 lg:px-8">
+    <div className="w-full max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
       {/* View Header */}
       <div className="flex justify-between items-center px-4 sm:px-0 mb-6">
         <div>
@@ -1492,8 +1491,13 @@ const ApplicationsView: React.FC = () => {
                         <CpuChipIcon className="h-6 w-6" />
                       </div>
                       <div className="ml-4 min-w-0 flex-1">
-                        <div className="text-sm font-semibold text-gray-900 break-words">
-                          {app.name}
+                        <div className="text-sm font-semibold text-gray-900 break-words flex items-center flex-wrap gap-1">
+                          <span>{app.name}</span>
+                          {app.component && (
+                            <span className="px-2 py-0.5 text-[10px] font-semibold rounded bg-purple-50 text-purple-700 border border-purple-200">
+                              Component: {app.component}
+                            </span>
+                          )}
                         </div>
                         {!isAppDisabled(app.name) &&
                           getIngressUrls(app.name).length > 0 && (
@@ -1527,13 +1531,13 @@ const ApplicationsView: React.FC = () => {
                             </div>
                           )}
                         <div className="text-xs text-gray-400 truncate">
-                          Folder: applications/{app.name}
+                          Folder: applications/{app.folder || app.name}
                         </div>
                       </div>
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex space-x-1.5">
+                    <div className="flex flex-wrap gap-1 max-w-xs">
                       {app.files.map((file) => (
                         <span
                           key={file}

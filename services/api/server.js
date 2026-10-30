@@ -648,7 +648,12 @@ function getGitLabPackagesPath(virtualPath, req = null) {
 
 // Helper to extract virtual path from req.params under both Express 4 and Express 5, and under both string wildcards and RegExp routes
 function getVirtualPath(req) {
-  return req.params[0] || (Array.isArray(req.params.path) ? req.params.path.join('/') : String(req.params.path || ''));
+  const raw = req.params[0] || (Array.isArray(req.params.path) ? req.params.path.join('/') : String(req.params.path || ''));
+  try {
+    return decodeURIComponent(raw);
+  } catch (e) {
+    return raw;
+  }
 }
 
 /**
@@ -2660,6 +2665,37 @@ const validateAndSanitizeAppYaml = (appName, content, fileType) => {
   return sanitizedDocs.join("\n---\n");
 };
 
+// Helper to parse filename into component name and resource type
+function parseAppFilename(filename) {
+  const match = filename.match(/^(?:(.*)[-._])?(deployment|service|ingress)\.ya?ml$/i);
+  if (!match) return null;
+  const comp = match[1] ? match[1].trim().toLowerCase() : "";
+  const type = match[2].toLowerCase();
+  return { comp, type };
+}
+
+// Helper to resolve an app name (e.g. "my-folder/web" or "my-app") into folder and prefix
+function resolveAppLocation(appName) {
+  if (!appName) return { folder: "", prefix: "" };
+  const parts = appName.split('/');
+  if (parts.length >= 2) {
+    return {
+      folder: parts[0],
+      prefix: parts.slice(1).join('/')
+    };
+  }
+  return {
+    folder: appName,
+    prefix: ""
+  };
+}
+
+// Helper to construct filename for a given prefix and resource type (e.g. "web-deployment.yaml")
+function getAppFilename(prefix, type) {
+  if (!prefix) return `${type}.yaml`;
+  return `${prefix}-${type}.yaml`;
+}
+
 apiRouter.get("/applications", requiresApplicationsEnabled, async (req, res, next) => {
   try {
     const response = await gitlabApi.get(
@@ -2669,30 +2705,47 @@ apiRouter.get("/applications", requiresApplicationsEnabled, async (req, res, nex
           path: GITLAB_APPLICATIONS_PATH,
           ref: GITLAB_BRANCH,
           recursive: true,
-          per_page: 100
+          per_page: 200
         }
       }
     );
 
-    const apps = {};
+    const appsMap = {};
     for (const file of response.data) {
       if (file.type === "blob" && file.path.startsWith(GITLAB_APPLICATIONS_PATH + "/")) {
         const relativePath = file.path.slice(GITLAB_APPLICATIONS_PATH.length + 1);
         const parts = relativePath.split('/');
         if (parts.length === 2) {
-          const appName = parts[0];
+          const folderName = parts[0];
           const filename = parts[1];
-          if (["service.yaml", "deployment.yaml", "ingress.yaml"].includes(filename)) {
-            if (!apps[appName]) {
-              apps[appName] = { name: appName, files: [] };
+          const parsed = parseAppFilename(filename);
+          if (parsed) {
+            const comp = parsed.comp;
+            const appKey = comp ? `${folderName}/${comp}` : folderName;
+            if (!appsMap[appKey]) {
+              appsMap[appKey] = {
+                name: appKey,
+                folder: folderName,
+                component: comp,
+                files: [],
+                hasDeployment: false
+              };
             }
-            apps[appName].files.push(filename);
+            appsMap[appKey].files.push(filename);
+            if (parsed.type === "deployment") {
+              appsMap[appKey].hasDeployment = true;
+            }
           }
         }
       }
     }
 
-    res.json(Object.values(apps));
+    // Only return application entries that possess a deployment YAML file
+    const validApps = Object.values(appsMap)
+      .filter(app => app.hasDeployment)
+      .map(({ hasDeployment, ...app }) => app);
+
+    res.json(validApps);
   } catch (error) {
     if (error.response && error.response.status === 404) {
       return res.json([]);
@@ -2701,26 +2754,285 @@ apiRouter.get("/applications", requiresApplicationsEnabled, async (req, res, nex
   }
 });
 
-apiRouter.get("/applications/:name", requiresApplicationsEnabled, async (req, res, next) => {
+// Helper to detect 404 Not Found errors across all @kubernetes/client-node error formats
+function isK8sNotFoundError(err) {
+  if (!err) return false;
+  return (
+    err.statusCode === 404 ||
+    err.code === 404 ||
+    err.response?.statusCode === 404 ||
+    err.response?.body?.code === 404 ||
+    (typeof err.body === 'string' && err.body.includes('"code":404')) ||
+    (typeof err.message === 'string' && (err.message.includes('not found') || err.message.includes('HTTP-Code: 404')))
+  );
+}
+
+// GET /api/applications/:appName/status
+apiRouter.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, async (req, res, next) => {
   try {
-    const { name } = req.params;
-    const files = ["deployment.yaml", "service.yaml"];
+    const appName = getVirtualPath(req);
+    const { folder, prefix } = resolveAppLocation(appName);
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+
+    // Read deployment YAML from Git to determine exact metadata.name, metadata.namespace & spec.selector.matchLabels
+    let targetK8sName = prefix || folder;
+    const depFile = getAppFilename(prefix, "deployment");
+    const filePath = `${GITLAB_APPLICATIONS_PATH}/${folder}/${depFile}`;
+    try {
+      const rawResponse = await gitlabApi.get(
+        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
+        { params: { ref: GITLAB_BRANCH } }
+      );
+      const parsed = YAML.parse(rawResponse.data);
+      if (parsed?.metadata?.name) {
+        targetK8sName = parsed.metadata.name;
+      }
+      if (parsed?.metadata?.namespace) {
+        namespace = parsed.metadata.namespace;
+      }
+    } catch (err) {
+      // Ignore
+    }
+
+    let deploymentStatus = null;
+    let deploymentMatchLabels = null;
+    try {
+      const depResponse = await appsV1Api.readNamespacedDeployment({ name: targetK8sName, namespace });
+      const d = depResponse.body || depResponse;
+      deploymentMatchLabels = d.spec?.selector?.matchLabels || null;
+      deploymentStatus = {
+        replicas: d.status?.replicas || 0,
+        readyReplicas: d.status?.readyReplicas || 0,
+        availableReplicas: d.status?.availableReplicas || 0,
+        conditions: d.spec?.replicas === 0 ? [{ type: "ScaledToZero", status: "True", message: "Application is scaled to zero." }] : (d.status?.conditions || [])
+      };
+    } catch (err) {
+      if (!isK8sNotFoundError(err)) {
+        console.error(`Failed to read deployment "${targetK8sName}" from K8s:`, err.message || err);
+      }
+    }
+
+    let serviceStatus = null;
+    try {
+      const svcResponse = await coreV1Api.readNamespacedService({ name: targetK8sName, namespace });
+      const s = svcResponse.body || svcResponse;
+      serviceStatus = {
+        type: s.spec?.type,
+        clusterIP: s.spec?.clusterIP,
+        ports: s.spec?.ports || []
+      };
+    } catch (err) {
+      // 404 is expected if not reconciled
+    }
+
+    let ingressStatus = null;
+    try {
+      const ingResponse = await networkingV1Api.readNamespacedIngress({ name: targetK8sName, namespace });
+      const ing = ingResponse.body || ingResponse;
+      const lb = ing.status?.loadBalancer?.ingress || [];
+      const hasRules = ing.spec?.rules && ing.spec.rules.length > 0;
+      const isIngressReady = (lb.length > 0 && (lb[0].ip || lb[0].hostname)) || hasRules;
+
+      ingressStatus = {
+        ready: !!isIngressReady,
+        loadBalancer: lb
+      };
+    } catch (err) {
+      // 404 is expected if ingress doesn't exist
+    }
+
+    let pods = [];
+    try {
+      let labelSelectors = [];
+      if (deploymentMatchLabels && Object.keys(deploymentMatchLabels).length > 0) {
+        const sel = Object.entries(deploymentMatchLabels)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(",");
+        labelSelectors.push(sel);
+      } else {
+        labelSelectors = [
+          `app.kubernetes.io/service=${targetK8sName}`,
+          `app.kubernetes.io/name=${targetK8sName}`,
+          `app.kubernetes.io/instance=${targetK8sName}`,
+          `app=${targetK8sName}`
+        ];
+      }
+
+      const podPromises = labelSelectors.map(labelSelector =>
+        coreV1Api.listNamespacedPod({ namespace, labelSelector })
+          .then(res => res.body?.items || res.items || [])
+          .catch(() => [])
+      );
+
+      const results = await Promise.all(podPromises);
+      const podMap = new Map();
+
+      for (const items of results) {
+        for (const p of items) {
+          if (p.metadata?.name && !podMap.has(p.metadata.name)) {
+            podMap.set(p.metadata.name, p);
+          }
+        }
+      }
+
+      if (podMap.size === 0) {
+        try {
+          const allPodsRes = await coreV1Api.listNamespacedPod({ namespace });
+          const allItems = allPodsRes.body?.items || allPodsRes.items || [];
+          for (const p of allItems) {
+            const pName = p.metadata?.name || '';
+            if (isPodOwnedByApp(p, targetK8sName) && !podMap.has(pName)) {
+              podMap.set(pName, p);
+            }
+          }
+        } catch (e) {
+          // Ignore fallback error
+        }
+      }
+
+      pods = Array.from(podMap.values()).map(p => ({
+        name: p.metadata?.name,
+        phase: p.status?.phase,
+        restarts: p.status?.containerStatuses?.reduce((acc, c) => acc + (c.restartCount || 0), 0) || 0,
+        age: p.metadata?.creationTimestamp,
+        containerStatus: p.status?.containerStatuses?.map(c => ({
+          name: c.name,
+          ready: c.ready,
+          state: c.state
+        })) || []
+      }));
+    } catch (err) {
+      console.error("Failed to list pods from K8s:", err.message);
+    }
+
+    let vulnerabilities = null;
+    try {
+      const reportsResponse = await customObjectsApi.listNamespacedCustomObject({
+        group: 'aquasecurity.github.io',
+        version: 'v1alpha1',
+        namespace,
+        plural: 'vulnerabilityreports'
+      });
+      const items = reportsResponse.body?.items || reportsResponse.items || [];
+      
+      const appReports = items.filter(item => {
+        const rName = item.metadata?.labels?.['trivy-operator.resource.name'] || '';
+        const cName = item.metadata?.labels?.['trivy-operator.container.name'] || '';
+        const repName = item.metadata?.name || '';
+        return rName === targetK8sName || 
+               rName.startsWith(`${targetK8sName}-`) || 
+               cName === targetK8sName ||
+               repName.startsWith(`replicaset-${targetK8sName}-`) ||
+               repName.startsWith(`deployment-${targetK8sName}-`);
+      });
+
+      if (appReports.length > 0) {
+        vulnerabilities = appReports.map(item => ({
+          container: item.metadata?.labels?.['trivy-operator.container.name'] || 'unknown',
+          summary: item.report?.summary || { criticalCount: 0, highCount: 0, mediumCount: 0, lowCount: 0 },
+          topVulnerabilities: item.report?.vulnerabilities?.slice(0, 5).map(v => ({
+            id: v.vulnerabilityID,
+            title: v.title,
+            severity: v.severity,
+            pkg: v.resource,
+            installedVersion: v.installedVersion,
+            fixedVersion: v.fixedVersion,
+            link: v.primaryLink
+          })) || []
+        }));
+      }
+    } catch (err) {
+      console.debug("Failed to fetch Trivy vulnerability reports:", err.message);
+    }
+
+    res.json({
+      name: appName,
+      deployed: !!deploymentStatus,
+      deployment: deploymentStatus,
+      service: serviceStatus,
+      ingress: ingressStatus,
+      pods: pods,
+      vulnerabilities: vulnerabilities
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// DELETE /api/applications/:appName/pods/:podName
+apiRouter.delete(/^\/applications\/(.+)\/pods\/(.+)$/, requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const rawAppName = req.params[0];
+    const podName = req.params[1];
+    let appName = rawAppName;
+    try { appName = decodeURIComponent(rawAppName); } catch (e) {}
+
+    const { folder, prefix } = resolveAppLocation(appName);
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+
+    let targetK8sName = prefix || folder;
+    const depFile = getAppFilename(prefix, "deployment");
+    const filePath = `${GITLAB_APPLICATIONS_PATH}/${folder}/${depFile}`;
+    try {
+      const rawResponse = await gitlabApi.get(
+        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
+        { params: { ref: GITLAB_BRANCH } }
+      );
+      const parsed = YAML.parse(rawResponse.data);
+      if (parsed?.metadata?.name) {
+        targetK8sName = parsed.metadata.name;
+      }
+    } catch (err) {
+      // Ignore
+    }
+
+    let pod;
+    try {
+      const podResponse = await coreV1Api.readNamespacedPod({ name: podName, namespace });
+      pod = podResponse.body || podResponse;
+    } catch (err) {
+      if (err.statusCode === 404) {
+        return res.status(404).json({ message: `Pod ${podName} not found.` });
+      }
+      throw err;
+    }
+
+    if (!isPodOwnedByApp(pod, targetK8sName) && !isPodOwnedByApp(pod, appName)) {
+      return res.status(403).json({ message: `Unauthorized: Pod ${podName} does not belong to application ${appName}.` });
+    }
+
+    await coreV1Api.deleteNamespacedPod({ name: podName, namespace });
+    res.json({ message: `Pod ${podName} restarted successfully.` });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/applications/:appName
+apiRouter.get(/^\/applications\/(.+)$/, requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const appName = getVirtualPath(req);
+    const { folder, prefix } = resolveAppLocation(appName);
+
+    const files = [getAppFilename(prefix, "deployment"), getAppFilename(prefix, "service")];
     if (ALLOW_PUBLIC_INGRESS) {
-      files.push("ingress.yaml");
+      files.push(getAppFilename(prefix, "ingress"));
     }
 
     const payload = {};
     for (const f of files) {
-      const filePath = `${GITLAB_APPLICATIONS_PATH}/${name}/${f}`;
+      const parsed = parseAppFilename(f);
+      const type = parsed ? parsed.type : "deployment";
+      const filePath = `${GITLAB_APPLICATIONS_PATH}/${folder}/${f}`;
       try {
-        const response = await gitlabApi.get(
+        const rawResponse = await gitlabApi.get(
           `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
           { params: { ref: GITLAB_BRANCH } }
         );
-        payload[f.replace(".yaml", "")] = response.data;
+        payload[type] = rawResponse.data;
       } catch (err) {
         if (err.response && err.response.status === 404) {
-          payload[f.replace(".yaml", "")] = null;
+          payload[type] = null;
         } else {
           throw err;
         }
@@ -2733,36 +3045,44 @@ apiRouter.get("/applications/:name", requiresApplicationsEnabled, async (req, re
   }
 });
 
-apiRouter.post("/applications/:name", requiresApplicationsEnabled, async (req, res, next) => {
+// POST /api/applications/:appName
+apiRouter.post(/^\/applications\/(.+)$/, requiresApplicationsEnabled, async (req, res, next) => {
   try {
-    const { name } = req.params;
+    const appName = getVirtualPath(req);
+    const { folder, prefix } = resolveAppLocation(appName);
     const { deployment, service, ingress, commit_message } = req.body;
 
-    if (!deployment || !service) {
-      return res.status(400).json({ message: "Both deployment and service YAML content are required." });
+    if (!deployment) {
+      return res.status(400).json({ message: "Deployment YAML content is required." });
     }
+
+    const depFile = getAppFilename(prefix, "deployment");
+    const svcFile = getAppFilename(prefix, "service");
+    const ingFile = getAppFilename(prefix, "ingress");
 
     const actions = [];
     try {
-      const sanitizedDeployment = validateAndSanitizeAppYaml(name, deployment, 'deployment');
+      const sanitizedDeployment = validateAndSanitizeAppYaml(appName, deployment, 'deployment');
       actions.push({
         action: "create",
-        file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/deployment.yaml`,
+        file_path: `${GITLAB_APPLICATIONS_PATH}/${folder}/${depFile}`,
         content: sanitizedDeployment
       });
 
-      const sanitizedService = validateAndSanitizeAppYaml(name, service, 'service');
-      actions.push({
-        action: "create",
-        file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/service.yaml`,
-        content: sanitizedService
-      });
-
-      if (ingress && ALLOW_PUBLIC_INGRESS) {
-        const sanitizedIngress = validateAndSanitizeAppYaml(name, ingress, 'ingress');
+      if (service) {
+        const sanitizedService = validateAndSanitizeAppYaml(appName, service, 'service');
         actions.push({
           action: "create",
-          file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/ingress.yaml`,
+          file_path: `${GITLAB_APPLICATIONS_PATH}/${folder}/${svcFile}`,
+          content: sanitizedService
+        });
+      }
+
+      if (ingress && ALLOW_PUBLIC_INGRESS) {
+        const sanitizedIngress = validateAndSanitizeAppYaml(appName, ingress, 'ingress');
+        actions.push({
+          action: "create",
+          file_path: `${GITLAB_APPLICATIONS_PATH}/${folder}/${ingFile}`,
           content: sanitizedIngress
         });
       }
@@ -2774,7 +3094,7 @@ apiRouter.post("/applications/:name", requiresApplicationsEnabled, async (req, r
       `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
       {
         branch: GITLAB_BRANCH,
-        commit_message: commit_message || `Create application ${name}`,
+        commit_message: commit_message || `Create application ${appName}`,
         ...getCommitOptions(req),
         actions: actions
       }
@@ -2786,59 +3106,67 @@ apiRouter.post("/applications/:name", requiresApplicationsEnabled, async (req, r
   }
 });
 
-apiRouter.put("/applications/:name", requiresApplicationsEnabled, async (req, res, next) => {
+// PUT /api/applications/:appName
+apiRouter.put(/^\/applications\/(.+)$/, requiresApplicationsEnabled, async (req, res, next) => {
   try {
-    const { name } = req.params;
+    const appName = getVirtualPath(req);
+    const { folder, prefix } = resolveAppLocation(appName);
     const { deployment, service, ingress, commit_message } = req.body;
 
-    if (!deployment || !service) {
-      return res.status(400).json({ message: "Both deployment and service YAML content are required." });
+    if (!deployment) {
+      return res.status(400).json({ message: "Deployment YAML content is required." });
+    }
+
+    const depFile = getAppFilename(prefix, "deployment");
+    const svcFile = getAppFilename(prefix, "service");
+    const ingFile = getAppFilename(prefix, "ingress");
+
+    let existingFiles = [];
+    try {
+      const response = await gitlabApi.get(
+        `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
+        {
+          params: {
+            path: `${GITLAB_APPLICATIONS_PATH}/${folder}`,
+            ref: GITLAB_BRANCH
+          }
+        }
+      );
+      existingFiles = response.data.map(f => f.name);
+    } catch (err) {
+      // directory may not exist
     }
 
     const actions = [];
     try {
-      let existingFiles = [];
-      try {
-        const response = await gitlabApi.get(
-          `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
-          {
-            params: {
-              path: `${GITLAB_APPLICATIONS_PATH}/${name}`,
-              ref: GITLAB_BRANCH
-            }
-          }
-        );
-        existingFiles = response.data.map(f => f.name);
-      } catch (err) {
-        // directory may not exist
-      }
-
-      const sanitizedDeployment = validateAndSanitizeAppYaml(name, deployment, 'deployment');
+      const sanitizedDeployment = validateAndSanitizeAppYaml(appName, deployment, 'deployment');
       actions.push({
-        action: existingFiles.includes("deployment.yaml") ? "update" : "create",
-        file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/deployment.yaml`,
+        action: existingFiles.includes(depFile) ? "update" : "create",
+        file_path: `${GITLAB_APPLICATIONS_PATH}/${folder}/${depFile}`,
         content: sanitizedDeployment
       });
 
-      const sanitizedService = validateAndSanitizeAppYaml(name, service, 'service');
-      actions.push({
-        action: existingFiles.includes("service.yaml") ? "update" : "create",
-        file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/service.yaml`,
-        content: sanitizedService
-      });
+      if (service) {
+        const sanitizedService = validateAndSanitizeAppYaml(appName, service, 'service');
+        actions.push({
+          action: existingFiles.includes(svcFile) ? "update" : "create",
+          file_path: `${GITLAB_APPLICATIONS_PATH}/${folder}/${svcFile}`,
+          content: sanitizedService
+        });
+      }
 
       if (ALLOW_PUBLIC_INGRESS) {
         if (ingress) {
-          const sanitizedIngress = validateAndSanitizeAppYaml(name, ingress, 'ingress');
+          const sanitizedIngress = validateAndSanitizeAppYaml(appName, ingress, 'ingress');
           actions.push({
-            action: existingFiles.includes("ingress.yaml") ? "update" : "create",
-            file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/ingress.yaml`,
+            action: existingFiles.includes(ingFile) ? "update" : "create",
+            file_path: `${GITLAB_APPLICATIONS_PATH}/${folder}/${ingFile}`,
             content: sanitizedIngress
           });
-        } else if (existingFiles.includes("ingress.yaml")) {
+        } else if (existingFiles.includes(ingFile)) {
           actions.push({
             action: "delete",
-            file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/ingress.yaml`
+            file_path: `${GITLAB_APPLICATIONS_PATH}/${folder}/${ingFile}`
           });
         }
       }
@@ -2850,7 +3178,7 @@ apiRouter.put("/applications/:name", requiresApplicationsEnabled, async (req, re
       `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
       {
         branch: GITLAB_BRANCH,
-        commit_message: commit_message || `Update application ${name}`,
+        commit_message: commit_message || `Update application ${appName}`,
         ...getCommitOptions(req),
         actions: actions
       }
@@ -2862,9 +3190,15 @@ apiRouter.put("/applications/:name", requiresApplicationsEnabled, async (req, re
   }
 });
 
-apiRouter.delete("/applications/:name", requiresApplicationsEnabled, async (req, res, next) => {
+// DELETE /api/applications/:appName
+apiRouter.delete(/^\/applications\/(.+)$/, requiresApplicationsEnabled, async (req, res, next) => {
   try {
-    const { name } = req.params;
+    const appName = getVirtualPath(req);
+    const { folder, prefix } = resolveAppLocation(appName);
+
+    const depFile = getAppFilename(prefix, "deployment");
+    const svcFile = getAppFilename(prefix, "service");
+    const ingFile = getAppFilename(prefix, "ingress");
 
     let existingFiles = [];
     try {
@@ -2872,36 +3206,38 @@ apiRouter.delete("/applications/:name", requiresApplicationsEnabled, async (req,
         `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
         {
           params: {
-            path: `${GITLAB_APPLICATIONS_PATH}/${name}`,
+            path: `${GITLAB_APPLICATIONS_PATH}/${folder}`,
             ref: GITLAB_BRANCH
           }
         }
       );
       existingFiles = response.data.filter(f => f.type === "blob").map(f => f.name);
     } catch (err) {
-      return res.status(404).json({ message: `Application ${name} not found in Git.` });
+      return res.status(404).json({ message: `Application ${appName} not found in Git.` });
     }
 
-    if (existingFiles.length === 0) {
-      return res.json({ message: `Application ${name} is already empty or deleted.` });
+    const targetsToDelete = [depFile, svcFile, ingFile].filter(f => existingFiles.includes(f));
+
+    if (targetsToDelete.length === 0) {
+      return res.json({ message: `Application ${appName} files are already deleted.` });
     }
 
-    const actions = existingFiles.map(filename => ({
+    const actions = targetsToDelete.map(filename => ({
       action: "delete",
-      file_path: `${GITLAB_APPLICATIONS_PATH}/${name}/${filename}`
+      file_path: `${GITLAB_APPLICATIONS_PATH}/${folder}/${filename}`
     }));
 
     const response = await gitlabApi.post(
       `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
       {
         branch: GITLAB_BRANCH,
-        commit_message: `Delete application ${name}`,
+        commit_message: `Delete application ${appName}`,
         ...getCommitOptions(req),
         actions: actions
       }
     );
 
-    res.json({ message: `Application ${name} deleted from Git.`, gitlab: response.data });
+    res.json({ message: `Application ${appName} deleted from Git.`, gitlab: response.data });
   } catch (error) {
     next(error);
   }
@@ -2970,15 +3306,36 @@ function isPodOwnedByApp(pod, appName) {
   return false;
 }
 
-apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (req, res, next) => {
+apiRouter.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, async (req, res, next) => {
   try {
-    const { name } = req.params;
+    const appName = req.params[0];
+    const { folder, prefix } = resolveAppLocation(appName);
     const namespace = process.env.ARGO_NAMESPACE || "default";
+
+    // Read deployment YAML from Git to determine exact metadata.name, metadata.namespace & spec.selector.matchLabels
+    let targetK8sName = prefix || folder;
+    const depFile = getAppFilename(prefix, "deployment");
+    const filePath = `${GITLAB_APPLICATIONS_PATH}/${folder}/${depFile}`;
+    try {
+      const rawResponse = await gitlabApi.get(
+        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
+        { params: { ref: GITLAB_BRANCH } }
+      );
+      const parsed = YAML.parse(rawResponse.data);
+      if (parsed?.metadata?.name) {
+        targetK8sName = parsed.metadata.name;
+      }
+      if (parsed?.metadata?.namespace) {
+        namespace = parsed.metadata.namespace;
+      }
+    } catch (err) {
+      // Ignore
+    }
 
     let deploymentStatus = null;
     let deploymentMatchLabels = null;
     try {
-      const depResponse = await appsV1Api.readNamespacedDeployment({ name, namespace });
+      const depResponse = await appsV1Api.readNamespacedDeployment({ name: targetK8sName, namespace });
       const d = depResponse.body || depResponse;
       deploymentMatchLabels = d.spec?.selector?.matchLabels || null;
       deploymentStatus = {
@@ -2989,13 +3346,13 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
       };
     } catch (err) {
       if (err.statusCode !== 404) {
-        console.error("Failed to read deployment from K8s:", err.message);
+        console.error(`Failed to read deployment "${targetK8sName}" from K8s:`, err.message);
       }
     }
 
     let serviceStatus = null;
     try {
-      const svcResponse = await coreV1Api.readNamespacedService({ name, namespace });
+      const svcResponse = await coreV1Api.readNamespacedService({ name: targetK8sName, namespace });
       const s = svcResponse.body || svcResponse;
       serviceStatus = {
         type: s.spec?.type,
@@ -3008,24 +3365,14 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
 
     let ingressStatus = null;
     try {
-      const ingResponse = await networkingV1Api.readNamespacedIngress({ name, namespace });
+      const ingResponse = await networkingV1Api.readNamespacedIngress({ name: targetK8sName, namespace });
       const ing = ingResponse.body || ingResponse;
       const lb = ing.status?.loadBalancer?.ingress || [];
-      const isIngressReady = lb.length > 0 && (lb[0].ip || lb[0].hostname);
-
-      let isReachable = false;
-      if (isIngressReady && ingressClusterConfig.domain) {
-        const domain = ingressClusterConfig.domain;
-        const proto = ingressClusterConfig.tlsEnabled ? "https" : "http";
-        const hostDomain = namespace && namespace !== "default"
-          ? `${name}.${namespace}.${domain}`
-          : `${name}.${domain}`;
-        const ingressUrl = `${proto}://${hostDomain}`;
-        isReachable = await checkIngressUrlReachability(ingressUrl);
-      }
+      const hasRules = ing.spec?.rules && ing.spec.rules.length > 0;
+      const isIngressReady = (lb.length > 0 && (lb[0].ip || lb[0].hostname)) || hasRules;
 
       ingressStatus = {
-        ready: !!isIngressReady && isReachable,
+        ready: !!isIngressReady,
         loadBalancer: lb
       };
     } catch (err) {
@@ -3042,10 +3389,10 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
         labelSelectors.push(sel);
       } else {
         labelSelectors = [
-          `app.kubernetes.io/service=${name}`,
-          `app.kubernetes.io/name=${name}`,
-          `app.kubernetes.io/instance=${name}`,
-          `app=${name}`
+          `app.kubernetes.io/service=${targetK8sName}`,
+          `app.kubernetes.io/name=${targetK8sName}`,
+          `app.kubernetes.io/instance=${targetK8sName}`,
+          `app=${targetK8sName}`
         ];
       }
 
@@ -3073,7 +3420,7 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
           const allItems = allPodsRes.body?.items || allPodsRes.items || [];
           for (const p of allItems) {
             const pName = p.metadata?.name || '';
-            if (isPodOwnedByApp(p, name) && !podMap.has(pName)) {
+            if (isPodOwnedByApp(p, targetK8sName) && !podMap.has(pName)) {
               podMap.set(pName, p);
             }
           }
@@ -3107,16 +3454,15 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
       });
       const items = reportsResponse.body?.items || reportsResponse.items || [];
       
-      // Filter reports matching the current application name
       const appReports = items.filter(item => {
         const rName = item.metadata?.labels?.['trivy-operator.resource.name'] || '';
         const cName = item.metadata?.labels?.['trivy-operator.container.name'] || '';
         const repName = item.metadata?.name || '';
-        return rName === name || 
-               rName.startsWith(`${name}-`) || 
-               cName === name ||
-               repName.startsWith(`replicaset-${name}-`) ||
-               repName.startsWith(`deployment-${name}-`);
+        return rName === targetK8sName || 
+               rName.startsWith(`${targetK8sName}-`) || 
+               cName === targetK8sName ||
+               repName.startsWith(`replicaset-${targetK8sName}-`) ||
+               repName.startsWith(`deployment-${targetK8sName}-`);
       });
 
       if (appReports.length > 0) {
@@ -3135,12 +3481,11 @@ apiRouter.get("/applications/:name/status", requiresApplicationsEnabled, async (
         }));
       }
     } catch (err) {
-      // Trivy operator might not be installed, which is expected
       console.debug("Failed to fetch Trivy vulnerability reports:", err.message);
     }
 
     res.json({
-      name,
+      name: appName,
       deployed: !!deploymentStatus,
       deployment: deploymentStatus,
       service: serviceStatus,

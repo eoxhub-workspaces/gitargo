@@ -52,7 +52,7 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }, []);
 
   return (
-    <div className="flex flex-col min-h-screen relative pb-6">
+    <div className="flex flex-col min-h-screen relative pb-6 overflow-y-auto">
       {!hideHeader && (
         <nav className="bg-white border-b border-gray-200">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
