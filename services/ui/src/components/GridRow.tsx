@@ -28,3 +28,5 @@ export const GridRow: FunctionComponent<IGridProps> = (
 
   return <Root>{fields.map(renderField)}</Root>;
 };
+
+export default GridRow;

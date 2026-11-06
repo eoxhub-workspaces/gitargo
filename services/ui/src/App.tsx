@@ -67,15 +67,18 @@ export default function App() {
     };
   }, []);
 
+  const deploymentBase = (
+    window.BASE_PATH || window.location.pathname
+  ).toLowerCase();
+
+  // Detect dedicated deployment targets (e.g., gitargo-dev-applications or gitargo-dev-packages)
   const isApplicationsDeployment =
-    window.BASE_PATH?.includes("gitargo-applications") ||
-    window.location.pathname.includes("gitargo-applications") ||
-    window.location.pathname.includes("-applications");
+    deploymentBase.includes("-applications") ||
+    deploymentBase.includes("gitargo-applications");
 
   const isPackagesDeployment =
-    window.BASE_PATH?.includes("gitargo-packages") ||
-    window.location.pathname.includes("gitargo-packages") ||
-    window.location.pathname.includes("-packages");
+    deploymentBase.includes("-packages") ||
+    deploymentBase.includes("gitargo-packages");
 
   const enableApplications =
     config?.enableApplications ?? isApplicationsDeployment;

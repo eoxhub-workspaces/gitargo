@@ -1,4 +1,6 @@
 import React, { useEffect, useState, useMemo } from "react";
+
+declare const process: { env: Record<string, string | undefined> };
 import { useLocation, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
@@ -26,6 +28,36 @@ import {
   CpuChipIcon,
   InboxStackIcon
 } from "@heroicons/react/24/outline";
+
+const PHASE_BADGE_CLASSES: Record<string, string> = {
+  Succeeded: "bg-green-100 text-green-800 border-green-200",
+  Running: "bg-blue-100 text-blue-800 border-blue-200",
+  Failed: "bg-red-100 text-red-800 border-red-200",
+  Error: "bg-red-100 text-red-800 border-red-200",
+  Pending: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  PodInitializing: "bg-yellow-100 text-yellow-800 border-yellow-200"
+};
+
+const getPhaseBadgeClass = (phase?: string): string => {
+  return (
+    PHASE_BADGE_CLASSES[phase || ""] ||
+    "bg-gray-100 text-gray-800 border-gray-200"
+  );
+};
+
+const getPhaseTextClass = (phase?: string): string => {
+  switch (phase) {
+    case "Succeeded":
+      return "text-green-400";
+    case "Running":
+      return "text-blue-400 font-semibold animate-pulse";
+    case "Pending":
+    case "PodInitializing":
+      return "text-yellow-400 font-semibold animate-pulse";
+    default:
+      return "text-red-400";
+  }
+};
 
 // Helper function to simplify Argo status messages and determine type
 const parseStatusMessage = (exe: any, specificMessage?: string) => {
@@ -432,14 +464,13 @@ const ExecutionsView: React.FC = () => {
       }
 
       const workflowName = selectedExe?.metadata.name;
-      const data = await getLogs(
-        id,
+      const data = await getLogs(id, {
         type,
         query,
         startTime,
         endTime,
-        workflowName
-      );
+        workflow: workflowName
+      });
       setLogs(data);
     } catch (err: any) {
       if (!isPolling) setLogs("Failed to fetch logs: " + err.message);
@@ -639,19 +670,9 @@ const ExecutionsView: React.FC = () => {
                             {exe.metadata.name}
                           </p>
                           <span
-                            className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium border ${
-                              exe.status?.phase === "Succeeded"
-                                ? "bg-green-100 text-green-800 border-green-200"
-                                : exe.status?.phase === "Running"
-                                  ? "bg-blue-100 text-blue-800 border-blue-200"
-                                  : exe.status?.phase === "Failed" ||
-                                      exe.status?.phase === "Error"
-                                    ? "bg-red-100 text-red-800 border-red-200"
-                                    : exe.status?.phase === "Pending" ||
-                                        exe.status?.phase === "PodInitializing"
-                                      ? "bg-yellow-100 text-yellow-800 border-yellow-200"
-                                      : "bg-gray-100 text-gray-800 border-gray-200"
-                            }`}
+                            className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium border ${getPhaseBadgeClass(
+                              exe.status?.phase
+                            )}`}
                           >
                             {exe.status?.phase || "Pending"}
                           </span>
@@ -1234,22 +1255,10 @@ const ExecutionsView: React.FC = () => {
                               <div className="flex justify-between">
                                 <span className="text-gray-500">Phase:</span>
                                 <span
-                                  className={`font-bold ${
+                                  className={`font-bold ${getPhaseTextClass(
                                     selectedExe.status.nodes[selectedNodeId]
-                                      .phase === "Succeeded"
-                                      ? "text-green-400"
-                                      : selectedExe.status.nodes[selectedNodeId]
-                                            .phase === "Running"
-                                        ? "text-blue-400 font-semibold animate-pulse"
-                                        : selectedExe.status.nodes[
-                                              selectedNodeId
-                                            ].phase === "Pending" ||
-                                            selectedExe.status.nodes[
-                                              selectedNodeId
-                                            ].phase === "PodInitializing"
-                                          ? "text-yellow-400 font-semibold animate-pulse"
-                                          : "text-red-400"
-                                  }`}
+                                      ?.phase
+                                  )}`}
                                 >
                                   {
                                     selectedExe.status.nodes[selectedNodeId]

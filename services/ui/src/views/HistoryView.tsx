@@ -44,11 +44,8 @@ const HistoryView: React.FC = () => {
     setYamlLoading(true);
     setViewingCommit(commitId);
     try {
-      const yamlContent = await getWorkflow(
-        decodeURIComponent(filename),
-        commitId
-      );
-      setCommitYaml(yamlContent);
+      const wf = await getWorkflow(decodeURIComponent(filename), commitId);
+      setCommitYaml(wf.content || "");
     } catch {
       toast.error("Failed to load YAML for this commit.");
       setCommitYaml("Error loading content.");

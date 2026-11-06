@@ -198,7 +198,7 @@ cd ../ui && npm install --no-audit
 ## Container Security (DevSecOps)
 
 This project strictly adheres to secure, enterprise-grade container standards:
-* **Minimal Base Images**: Uses `node:20-alpine` to minimize package surface area and CVE vulnerabilities.
+* **Minimal Base Images**: Uses `node:26-alpine` to minimize package surface area and CVE vulnerabilities.
 * **Non-Root Execution**: Runs strictly as an unprivileged, custom user (`gitargo`, UID `10001`). Root container configurations are rejected by cluster security policies.
 * **No unnecessary files**: A `.dockerignore` policy is implemented in the repository to guarantee that local configuration are not added the context build or the published image.
 * **Local Scanning (Trivy)**: Image builds should be audited locally using Trivy before release:

@@ -2,6 +2,8 @@ import { Dictionary } from "lodash";
 import { FunctionComponent, ReactNode } from "react";
 import { NodeGroupType } from "./enums";
 
+export * from "./records";
+
 export type CallbackFunction = (...args: any[]) => any;
 
 export type FlatConnection = {

@@ -200,7 +200,7 @@ export const packArrayAsStrings = (
   );
 };
 
-const isObject = (value: any) => {
+const isObject = (value: unknown): value is Record<string, unknown> => {
   return !!(value && typeof value === "object" && !Array.isArray(value));
 };
 
@@ -219,7 +219,7 @@ const renderToast = (path: string, message: string) => (
 
 const reportError = (
   prefix: string,
-  error: string | Record<string, any> | any[]
+  error: string | Record<string, unknown> | unknown[]
 ) => {
   if (lodash.isString(error) && /\s/.test(error)) {
     toaster(renderToast(prefix, error as string), "error");

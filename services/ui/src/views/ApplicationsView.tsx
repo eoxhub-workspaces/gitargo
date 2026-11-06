@@ -1,5 +1,10 @@
 import React, { useEffect, useState, useRef } from "react";
 import {
+  commentOutYaml,
+  uncommentYaml,
+  isYamlDisabled
+} from "../utils/yamlUtils";
+import {
   CpuChipIcon,
   PlusIcon,
   TrashIcon,
@@ -9,9 +14,7 @@ import {
   XMarkIcon,
   EyeIcon,
   ExclamationTriangleIcon,
-  CheckCircleIcon,
-  ChevronDownIcon,
-  ChevronRightIcon
+  CheckCircleIcon
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import Editor from "@monaco-editor/react";
@@ -449,36 +452,6 @@ const mergeFormToIngressYaml = (
   return doc.toString();
 };
 
-const commentOutYaml = (yaml: string) => {
-  if (!yaml) return "";
-  return yaml
-    .split("\n")
-    .map((line) => {
-      if (line.trim().startsWith("#")) return line;
-      return `# ${line}`;
-    })
-    .join("\n");
-};
-
-const uncommentYaml = (yaml: string) => {
-  if (!yaml) return "";
-  return yaml
-    .split("\n")
-    .map((line) => {
-      if (line.startsWith("# ")) return line.slice(2);
-      if (line.startsWith("#")) return line.slice(1);
-      return line;
-    })
-    .join("\n");
-};
-
-const isYamlDisabled = (yaml: string) => {
-  if (!yaml) return false;
-  const lines = yaml.split("\n").filter((l) => l.trim().length > 0);
-  if (lines.length === 0) return false;
-  return lines.every((line) => line.trim().startsWith("#"));
-};
-
 const ApplicationsView: React.FC = () => {
   const [apps, setApps] = useState<Application[]>([]);
   const [statuses, setStatuses] = useState<Record<string, ApplicationStatus>>(
@@ -558,18 +531,6 @@ const ApplicationsView: React.FC = () => {
   const [annAllowAnon, setAnnAllowAnon] = useState(false);
   const [annStopUnused, setAnnStopUnused] = useState(false);
 
-  // Multi-component application breakdown expansion state
-  const [expandedMultiApps, setExpandedMultiApps] = useState<
-    Record<string, boolean>
-  >({});
-
-  const toggleMultiAppExpanded = (appName: string) => {
-    setExpandedMultiApps((prev) => ({
-      ...prev,
-      [appName]: !prev[appName]
-    }));
-  };
-
   // YAML input states for Expert mode
   const [yamlDeployment, setYamlDeployment] = useState("");
   const [yamlService, setYamlService] = useState("");
@@ -592,13 +553,24 @@ const ApplicationsView: React.FC = () => {
       setApps(applications);
       setConfig(appConfig);
 
-      // Fetch statuses in small concurrency batches (3 at a time)
+      // Fetch YAMLs and statuses in small concurrency batches (3 at a time)
+      const newYamls: Record<string, ApplicationYamls> = {};
       const newStatuses: Record<string, ApplicationStatus> = {};
       const batchSize = 3;
       for (let i = 0; i < applications.length; i += batchSize) {
         const batch = applications.slice(i, i + batchSize);
         await Promise.all(
           batch.map(async (app) => {
+            try {
+              const details = await getApplication(app.name);
+              if (details) {
+                newYamls[app.name] = {
+                  deployment: details.deployment || "",
+                  service: details.service || "",
+                  ingress: details.ingress || ""
+                };
+              }
+            } catch (_e) {}
             try {
               const status = await getApplicationStatus(app.name);
               if (status) newStatuses[app.name] = status;
@@ -608,6 +580,7 @@ const ApplicationsView: React.FC = () => {
           })
         );
       }
+      setAppYamls((prev) => ({ ...prev, ...newYamls }));
       setStatuses((prev) => ({ ...prev, ...newStatuses }));
     } catch (err: any) {
       toast.error("Failed to fetch applications list: " + err.message);
@@ -629,7 +602,7 @@ const ApplicationsView: React.FC = () => {
             if (status) {
               setStatuses((prev) => ({ ...prev, [app.name]: status }));
             }
-          } catch (err) {
+          } catch {
             // Ignore background polling errors
           }
         }
@@ -2265,15 +2238,15 @@ const ApplicationsView: React.FC = () => {
 
                 {/* 2. Reconciliation Issues / Deployment Conditions */}
                 {statuses[selectedAppName]?.deployment?.conditions &&
-                  statuses[selectedAppName].deployment!.conditions.length >
-                    0 && (
+                  (statuses[selectedAppName]?.deployment?.conditions?.length ??
+                    0) > 0 && (
                     <div>
                       <h4 className="text-sm font-bold text-gray-800 border-b border-gray-100 pb-2 mb-3">
                         System Warnings / Conditions
                       </h4>
                       <div className="space-y-1.5">
-                        {statuses[selectedAppName].deployment!.conditions.map(
-                          (cond, idx) => {
+                        {statuses[selectedAppName]?.deployment?.conditions?.map(
+                          (cond: any, idx: any) => {
                             const isIssue =
                               cond.status === "False" ||
                               cond.type === "ReplicaFailure";
@@ -2508,7 +2481,7 @@ const ApplicationsView: React.FC = () => {
                                     </summary>
                                     <div className="divide-y divide-gray-100 max-h-48 overflow-y-auto pr-1 mt-2">
                                       {vuln.topVulnerabilities.map(
-                                        (v, vIdx) => {
+                                        (v: any, vIdx: any) => {
                                           return (
                                             <div
                                               key={vIdx}

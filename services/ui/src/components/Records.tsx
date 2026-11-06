@@ -5,24 +5,14 @@ import {
   ChevronUpIcon,
   PlusIcon
 } from "@heroicons/react/24/outline";
-import Record, { IFieldType } from "./Record";
+import Record from "./Record";
 import { useFormikContext } from "formik";
 import lodash from "lodash";
 import { useAccordionState } from "../hooks";
 import { useParams } from "react-router-dom";
+import { IRecordsProps } from "../types";
 
-export interface IRecordsProps {
-  collapsible?: boolean;
-  defaultOpen?: boolean;
-  title: string;
-  name: string;
-  fields: (index: number) => IFieldType[];
-  newValue: any;
-  renderLayout?: (elements: ReactElement[]) => ReactElement;
-  renderField?: (element: ReactElement, field: IFieldType) => ReactElement;
-  renderRemove?: (element: ReactElement) => ReactElement;
-  renderBorder?: () => ReactElement;
-}
+export type { IRecordsProps };
 
 interface IGroupProps {
   empty: boolean;

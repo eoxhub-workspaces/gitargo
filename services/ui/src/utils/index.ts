@@ -12,6 +12,18 @@ import {
 import { INodeItem, INodeLibraryItem, INodeGroup } from "../types";
 import { ReactElement } from "react";
 
+export function safeJsonParse<T>(
+  jsonString: string | null | undefined,
+  fallback: T
+): T {
+  if (!jsonString) return fallback;
+  try {
+    return JSON.parse(jsonString) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 export function ensure<T>(
   argument: T | undefined | null,
   message = "This value was promised to be there."
@@ -25,10 +37,13 @@ export function ensure<T>(
 
 export const parseSingleNode = (configurationStr: string): INodeItem => {
   let node: INodeItem = {} as INodeItem;
-  const configurationObj = JSON.parse(configurationStr);
-
-  if (isPlainObject(configurationObj)) {
-    node = configurationObj;
+  try {
+    const configurationObj = JSON.parse(configurationStr);
+    if (isPlainObject(configurationObj)) {
+      node = configurationObj;
+    }
+  } catch (e) {
+    console.error("Failed to parse node configuration JSON:", e);
   }
 
   return node;
@@ -41,21 +56,25 @@ export const formatName = (name: string): string => {
 
 export const parseConfiguration = (configurationStr: string): INodeItem[] => {
   let nodes: INodeItem[] = [];
-  const configurationObj = JSON.parse(configurationStr);
+  try {
+    const configurationObj = JSON.parse(configurationStr);
 
-  if (isPlainObject(configurationObj)) {
-    nodes = flattenDeep(values(configurationObj));
-  }
-
-  if (isArray(configurationObj)) {
-    nodes = configurationObj;
-  }
-
-  nodes.forEach((node) => {
-    if (!Array.isArray(node.inputs)) {
-      node.inputs = [];
+    if (isPlainObject(configurationObj)) {
+      nodes = flattenDeep(values(configurationObj));
     }
-  });
+
+    if (isArray(configurationObj)) {
+      nodes = configurationObj;
+    }
+
+    nodes.forEach((node) => {
+      if (!Array.isArray(node.inputs)) {
+        node.inputs = [];
+      }
+    });
+  } catch (e) {
+    console.error("Failed to parse configuration JSON:", e);
+  }
 
   return nodes;
 };

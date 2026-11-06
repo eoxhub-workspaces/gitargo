@@ -44,7 +44,7 @@ const CodeEditor = (props: ICodeEditorProps) => {
             hover: true,
             completion: true,
             validate: true,
-            format: true,
+            format: true as any,
             schemas: [
               {
                 uri: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json",

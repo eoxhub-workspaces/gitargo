@@ -392,7 +392,8 @@ export default function CodeProject() {
         setConfig(appConfig);
 
         if (filename) {
-          const content = await api.getWorkflow(decodeURIComponent(filename));
+          const wf = await api.getWorkflow(decodeURIComponent(filename));
+          const content = wf.content || "";
           setYamlContent(content);
           setOriginalYaml(content);
         } else if (initialName) {

@@ -164,6 +164,9 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
+# Desloppify
+.desloppify/
+
 # Django
 static
 zappa_settings.json

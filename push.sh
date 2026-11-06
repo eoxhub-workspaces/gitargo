@@ -25,9 +25,14 @@ for POD in $PODS; do
   echo "--------------------------------------------------------"
   echo "Pushing services/api and built UI to pod: $POD in namespace $NAMESPACE..."
 
+  # Ensure target directories exist inside container
+  kubectl -n $NAMESPACE exec ${POD} -- mkdir -p /app/routes /app/lib /app/public
+
   # Copy backend files explicitly to /app
   kubectl cp services/api/server.js $NAMESPACE/${POD}:/app/server.js
   kubectl cp services/api/package.json $NAMESPACE/${POD}:/app/package.json
+  kubectl cp services/api/routes/. $NAMESPACE/${POD}:/app/routes/
+  kubectl cp services/api/lib/. $NAMESPACE/${POD}:/app/lib/
 
   # Copy built frontend dist files explicitly to /app/public/
   kubectl cp services/ui/dist/. $NAMESPACE/${POD}:/app/public/

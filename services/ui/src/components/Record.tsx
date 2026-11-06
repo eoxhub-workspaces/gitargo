@@ -9,30 +9,10 @@ import { IconButton, styled } from "@mui/material";
 import { MinusSmallIcon } from "@heroicons/react/24/solid";
 import TextField from "./global/FormElements/TextField";
 import Toggle from "./global/FormElements/Toggle";
-import Records, { IRecordsProps } from "./Records";
+import Records from "./Records";
+import { IFieldType, IRecordProps } from "../types";
 
-export interface IFieldType {
-  name: string;
-  placeholder?: string;
-  required?: boolean;
-  type: "text" | "toggle" | "records";
-  options?:
-    | {
-        text: string;
-        value: string;
-      }[]
-    | IRecordsProps;
-}
-
-export interface IRecordProps {
-  fields: IFieldType[];
-  index: number;
-  onRemove: (index: number) => void;
-  direction?: "column" | "row";
-  renderLayout?: (elements: ReactElement[]) => ReactElement;
-  renderField?: (element: ReactElement, field: IFieldType) => ReactElement;
-  renderRemove?: (element: ReactElement) => ReactElement;
-}
+export type { IFieldType, IRecordProps };
 
 const Root = styled("div")`
   display: flex;
