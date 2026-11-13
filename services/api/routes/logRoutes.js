@@ -51,7 +51,7 @@ function createLogRouter(ctx) {
     validateArgoWorkflow
   } = ctx;
 
-  const coreV1Api = ctx.coreV1Api || k8sCoreApi || (kc ? kc.makeApiClient(k8s.CoreV1Api) : null);
+  const podCoreApi = coreV1Api || k8sCoreApi || (kc ? kc.makeApiClient(k8s.CoreV1Api) : null);
   const NAMESPACE = process.env.ARGO_NAMESPACE || "default";
   const LOKI_CANDIDATES = [
     process.env.LOKI_URL,
