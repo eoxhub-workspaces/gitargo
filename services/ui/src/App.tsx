@@ -17,15 +17,24 @@ import { getConfig, AppConfig } from "./utils/api";
 
 import "./index.css";
 
-// Global handler to swallow the specific monaco-yaml schema error that triggers
-// the full-screen overlay, without crashing the application.
+// Global handler to swallow monaco-yaml schema/worker RPC errors that trigger
+// full-screen overlays, without crashing the application.
 window.addEventListener("unhandledrejection", (event) => {
   if (
     event.reason &&
     event.reason.message &&
-    event.reason.message.includes(
-      "Missing requestHandler or method: resetSchema"
-    )
+    (event.reason.message.includes("resetSchema") ||
+      event.reason.message.includes("Missing requestHandler or method:"))
+  ) {
+    event.preventDefault();
+  }
+});
+
+window.addEventListener("error", (event) => {
+  if (
+    event.message &&
+    (event.message.includes("resetSchema") ||
+      event.message.includes("Missing requestHandler or method:"))
   ) {
     event.preventDefault();
   }

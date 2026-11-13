@@ -13,6 +13,7 @@ import {
   terminateExecution
 } from "../utils/api";
 import Spinner from "../components/global/Spinner";
+import { InfoButton } from "../components/global/InfoButton";
 import {
   CheckCircleIcon,
   XCircleIcon,
@@ -149,7 +150,8 @@ const ExecutionsView: React.FC = () => {
     useState<WorkflowExecutionMetrics | null>(null);
 
   const formatCpu = (cores: number) => {
-    if (!cores) return "0 Cores";
+    if (!cores || cores <= 0) return "< 1m";
+    if (cores < 0.001) return "< 1m";
     if (cores < 1) return `${Math.round(cores * 1000)}m`;
     return `${cores.toFixed(2)} Cores`;
   };
@@ -163,16 +165,48 @@ const ExecutionsView: React.FC = () => {
   };
 
   useEffect(() => {
+    let timer: any = null;
+    let retryTimer: any = null;
+
     if (selectedExe?.metadata.name) {
-      getExecutionMetrics(selectedExe.metadata.name)
-        .then((m) => setExecutionMetrics(m))
-        .catch(() => setExecutionMetrics(null));
+      const fetchMetrics = () => {
+        getExecutionMetrics(selectedExe.metadata.name)
+          .then((m) => {
+            setExecutionMetrics(m);
+            if ((!m || !m.available) && selectedExe.status?.phase) {
+              retryTimer = setTimeout(() => {
+                getExecutionMetrics(selectedExe.metadata.name)
+                  .then((m2) => setExecutionMetrics(m2))
+                  .catch(() => {});
+              }, 3000);
+            }
+          })
+          .catch(() => setExecutionMetrics(null));
+      };
+
+      fetchMetrics();
+
+      if (selectedExe.status?.phase === "Running") {
+        timer = setInterval(fetchMetrics, 10000);
+      }
     } else {
       setExecutionMetrics(null);
     }
-  }, [selectedExe?.metadata.name]);
+
+    return () => {
+      if (timer) clearInterval(timer);
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [
+    selectedExe?.metadata.name,
+    selectedExe?.status?.phase,
+    selectedExe?.status?.finishedAt
+  ]);
 
   useEffect(() => {
+    let timer: any = null;
+    let retryTimer: any = null;
+
     if (
       selectedExe?.metadata.name &&
       selectedNodeId &&
@@ -180,13 +214,41 @@ const ExecutionsView: React.FC = () => {
     ) {
       const nodeObj = selectedExe.status?.nodes?.[selectedNodeId];
       const stepPod = nodeObj?.id || nodeObj?.name || selectedNodeId;
-      getExecutionMetrics(selectedExe.metadata.name, stepPod)
-        .then((m) => setStepMetrics(m))
-        .catch(() => setStepMetrics(null));
+
+      const fetchStepMetrics = () => {
+        getExecutionMetrics(selectedExe.metadata.name, stepPod)
+          .then((m) => {
+            setStepMetrics(m);
+            if ((!m || !m.available) && selectedExe.status?.phase) {
+              retryTimer = setTimeout(() => {
+                getExecutionMetrics(selectedExe.metadata.name, stepPod)
+                  .then((m2) => setStepMetrics(m2))
+                  .catch(() => {});
+              }, 3000);
+            }
+          })
+          .catch(() => setStepMetrics(null));
+      };
+
+      fetchStepMetrics();
+
+      if (selectedExe.status?.phase === "Running") {
+        timer = setInterval(fetchStepMetrics, 10000);
+      }
     } else {
       setStepMetrics(null);
     }
-  }, [selectedExe?.metadata.name, selectedNodeId]);
+
+    return () => {
+      if (timer) clearInterval(timer);
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [
+    selectedExe?.metadata.name,
+    selectedNodeId,
+    selectedExe?.status?.phase,
+    selectedExe?.status?.finishedAt
+  ]);
 
   const queryParams = useMemo(
     () => new URLSearchParams(location.search),
@@ -1261,6 +1323,7 @@ const ExecutionsView: React.FC = () => {
                               <h5 className="text-xs font-bold text-blue-400 uppercase tracking-wider flex items-center">
                                 <CpuChipIcon className="w-4 h-4 mr-1.5" />
                                 Peak Resource Usage
+                                <InfoButton text="Metrics are sampled periodically (every 15–30s). Extremely short tasks (<5s) may show <1m if no scraping interval delta was captured during execution." />
                               </h5>
                               <span className="text-[10px] text-blue-300 bg-blue-950/80 px-2.5 py-0.5 rounded border border-blue-700 font-mono">
                                 Peak Maxima

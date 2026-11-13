@@ -1,7 +1,11 @@
 // Override the Error overlay manually
 if (process.env.NODE_ENV === "development") {
   window.addEventListener("error", (e) => {
-    if (e.message && e.message.includes("resetSchema")) {
+    if (
+      e.message &&
+      (e.message.includes("resetSchema") ||
+        e.message.includes("Missing requestHandler or method:"))
+    ) {
       e.stopImmediatePropagation();
     }
   });
@@ -10,7 +14,8 @@ if (process.env.NODE_ENV === "development") {
     if (
       e.reason &&
       e.reason.message &&
-      e.reason.message.includes("resetSchema")
+      (e.reason.message.includes("resetSchema") ||
+        e.reason.message.includes("Missing requestHandler or method:"))
     ) {
       e.stopImmediatePropagation();
       e.preventDefault();

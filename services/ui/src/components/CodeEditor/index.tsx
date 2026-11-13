@@ -38,7 +38,12 @@ const CodeEditor = (props: ICodeEditorProps) => {
   const [isDark] = useDarkMode();
 
   useEffect(() => {
-    if (monaco && language === "yaml") {
+    if (
+      monaco &&
+      language === "yaml" &&
+      !(window as any).__monacoYamlConfigured
+    ) {
+      (window as any).__monacoYamlConfigured = true;
       import("monaco-yaml")
         .then(({ configureMonacoYaml }) => {
           configureMonacoYaml(monaco, {
@@ -55,7 +60,9 @@ const CodeEditor = (props: ICodeEditorProps) => {
             ]
           });
         })
-        .catch(console.error);
+        .catch(() => {
+          (window as any).__monacoYamlConfigured = false;
+        });
     }
   }, [monaco, language]);
 
