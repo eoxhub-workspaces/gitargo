@@ -204,7 +204,7 @@ export default function CodeProject() {
     const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
     const defaultWorkspace = config?.defaults?.namespace || "default";
 
-    // Workspace identifier missing or mismatched
+    // 1. Workspace identifier missing or mismatched on namespace OR serviceAccountName
     const namespace = parsed.metadata?.namespace || "";
     const serviceAccount =
       spec?.serviceAccountName || spec?.serviceAccount || "";
@@ -216,13 +216,29 @@ export default function CodeProject() {
       return true;
     }
 
+    // 2. Profile mismatch on any container template
+    if (spec && Array.isArray(spec.templates)) {
+      const profiles = config?.profiles || {};
+      for (const template of spec.templates) {
+        if (template && (template.container || template.script)) {
+          const matched = matchProfileForTemplate(template, profiles);
+          if (!matched) {
+            return true;
+          }
+        }
+      }
+    }
+
     return false;
   };
 
   const handleReviewClick = () => {
     try {
       const parsed = YAML.parse(yamlContent);
-      const extracted = extractResourcesAndScheduling(parsed);
+      const extracted = extractResourcesAndScheduling(
+        parsed,
+        config?.profiles || {}
+      );
       setSchedulingState(extracted);
     } catch (e) {
       console.warn("Failed to parse latest YAML on review click", e);
@@ -234,7 +250,10 @@ export default function CodeProject() {
   const handleOpenSettingsClick = () => {
     try {
       const parsed = YAML.parse(yamlContent);
-      const extracted = extractResourcesAndScheduling(parsed);
+      const extracted = extractResourcesAndScheduling(
+        parsed,
+        config?.profiles || {}
+      );
       setSchedulingState(extracted);
     } catch (e: any) {
       toast.error(

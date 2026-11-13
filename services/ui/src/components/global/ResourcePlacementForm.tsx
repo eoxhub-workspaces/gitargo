@@ -29,9 +29,6 @@ export const ResourcePlacementForm: React.FC<ResourcePlacementFormProps> = ({
       isProfileAllowedForWorkspace(key, profile, state.workspaceIdentifier)
   );
 
-  const defaultProfileKey =
-    allowedProfileEntries.length > 0 ? allowedProfileEntries[0][0] : "";
-
   const isWorkspaceMismatched =
     state.workspaceIdentifier && state.workspaceIdentifier !== defaultWorkspace;
 
@@ -110,8 +107,10 @@ export const ResourcePlacementForm: React.FC<ResourcePlacementFormProps> = ({
           <div className="space-y-4">
             {availableTemplates.map((templateName) => {
               const currentProfile =
-                state.templateProfiles[templateName] || defaultProfileKey;
+                state.templateProfiles[templateName] || "custom";
 
+              const isCustom =
+                currentProfile === "custom" || currentProfile === "";
               const selectedProfileData = profiles[currentProfile];
 
               return (
@@ -124,10 +123,14 @@ export const ResourcePlacementForm: React.FC<ResourcePlacementFormProps> = ({
                       Step / Container:{" "}
                       <span className="text-blue-600">{templateName}</span>
                     </span>
-                    {selectedProfileData && (
+                    {selectedProfileData ? (
                       <span className="text-[11px] text-gray-500 font-medium">
                         {selectedProfileData.display_name ||
                           selectedProfileData.label}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-amber-700 font-semibold">
+                        Custom / No Match
                       </span>
                     )}
                   </div>
@@ -139,12 +142,28 @@ export const ResourcePlacementForm: React.FC<ResourcePlacementFormProps> = ({
                     }
                     className="w-full bg-white border border-gray-300 text-sm rounded-lg p-2 focus:ring-blue-500 focus:border-blue-500 font-medium text-gray-800"
                   >
+                    <option value="custom">
+                      No Match (Custom Configuration)
+                    </option>
                     {allowedProfileEntries.map(([key, prof]) => (
                       <option key={key} value={key}>
                         {prof.display_name || prof.label || key}
                       </option>
                     ))}
                   </select>
+
+                  {isCustom && (
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 space-y-1">
+                      <p className="font-semibold leading-relaxed">
+                        ⚠️ No matching profile found for step "{templateName}".
+                      </p>
+                      <p className="text-[11px] text-amber-700">
+                        Custom resource limits, requests, tolerations, or node
+                        selectors are configured in the YAML. Select a profile
+                        above if you wish to apply standard profile parameters.
+                      </p>
+                    </div>
+                  )}
                 </div>
               );
             })}

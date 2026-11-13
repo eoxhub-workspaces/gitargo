@@ -407,11 +407,41 @@ export function matchProfileForTemplate(
       Math.abs(currentMemLim - transMemLim) / Math.max(transMemLim, 1) < 0.05;
     const gpuMatch = (currentGpuLim || "") === (transGpuLim || "");
 
-    if (cpuReqMatch && cpuLimMatch && memReqMatch && memLimMatch && gpuMatch) {
+    // Tolerations match check
+    const transTols = translated.tolerations || [];
+    const currentTols = template.tolerations || [];
+    const tolsMatch =
+      transTols.length === currentTols.length &&
+      transTols.every((tt: any) =>
+        currentTols.some(
+          (ct: any) =>
+            ct.key === tt.key &&
+            (ct.value || "") === (tt.value || "") &&
+            (ct.operator || "") === (tt.operator || "") &&
+            (ct.effect || "") === (tt.effect || "")
+        )
+      );
+
+    // NodeSelector match check
+    const transNs = translated.nodeSelector || {};
+    const currentNs = template.nodeSelector || {};
+    const nsKeys = Object.keys(transNs);
+    const nsMatch =
+      Object.keys(currentNs).length === nsKeys.length &&
+      nsKeys.every((k) => currentNs[k] === transNs[k]);
+
+    if (
+      cpuReqMatch &&
+      cpuLimMatch &&
+      memReqMatch &&
+      memLimMatch &&
+      gpuMatch &&
+      tolsMatch &&
+      nsMatch
+    ) {
       return key;
     }
   }
 
-  const firstKey = Object.keys(configProfiles)[0];
-  return firstKey || "";
+  return "custom";
 }
