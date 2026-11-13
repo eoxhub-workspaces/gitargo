@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+const k8s = require('@kubernetes/client-node');
 
 function createLogRouter(ctx) {
   const router = express.Router();
@@ -397,7 +398,7 @@ router.get("/logs/:id", async (req, res, next) => {
     if (logs.length === 0) {
       console.log(`[API LOGS] Loki returned 0 logs. Executing direct Kubernetes API pod log fallback for ID: "${safeId}"`);
       try {
-        const coreV1Api = kc.makeApiClient(k8s.CoreV1Api);
+        const podCoreApi = coreV1Api || k8sCoreApi || (kc ? kc.makeApiClient(k8s.CoreV1Api) : null);
         let targetPodName = podName || safeId;
 
         if (type === 'workflow') {
@@ -555,10 +556,10 @@ router.get("/artifacts/:workflow/:nodeId/:artifactName", async (req, res, next) 
     }
 
     // 3. Extract credentials from K8s secrets if defined in the artifact
-    const coreV1Api = kc.makeApiClient(k8s.CoreV1Api);
+    const podCoreApi = coreV1Api || k8sCoreApi || (kc ? kc.makeApiClient(k8s.CoreV1Api) : null);
     if (s3Config.accessKeySecret) {
       try {
-        const secretRes = await coreV1Api.readNamespacedSecret({
+        const secretRes = await podCoreApi.readNamespacedSecret({
           name: s3Config.accessKeySecret.name,
           namespace
         });
@@ -569,10 +570,10 @@ router.get("/artifacts/:workflow/:nodeId/:artifactName", async (req, res, next) 
         console.warn(`Failed to read accessKeySecret ${s3Config.accessKeySecret.name}: ${err.message}`);
       }
     }
-    
+
     if (s3Config.secretKeySecret) {
       try {
-        const secretRes = await coreV1Api.readNamespacedSecret({
+        const secretRes = await podCoreApi.readNamespacedSecret({
           name: s3Config.secretKeySecret.name,
           namespace
         });
