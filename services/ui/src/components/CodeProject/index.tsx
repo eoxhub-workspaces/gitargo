@@ -347,11 +347,15 @@ export default function CodeProject() {
           exe.metadata.labels?.["workflows.argoproj.io/workflow-template"];
         const cronLabel =
           exe.metadata.labels?.["workflows.argoproj.io/cron-workflow"];
+        const exeName = exe.metadata.name;
 
         return (
           tplLabel === logicalName ||
+          tplLabel?.endsWith(`-${logicalName}`) ||
           cronLabel === logicalName ||
-          exe.metadata.name.startsWith(`${logicalName}-`)
+          cronLabel?.endsWith(`-${logicalName}`) ||
+          exeName.startsWith(`${logicalName}-`) ||
+          exeName.includes(`-${logicalName}-`)
         );
       });
 

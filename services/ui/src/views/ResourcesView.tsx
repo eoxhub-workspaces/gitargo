@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useMemo } from "react";
 import {
   getExecutions,
+  getExecutionMetrics,
   WorkflowExecution,
+  WorkflowExecutionMetrics,
   getConfig,
   AppConfig
 } from "../utils/api";
@@ -90,7 +92,18 @@ const CustomTooltip = ({ active, payload, label }: any) => {
         {payload.map((item: any) => {
           const val = Number(item.value);
           let formattedVal = val.toFixed(3);
-          if (item.name.toLowerCase().includes("cpu")) {
+          if (item.name.includes("Peak CPU")) {
+            formattedVal =
+              val < 1
+                ? `${Math.round(val * 1000)}m Cores`
+                : `${val.toFixed(2)} Cores`;
+          } else if (item.name.includes("Peak Memory")) {
+            const mb = val * 1024;
+            formattedVal =
+              val >= 1
+                ? `${val.toFixed(2)} GiB`
+                : `${mb >= 1 ? mb.toFixed(1) : (val * 1024).toFixed(1)} MiB`;
+          } else if (item.name.toLowerCase().includes("cpu")) {
             formattedVal = formatCpu(val);
           } else if (
             item.name.toLowerCase().includes("memory") ||
@@ -181,6 +194,9 @@ const ResourcesView: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [, setError] = useState<string | null>(null);
   const [, setConfig] = useState<AppConfig | null>(null);
+  const [promMetrics, setPromMetrics] = useState<
+    Record<string, WorkflowExecutionMetrics>
+  >({});
 
   // Filters
   const [workflowFilter, setWorkflowFilter] = useState("");
@@ -236,6 +252,32 @@ const ResourcesView: React.FC = () => {
     return result;
   }, [executions, workflowFilter, phaseFilter, timeRange]);
 
+  useEffect(() => {
+    if (filteredData.length > 0) {
+      // Prioritize the 50 most recent executions (newest first)
+      const recentExecutions = [...filteredData].reverse().slice(0, 50);
+      Promise.all(
+        recentExecutions.map(async (exe) => {
+          try {
+            const m = await getExecutionMetrics(exe.metadata.name);
+            if (m && m.available) {
+              return { name: exe.metadata.name, metrics: m };
+            }
+          } catch {
+            // ignore metric fetch errors
+          }
+          return null;
+        })
+      ).then((results) => {
+        const map: Record<string, WorkflowExecutionMetrics> = {};
+        results.forEach((r) => {
+          if (r) map[r.name] = r.metrics;
+        });
+        setPromMetrics(map);
+      });
+    }
+  }, [filteredData]);
+
   const stats = useMemo(() => {
     const workflowStats: Record<
       string,
@@ -272,6 +314,7 @@ const ResourcesView: React.FC = () => {
       .map((exe, index) => {
         const name = exe.metadata.name;
         const { cpu, memory, storage, gpu } = getEstimatedDurations(exe);
+        const pm = promMetrics[exe.metadata.name];
 
         return {
           name,
@@ -280,10 +323,16 @@ const ResourcesView: React.FC = () => {
             exe.metadata.creationTimestamp
           ).toLocaleString(),
           cpu: Number((cpu / 3600).toFixed(5)), // in core-hours (5 decimals to preserve low consumption)
-          memory: Number(((memory * 0.1) / 3600).toFixed(5)), // in GB-hours (Argo stores Memory in 100Mi-seconds, so multiply by 0.1)
-          storage: Number(((storage * 0.1) / 3600).toFixed(5)), // in GB-hours (Argo stores Storage in 100Mi-seconds, so multiply by 0.1)
-          gpu: Number((gpu / 3600).toFixed(5)), // in GPU-hours
-          fill: COLORS[index % COLORS.length] // Inject color directly into data
+          memory: Number(((memory * 0.1) / 3600).toFixed(5)), // in GB-hours
+          storage: Number(((storage * 0.1) / 3600).toFixed(5)),
+          gpu: Number((gpu / 3600).toFixed(5)),
+          peakCpuCores: pm?.peakCpuCores
+            ? Number(pm.peakCpuCores.toFixed(4))
+            : 0,
+          peakMemoryGb: pm?.peakMemoryBytes
+            ? Number((pm.peakMemoryBytes / 1073741824).toFixed(6))
+            : 0,
+          fill: COLORS[index % COLORS.length]
         };
       })
       .sort((a, b) => a.timestamp - b.timestamp);
@@ -320,7 +369,7 @@ const ResourcesView: React.FC = () => {
       totalStorage: ((totalStorage * 0.1) / 3600).toFixed(4),
       totalGpu: (totalGpu / 3600).toFixed(4)
     };
-  }, [filteredData]);
+  }, [filteredData, promMetrics]);
 
   const uniqueWorkflows = useMemo(() => {
     const set = new Set<string>();
@@ -583,13 +632,13 @@ const ResourcesView: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-12">
           <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
             <h3 className="text-lg font-bold text-gray-800 mb-6">
-              CPU Consumption by Workflow Run
+              CPU Consumption & Peak Maxima by Workflow Run
             </h3>
             <div className="h-96 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   data={stats.workflowChartData}
-                  margin={{ bottom: 90, left: 10, right: 10 }}
+                  margin={{ bottom: 90, left: 10, right: 25 }}
                 >
                   <CartesianGrid
                     strokeDasharray="3 3"
@@ -608,18 +657,38 @@ const ResourcesView: React.FC = () => {
                     tickLine={false}
                   />
                   <YAxis
+                    yAxisId="left"
+                    orientation="left"
                     type="number"
                     fontSize={10}
                     axisLine={false}
                     tickLine={false}
-                    tickFormatter={(val) => Number(val).toFixed(5)}
+                    tickFormatter={(val) => `${Number(val).toFixed(3)} core-h`}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    type="number"
+                    fontSize={10}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(val) => `${Number(val).toFixed(2)} Cores`}
                   />
                   <Tooltip content={<CustomTooltip />} />
+                  <Legend verticalAlign="top" align="right" height={30} />
                   <Bar
+                    yAxisId="left"
                     dataKey="cpu"
-                    name="CPU (core-hours)"
+                    name="Reserved CPU (core-hours)"
                     radius={[4, 4, 0, 0]}
                     fill="#004170"
+                  />
+                  <Bar
+                    yAxisId="right"
+                    dataKey="peakCpuCores"
+                    name="Peak CPU (Cores)"
+                    radius={[4, 4, 0, 0]}
+                    fill="#00a3e0"
                   />
                 </BarChart>
               </ResponsiveContainer>
@@ -628,13 +697,13 @@ const ResourcesView: React.FC = () => {
 
           <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
             <h3 className="text-lg font-bold text-gray-800 mb-6">
-              Memory Consumption by Workflow Run
+              Memory Consumption & Peak Maxima by Workflow Run
             </h3>
             <div className="h-96 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   data={stats.workflowChartData}
-                  margin={{ bottom: 90, left: 10, right: 10 }}
+                  margin={{ bottom: 90, left: 10, right: 25 }}
                 >
                   <CartesianGrid
                     strokeDasharray="3 3"
@@ -653,18 +722,42 @@ const ResourcesView: React.FC = () => {
                     tickLine={false}
                   />
                   <YAxis
+                    yAxisId="left"
+                    orientation="left"
                     type="number"
                     fontSize={10}
                     axisLine={false}
                     tickLine={false}
-                    tickFormatter={(val) => Number(val).toFixed(5)}
+                    tickFormatter={(val) => `${Number(val).toFixed(3)} GB-h`}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    type="number"
+                    fontSize={10}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(val) => {
+                      const gb = Number(val);
+                      if (gb >= 1) return `${gb.toFixed(1)} GiB`;
+                      return `${(gb * 1024).toFixed(0)} MiB`;
+                    }}
                   />
                   <Tooltip content={<CustomTooltip />} />
+                  <Legend verticalAlign="top" align="right" height={30} />
                   <Bar
+                    yAxisId="left"
                     dataKey="memory"
-                    name="Memory (GB-hours)"
+                    name="Reserved Memory (GB-hours)"
                     radius={[4, 4, 0, 0]}
                     fill="#0078b4"
+                  />
+                  <Bar
+                    yAxisId="right"
+                    dataKey="peakMemoryGb"
+                    name="Peak Memory (GiB)"
+                    radius={[4, 4, 0, 0]}
+                    fill="#10b981"
                   />
                 </BarChart>
               </ResponsiveContainer>

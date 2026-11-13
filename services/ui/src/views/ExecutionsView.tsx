@@ -6,6 +6,8 @@ import toast from "react-hot-toast";
 import {
   getExecutions,
   WorkflowExecution,
+  WorkflowExecutionMetrics,
+  getExecutionMetrics,
   getLogs,
   deleteExecution,
   terminateExecution
@@ -141,6 +143,50 @@ const ExecutionsView: React.FC = () => {
   } | null>(null);
   const [artifactContent, setArtifactContent] = useState<string | null>(null);
   const [artifactLoading, setArtifactLoading] = useState(false);
+  const [executionMetrics, setExecutionMetrics] =
+    useState<WorkflowExecutionMetrics | null>(null);
+  const [stepMetrics, setStepMetrics] =
+    useState<WorkflowExecutionMetrics | null>(null);
+
+  const formatCpu = (cores: number) => {
+    if (!cores) return "0 Cores";
+    if (cores < 1) return `${Math.round(cores * 1000)}m`;
+    return `${cores.toFixed(2)} Cores`;
+  };
+
+  const formatMemory = (bytes: number) => {
+    if (!bytes) return "0 Bytes";
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return `${gb.toFixed(2)} GiB`;
+    const mb = bytes / (1024 * 1024);
+    return `${mb.toFixed(0)} MiB`;
+  };
+
+  useEffect(() => {
+    if (selectedExe?.metadata.name) {
+      getExecutionMetrics(selectedExe.metadata.name)
+        .then((m) => setExecutionMetrics(m))
+        .catch(() => setExecutionMetrics(null));
+    } else {
+      setExecutionMetrics(null);
+    }
+  }, [selectedExe?.metadata.name]);
+
+  useEffect(() => {
+    if (
+      selectedExe?.metadata.name &&
+      selectedNodeId &&
+      selectedNodeId !== "workflow-overview"
+    ) {
+      const nodeObj = selectedExe.status?.nodes?.[selectedNodeId];
+      const stepPod = nodeObj?.id || nodeObj?.name || selectedNodeId;
+      getExecutionMetrics(selectedExe.metadata.name, stepPod)
+        .then((m) => setStepMetrics(m))
+        .catch(() => setStepMetrics(null));
+    } else {
+      setStepMetrics(null);
+    }
+  }, [selectedExe?.metadata.name, selectedNodeId]);
 
   const queryParams = useMemo(
     () => new URLSearchParams(location.search),
@@ -318,18 +364,29 @@ const ExecutionsView: React.FC = () => {
       result = result.filter(
         (exe) =>
           (exe.metadata.labels &&
-            exe.metadata.labels["workflows.argoproj.io/workflow-template"] ===
-              workflowFilter) ||
-          exe.metadata.name.startsWith(`${workflowFilter}-`)
+            (exe.metadata.labels["workflows.argoproj.io/workflow-template"] ===
+              workflowFilter ||
+              exe.metadata.labels[
+                "workflows.argoproj.io/workflow-template"
+              ]?.endsWith(`-${workflowFilter}`))) ||
+          exe.metadata.name.startsWith(`${workflowFilter}-`) ||
+          exe.metadata.name.includes(`-${workflowFilter}-`)
       );
     }
     if (uiWorkflowFilter) {
       result = result.filter((exe) => {
         const templateName =
           exe.metadata.labels?.["workflows.argoproj.io/workflow-template"];
-        if (templateName === uiWorkflowFilter) return true;
+        if (
+          templateName === uiWorkflowFilter ||
+          templateName?.endsWith(`-${uiWorkflowFilter}`)
+        )
+          return true;
         // Fallback for names if labels missing
-        return exe.metadata.name.startsWith(`${uiWorkflowFilter}-`);
+        return (
+          exe.metadata.name.startsWith(`${uiWorkflowFilter}-`) ||
+          exe.metadata.name.includes(`-${uiWorkflowFilter}-`)
+        );
       });
     }
     if (uiPhaseFilter) {
@@ -1194,8 +1251,109 @@ const ExecutionsView: React.FC = () => {
                       <div>
                         <h4 className="flex items-center text-sm font-bold text-green-400 mb-4 uppercase tracking-wider">
                           <CpuChipIcon className="w-4 h-4 mr-2" />
-                          Resources Consumption
+                          Resource Usage & Peak Maxima
                         </h4>
+
+                        {/* Peak Resource Usage */}
+                        {executionMetrics && executionMetrics.available && (
+                          <div className="mb-6 bg-gradient-to-r from-gray-900 to-gray-800 rounded-lg p-5 border border-blue-500/30 shadow-md">
+                            <div className="flex items-center justify-between mb-4">
+                              <h5 className="text-xs font-bold text-blue-400 uppercase tracking-wider flex items-center">
+                                <CpuChipIcon className="w-4 h-4 mr-1.5" />
+                                Peak Resource Usage
+                              </h5>
+                              <span className="text-[10px] text-blue-300 bg-blue-950/80 px-2.5 py-0.5 rounded border border-blue-700 font-mono">
+                                Peak Maxima
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              {/* Peak CPU */}
+                              <div className="bg-gray-800/80 rounded-lg p-4 border border-gray-700/80">
+                                <div className="flex justify-between items-start mb-1">
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold">
+                                    Peak CPU Usage (Max Cores)
+                                  </span>
+                                  {executionMetrics.cpuLimitsCores > 0 && (
+                                    <span className="text-[10px] text-blue-300 font-mono">
+                                      Limit:{" "}
+                                      {formatCpu(
+                                        executionMetrics.cpuLimitsCores
+                                      )}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-2xl font-extrabold text-blue-400 font-mono">
+                                  {formatCpu(executionMetrics.peakCpuCores)}
+                                </div>
+                                {executionMetrics.cpuLimitsCores > 0 && (
+                                  <div className="mt-2 w-full bg-gray-700 rounded-full h-1.5">
+                                    <div
+                                      className={`h-1.5 rounded-full ${
+                                        executionMetrics.peakCpuCores /
+                                          executionMetrics.cpuLimitsCores >
+                                        0.9
+                                          ? "bg-red-500"
+                                          : "bg-blue-500"
+                                      }`}
+                                      style={{
+                                        width: `${Math.min(
+                                          100,
+                                          (executionMetrics.peakCpuCores /
+                                            executionMetrics.cpuLimitsCores) *
+                                            100
+                                        )}%`
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Peak Memory */}
+                              <div className="bg-gray-800/80 rounded-lg p-4 border border-gray-700/80">
+                                <div className="flex justify-between items-start mb-1">
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold">
+                                    Peak RAM Usage (Max Working Set)
+                                  </span>
+                                  {executionMetrics.memoryLimitsBytes > 0 && (
+                                    <span className="text-[10px] text-emerald-300 font-mono">
+                                      Limit:{" "}
+                                      {formatMemory(
+                                        executionMetrics.memoryLimitsBytes
+                                      )}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-2xl font-extrabold text-emerald-400 font-mono">
+                                  {formatMemory(
+                                    executionMetrics.peakMemoryBytes
+                                  )}
+                                </div>
+                                {executionMetrics.memoryLimitsBytes > 0 && (
+                                  <div className="mt-2 w-full bg-gray-700 rounded-full h-1.5">
+                                    <div
+                                      className={`h-1.5 rounded-full ${
+                                        executionMetrics.peakMemoryBytes /
+                                          executionMetrics.memoryLimitsBytes >
+                                        0.9
+                                          ? "bg-red-500"
+                                          : "bg-emerald-500"
+                                      }`}
+                                      style={{
+                                        width: `${Math.min(
+                                          100,
+                                          (executionMetrics.peakMemoryBytes /
+                                            executionMetrics.memoryLimitsBytes) *
+                                            100
+                                        )}%`
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
                         {selectedExe?.status?.resourcesDuration ? (
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {Object.entries(
@@ -1341,6 +1499,36 @@ const ExecutionsView: React.FC = () => {
                                         </span>
                                       </div>
                                     ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Step Level Peak Usage */}
+                              {stepMetrics && stepMetrics.available && (
+                                <div className="mt-4 pt-4 border-t border-gray-700">
+                                  <span className="text-xs font-bold text-blue-400 block mb-2 uppercase tracking-wider flex items-center">
+                                    <CpuChipIcon className="w-3.5 h-3.5 mr-1" />
+                                    Step Peak Usage
+                                  </span>
+                                  <div className="grid grid-cols-2 gap-2 bg-black/30 p-3 rounded border border-blue-500/20">
+                                    <div>
+                                      <span className="text-[10px] text-gray-400 block mb-0.5">
+                                        Peak CPU
+                                      </span>
+                                      <span className="text-sm font-extrabold text-blue-400 font-mono">
+                                        {formatCpu(stepMetrics.peakCpuCores)}
+                                      </span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[10px] text-gray-400 block mb-0.5">
+                                        Peak RAM
+                                      </span>
+                                      <span className="text-sm font-extrabold text-emerald-400 font-mono">
+                                        {formatMemory(
+                                          stepMetrics.peakMemoryBytes
+                                        )}
+                                      </span>
+                                    </div>
                                   </div>
                                 </div>
                               )}

@@ -10,11 +10,23 @@ export const getWorkflow = async (
   path: string,
   commitId?: string
 ): Promise<WorkflowFile> => {
-  const response = await api.get<WorkflowFile>(
-    `/workflows/${encodeURIComponent(path)}`,
-    { params: { commit_id: commitId } }
-  );
-  return response.data;
+  const response = await api.get(`/workflows/${encodeURIComponent(path)}`, {
+    params: { commit_id: commitId },
+    responseType: "text"
+  });
+  const rawContent =
+    typeof response.data === "string"
+      ? response.data
+      : JSON.stringify(response.data, null, 2);
+
+  return {
+    id: path,
+    name: path.split("/").pop() || path,
+    type: "blob",
+    path: path,
+    mode: "100644",
+    content: rawContent
+  };
 };
 
 export const getWorkflowHistory = async (

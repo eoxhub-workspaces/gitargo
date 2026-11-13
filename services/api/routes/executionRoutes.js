@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const tar = require('tar-stream');
 const zlib = require('zlib');
+const { getWorkflowPeakMetrics } = require('../lib/prometheusService');
 
 function createExecutionRouter(ctx) {
   const router = express.Router();
@@ -56,6 +57,51 @@ function createExecutionRouter(ctx) {
     validateArgoWorkflow
   } = ctx;
 
+  function sendK8sError(res, error) {
+    const status = error.statusCode || error.status || (error.body && error.body.code) || 500;
+    const message = (error.body && error.body.message) || error.message || "Kubernetes API Error";
+    return res.status(status).json({ message, details: error.body || error });
+  }
+
+  function injectUserWorkspaceVolume(workflow, username) {
+    if (!workflow || !workflow.spec) return;
+
+    const pvcName = JUPYTERHUB_PVC_NAME || 'jupyterhub-home';
+    if (!pvcName) return;
+
+    if (!workflow.spec.volumes) workflow.spec.volumes = [];
+    const existingVol = workflow.spec.volumes.find(v => v.name === 'workspace-volume' || v.name === 'jupyterhub-home');
+
+    if (!existingVol) {
+      workflow.spec.volumes.push({
+        name: 'workspace-volume',
+        persistentVolumeClaim: {
+          claimName: pvcName
+        }
+      });
+    }
+
+    if (Array.isArray(workflow.spec.templates)) {
+      workflow.spec.templates.forEach(template => {
+        if (template.container || template.script) {
+          const target = template.container || template.script;
+          if (!target.volumeMounts) target.volumeMounts = [];
+          const hasMount = target.volumeMounts.some(m => m.name === 'workspace-volume' || m.name === 'jupyterhub-home');
+          if (!hasMount) {
+            const mount = {
+              name: 'workspace-volume',
+              mountPath: '/workspace/results'
+            };
+            if (MULTI_TENANT_MODE && username) {
+              mount.subPath = `${username}/results`;
+            }
+            target.volumeMounts.push(mount);
+          }
+        }
+      });
+    }
+  }
+
 router.get("/executions", async (req, res, next) => {
   try {
     const namespace = process.env.ARGO_NAMESPACE || "default";
@@ -93,6 +139,42 @@ router.get("/executions", async (req, res, next) => {
     if (error.body) {
        console.error("K8s API Error Body:", error.body);
     }
+    next(error);
+  }
+});
+
+/**
+ * GET /api/executions/:name/metrics
+ * Query Prometheus for peak CPU and Memory maxima for a workflow execution.
+ */
+router.get("/executions/:name/metrics", async (req, res, next) => {
+  try {
+    const namespace = process.env.ARGO_NAMESPACE || "default";
+    const { name } = req.params;
+    const { pod } = req.query;
+
+    let startTime = null;
+    let finishTime = null;
+    try {
+      const response = await customObjectsApi.getNamespacedCustomObject({
+        group: 'argoproj.io',
+        version: 'v1alpha1',
+        namespace: namespace,
+        plural: 'workflows',
+        name: name
+      });
+      const wf = response?.body || response;
+      startTime = wf.status?.startedAt || wf.metadata?.creationTimestamp;
+      finishTime = wf.status?.finishedAt;
+    } catch (err) {
+      // Proceed with fallback timestamps
+    }
+
+    const username = getUsername(req);
+    const metrics = await getWorkflowPeakMetrics(namespace, name, startTime, finishTime, pod, username);
+    res.json(metrics);
+  } catch (error) {
+    console.error(`Error fetching Prometheus metrics for ${req.params.name}:`, error.message);
     next(error);
   }
 });

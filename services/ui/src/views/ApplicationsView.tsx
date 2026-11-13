@@ -570,7 +570,9 @@ const ApplicationsView: React.FC = () => {
                   ingress: details.ingress || ""
                 };
               }
-            } catch (_e) {}
+            } catch {
+              // Ignore missing application details
+            }
             try {
               const status = await getApplicationStatus(app.name);
               if (status) newStatuses[app.name] = status;

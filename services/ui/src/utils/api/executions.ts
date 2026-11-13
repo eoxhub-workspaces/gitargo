@@ -1,5 +1,9 @@
 import { api } from "./client";
-import { WorkflowExecution, CwlSubmissionPayload } from "./types";
+import {
+  WorkflowExecution,
+  WorkflowExecutionMetrics,
+  CwlSubmissionPayload
+} from "./types";
 
 export const getExecutions = async (): Promise<WorkflowExecution[]> => {
   const response = await api.get<WorkflowExecution[]>("/executions");
@@ -11,6 +15,17 @@ export const getExecution = async (
 ): Promise<WorkflowExecution> => {
   const response = await api.get<WorkflowExecution>(
     `/executions/${encodeURIComponent(name)}`
+  );
+  return response.data;
+};
+
+export const getExecutionMetrics = async (
+  name: string,
+  pod?: string
+): Promise<WorkflowExecutionMetrics> => {
+  const response = await api.get<WorkflowExecutionMetrics>(
+    `/executions/${encodeURIComponent(name)}/metrics`,
+    { params: { pod } }
   );
   return response.data;
 };

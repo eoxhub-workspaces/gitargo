@@ -51,18 +51,75 @@ function createLogRouter(ctx) {
     validateArgoWorkflow
   } = ctx;
 
+  const NAMESPACE = process.env.ARGO_NAMESPACE || "default";
+  const LOKI_CANDIDATES = [
+    process.env.LOKI_URL,
+    "http://mon-loki-gateway.core.svc:80",
+    "http://mon-loki.core.svc:3100",
+    "http://loki-headless.core.svc:3100",
+    "http://mon-loki-gateway.core:80",
+    "http://loki-gateway.monitoring.svc:80",
+    "http://loki.monitoring.svc:3100"
+  ].filter(Boolean);
+
+  let cachedWorkingLokiUrl = null;
+
+  async function getLokiUrl() {
+    if (cachedWorkingLokiUrl) return cachedWorkingLokiUrl;
+    if (process.env.LOKI_URL) return process.env.LOKI_URL;
+
+    for (const url of LOKI_CANDIDATES) {
+      try {
+        const res = await axios.get(`${url}/loki/api/v1/labels`, {
+          timeout: 1500
+        });
+        if (res.status === 200) {
+          console.log(`[API LOGS] Auto-discovered working Loki service at: ${url}`);
+          cachedWorkingLokiUrl = url;
+          return url;
+        }
+      } catch (e) {
+        // try next candidate
+      }
+    }
+
+    return LOKI_CANDIDATES[0] || "http://mon-loki-gateway.core.svc:80";
+  }
+
+  const LOKI_LABELS = ["pod", "container", "namespace", "workflow", "cronworkflow"];
+  const NAMESPACE_LABEL = process.env.LOKI_NAMESPACE_LABEL || "namespace";
+  const ARGO_WORKFLOW_LABEL = process.env.LOKI_WORKFLOW_LABEL || "workflows_argoproj_io_workflow";
+
+  function toLokiTimestamp(isoString) {
+    if (!isoString) return `${Date.now() * 1000000}`;
+    const ms = new Date(isoString).getTime();
+    return isNaN(ms) ? `${Date.now() * 1000000}` : `${ms * 1000000}`;
+  }
+
+  function getLokiConfig(req) {
+    const config = { headers: {} };
+    if (process.env.LOKI_BEARER_TOKEN) {
+      config.headers['Authorization'] = `Bearer ${process.env.LOKI_BEARER_TOKEN}`;
+    }
+    if (req && req.headers && req.headers['authorization']) {
+      config.headers['Authorization'] = req.headers['authorization'];
+    }
+    return config;
+  }
+
 router.get("/logs/labels", async (req, res, next) => {
   try {
     const { start_time } = req.query;
     const startNs = toLokiTimestamp(start_time || new Date(Date.now() - 3600000).toISOString());
+    const lokiUrl = await getLokiUrl();
     
-    const config = getLokiConfig(req, LOKI_URL);
+    const config = getLokiConfig(req);
     config.params = {
       query: `{${NAMESPACE_LABEL}="${NAMESPACE}"}`,
       start: startNs
     };
 
-    const resp = await axios.get(`${LOKI_URL}/loki/api/v1/labels`, config);
+    const resp = await axios.get(`${lokiUrl}/loki/api/v1/labels`, config);
     const labels = resp.data.data || [];
     console.log(`[API LOGS] All available Loki labels in namespace:`, labels);
     const filtered = labels.filter(l => !l.startsWith("__") && LOKI_LABELS.includes(l)).sort();
@@ -88,15 +145,16 @@ router.get("/logs/values/:label", async (req, res, next) => {
 
     const startNs = toLokiTimestamp(start_time || new Date(Date.now() - 3600000).toISOString());
     const endNs = end_time ? toLokiTimestamp(end_time) : null;
+    const lokiUrl = await getLokiUrl();
 
-    const config = getLokiConfig(req, LOKI_URL);
+    const config = getLokiConfig(req);
     config.params = {
       query: `{${NAMESPACE_LABEL}="${NAMESPACE}"}`,
       start: startNs
     };
     if (endNs) config.params.end = endNs;
 
-    const resp = await axios.get(`${LOKI_URL}/loki/api/v1/label/${label}/values`, config);
+    const resp = await axios.get(`${lokiUrl}/loki/api/v1/label/${label}/values`, config);
     res.json((resp.data.data || []).sort());
   } catch (error) {
     console.error(`Error fetching Loki values for ${req.params.label}:`, error.message);
@@ -165,16 +223,18 @@ router.get("/logs/:id", async (req, res, next) => {
       logql += ` |= "${safeQuery}"`;
     }
     
+    const lokiUrl = await getLokiUrl();
+
     // Helper function to fetch and parse logs. Instantiates a fresh config object per-request to avoid race conditions.
     const fetchAndParse = async (queryStr) => {
-      const queryConfig = getLokiConfig(req, LOKI_URL);
+      const queryConfig = getLokiConfig(req);
       queryConfig.params = { query: queryStr, limit: 1000, start: startNs };
       if (endNs) queryConfig.params.end = endNs;
       
-      console.log(`Fetching logs from Loki: ${LOKI_URL}/loki/api/v1/query_range?query=${queryStr}`);
+      console.log(`Fetching logs from Loki: ${lokiUrl}/loki/api/v1/query_range?query=${queryStr}`);
       let resp;
       try {
-        resp = await axios.get(`${LOKI_URL}/loki/api/v1/query_range`, queryConfig);
+        resp = await axios.get(`${lokiUrl}/loki/api/v1/query_range`, queryConfig);
         if (resp.data) {
           const resultsCount = resp.data.data?.result?.length || 0;
           console.log(`[API LOGS] Loki response: status=${resp.status} | resultsCount=${resultsCount}`);
@@ -396,8 +456,8 @@ router.get("/logs/:id", async (req, res, next) => {
 
       console.log(`[API LOGS] No logs found across all labels and fallbacks for ID: "${id}"`);
       try {
-        const config = getLokiConfig(req, LOKI_URL);
-        const labelsResp = await axios.get(`${LOKI_URL}/loki/api/v1/labels`, config);
+        const config = getLokiConfig(req);
+        const labelsResp = await axios.get(`${lokiUrl}/loki/api/v1/labels`, config);
         console.log(`[API LOGS] DIAGNOSTIC: All available Loki label keys in your cluster are:`, labelsResp.data.data || []);
       } catch (labelErr) {
         console.error(`[API LOGS] DIAGNOSTIC ERROR: Failed to fetch Loki labels:`, labelErr.message);

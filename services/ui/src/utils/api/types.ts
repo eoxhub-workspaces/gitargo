@@ -91,6 +91,17 @@ export interface WorkflowExecution {
   spec: any;
 }
 
+export interface WorkflowExecutionMetrics {
+  available: boolean;
+  peakMemoryBytes: number;
+  peakCpuCores: number;
+  cpuRequestsCores: number;
+  cpuLimitsCores: number;
+  memoryRequestsBytes: number;
+  memoryLimitsBytes: number;
+  durationSec: number;
+}
+
 export interface Application {
   name: string;
   files: string[];
