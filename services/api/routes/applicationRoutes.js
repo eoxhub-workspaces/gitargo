@@ -126,7 +126,7 @@ router.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, async 
   try {
     const appName = getVirtualPath(req);
     const { folder, prefix } = resolveAppLocation(appName);
-    const namespace = process.env.ARGO_NAMESPACE || "default";
+    let namespace = process.env.ARGO_NAMESPACE || "default";
 
     // Read deployment YAML from Git to determine exact metadata.name, metadata.namespace & spec.selector.matchLabels
     let targetK8sName = prefix || folder;
@@ -352,7 +352,7 @@ router.delete(/^\/applications\/(.+)\/pods\/(.+)$/, requiresApplicationsEnabled,
     try { appName = decodeURIComponent(rawAppName); } catch (e) {}
 
     const { folder, prefix } = resolveAppLocation(appName);
-    const namespace = process.env.ARGO_NAMESPACE || "default";
+    let namespace = process.env.ARGO_NAMESPACE || "default";
 
     let targetK8sName = prefix || folder;
     const depFile = getAppFilename(prefix, "deployment");
@@ -694,7 +694,7 @@ router.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, async 
   try {
     const appName = req.params[0];
     const { folder, prefix } = resolveAppLocation(appName);
-    const namespace = process.env.ARGO_NAMESPACE || "default";
+    let namespace = process.env.ARGO_NAMESPACE || "default";
 
     // Read deployment YAML from Git to determine exact metadata.name, metadata.namespace & spec.selector.matchLabels
     let targetK8sName = prefix || folder;
