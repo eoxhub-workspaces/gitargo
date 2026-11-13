@@ -27,6 +27,7 @@ function createLogRouter(ctx) {
     BASE_PATH,
     customObjectsApi,
     appsV1Api,
+    coreV1Api,
     networkingV1Api,
     k8sApi,
     k8sCustomApi,
@@ -404,7 +405,7 @@ router.get("/logs/:id", async (req, res, next) => {
 
         if (type === 'workflow') {
           try {
-            const podsRes = await coreV1Api.listNamespacedPod({
+            const podsRes = await podCoreApi.listNamespacedPod({
               namespace: ns,
               labelSelector: `workflows.argoproj.io/workflow=${safeId}`
             });
@@ -419,7 +420,7 @@ router.get("/logs/:id", async (req, res, next) => {
 
         let rawText = "";
         try {
-          const podLogRes = await coreV1Api.readNamespacedPodLog({
+          const podLogRes = await podCoreApi.readNamespacedPodLog({
             name: targetPodName,
             namespace: ns,
             container: 'main'
@@ -427,7 +428,7 @@ router.get("/logs/:id", async (req, res, next) => {
           rawText = typeof podLogRes === 'string' ? podLogRes : (podLogRes?.body || '');
         } catch (e1) {
           try {
-            const prevLogRes = await coreV1Api.readNamespacedPodLog({
+            const prevLogRes = await podCoreApi.readNamespacedPodLog({
               name: targetPodName,
               namespace: ns,
               container: 'main',
@@ -436,7 +437,7 @@ router.get("/logs/:id", async (req, res, next) => {
             rawText = typeof prevLogRes === 'string' ? prevLogRes : (prevLogRes?.body || '');
           } catch (e2) {
             try {
-              const defLogRes = await coreV1Api.readNamespacedPodLog({
+              const defLogRes = await podCoreApi.readNamespacedPodLog({
                 name: targetPodName,
                 namespace: ns
               });
