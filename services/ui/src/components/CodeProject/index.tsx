@@ -131,10 +131,14 @@ const injectResourcesAndScheduling = (
           Object.keys(translated.resources).length > 0
         ) {
           target.resources = translated.resources;
+        } else {
+          delete target.resources;
         }
 
         if (translated.tolerations && translated.tolerations.length > 0) {
           template.tolerations = translated.tolerations;
+        } else {
+          delete template.tolerations;
         }
 
         if (
@@ -142,6 +146,8 @@ const injectResourcesAndScheduling = (
           Object.keys(translated.nodeSelector).length > 0
         ) {
           template.nodeSelector = translated.nodeSelector;
+        } else {
+          delete template.nodeSelector;
         }
       }
     });
