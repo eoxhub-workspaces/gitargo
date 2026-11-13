@@ -76,7 +76,11 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
       }
     }
 
-    if (cleanUsername && !finalName.startsWith(`${cleanUsername}-`)) {
+    if (
+      config?.multiTenantMode &&
+      cleanUsername &&
+      !finalName.startsWith(`${cleanUsername}-`)
+    ) {
       finalName = `${cleanUsername}-${finalName}`;
     }
 

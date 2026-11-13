@@ -424,6 +424,7 @@ export default function CodeProject() {
           }
 
           if (
+            appConfig.multiTenantMode &&
             cleanUsername &&
             !logicalInitialName.startsWith(`${cleanUsername}-`)
           ) {
