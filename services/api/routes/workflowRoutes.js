@@ -291,7 +291,8 @@ router.get(/^\/workflows\/(.+)\/history$/, async (req, res, next) => {
       {
         params: {
           path: filePath,
-          ref_name: GITLAB_BRANCH
+          ref_name: GITLAB_BRANCH,
+          with_stats: true
         }
       }
     );
@@ -313,7 +314,7 @@ router.get(/^\/workflows\/(.+)$/, async (req, res, next) => {
   try {
     const virtualPath = getVirtualPath(req);
     const filePath = getGitLabPath(virtualPath, req);
-    const ref = req.query.ref || GITLAB_BRANCH;
+    const ref = req.query.ref || req.query.commit_id || req.query.ref_name || GITLAB_BRANCH;
 
     const response = await gitlabApi.get(
       `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,

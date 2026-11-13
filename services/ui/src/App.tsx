@@ -5,7 +5,6 @@ import { ExclamationTriangleIcon } from "@heroicons/react/24/outline";
 
 import CodeProject from "./components/CodeProject";
 import ListView from "./views/ListView";
-import HistoryView from "./views/HistoryView";
 import ExecutionsView from "./views/ExecutionsView";
 import ResourcesView from "./views/ResourcesView";
 import ApplicationsView from "./views/ApplicationsView";
@@ -169,16 +168,6 @@ export default function App() {
             element={
               enableWorkflows ? (
                 <CodeProject />
-              ) : (
-                <DisabledModuleView message="Workflow Management is currently disabled." />
-              )
-            }
-          />
-          <Route
-            path="/history/:filename"
-            element={
-              enableWorkflows ? (
-                <HistoryView />
               ) : (
                 <DisabledModuleView message="Workflow Management is currently disabled." />
               )

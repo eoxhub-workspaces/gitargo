@@ -18,6 +18,11 @@ export interface CommitHistory {
   committer_email: string;
   committed_date: string;
   message: string;
+  stats?: {
+    additions?: number;
+    deletions?: number;
+    total?: number;
+  };
 }
 
 export interface IngressConfig {

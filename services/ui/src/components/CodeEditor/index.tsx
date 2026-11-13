@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import Editor, { useMonaco } from "@monaco-editor/react";
+import { useDarkMode } from "../global/DarkModeSwitch/userDarkMode";
 
 // The window.MonacoEnvironment needs to be set up to tell Monaco where to find the workers.
 // The workers must be served from the public directory (static/js).
@@ -34,6 +35,7 @@ interface ICodeEditorProps {
 const CodeEditor = (props: ICodeEditorProps) => {
   const { data, language, onChange, disabled, lineWrapping, height } = props;
   const monaco = useMonaco();
+  const [isDark] = useDarkMode();
 
   useEffect(() => {
     if (monaco && language === "yaml") {
@@ -68,7 +70,7 @@ const CodeEditor = (props: ICodeEditorProps) => {
       <Editor
         height={typeof height === "number" ? `${height}px` : height}
         language={language}
-        theme="vs-light"
+        theme={isDark ? "vs-dark" : "vs-light"}
         value={data}
         onChange={handleEditorChange}
         options={{

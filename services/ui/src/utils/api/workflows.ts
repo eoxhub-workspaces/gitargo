@@ -11,7 +11,7 @@ export const getWorkflow = async (
   commitId?: string
 ): Promise<WorkflowFile> => {
   const response = await api.get(`/workflows/${encodeURIComponent(path)}`, {
-    params: { commit_id: commitId },
+    params: { ref: commitId, commit_id: commitId },
     responseType: "text"
   });
   const rawContent =

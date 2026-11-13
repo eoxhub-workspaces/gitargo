@@ -16,6 +16,7 @@ import * as api from "../../utils/api";
 import { useTitle } from "../../hooks";
 import Header from "../global/Header";
 import CodeEditor from "../CodeEditor";
+import { DiffEditor } from "@monaco-editor/react";
 import { SubmitWorkflowModal } from "../modals/SubmitWorkflowModal";
 import {
   ResourcePlacementForm,
@@ -26,6 +27,7 @@ import {
   matchProfileForTemplate,
   isProfileAllowedForWorkspace
 } from "../../utils/forms";
+import { useDarkMode } from "../global/DarkModeSwitch/userDarkMode";
 
 const extractAvailableTemplates = (parsed: any): string[] => {
   if (!parsed) return [];
@@ -160,6 +162,7 @@ export default function CodeProject() {
   const { filename } = useParams<{ filename?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const [isDark] = useDarkMode();
   const queryParams = new URLSearchParams(location.search);
   const initialName = queryParams.get("name") || undefined;
   const initialKind = queryParams.get("kind") || "WorkflowTemplate";
@@ -183,6 +186,49 @@ export default function CodeProject() {
   const [ignoreWarningsChecked, setIgnoreWarningsChecked] = useState(false);
   const [executingWorkflow, setExecutingWorkflow] = useState<any | null>(null);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [diffState, setDiffState] = useState<{
+    commitId: string;
+    shortId: string;
+    title: string;
+    content: string;
+  } | null>(null);
+
+  const handleViewDiff = async (
+    commitId: string,
+    shortId: string,
+    title: string
+  ) => {
+    if (!filename) return;
+    try {
+      const wf = await api.getWorkflow(decodeURIComponent(filename), commitId);
+      setDiffState({
+        commitId,
+        shortId,
+        title,
+        content: wf.content || ""
+      });
+    } catch (err: any) {
+      toast.error(
+        "Failed to fetch commit content: " + (err.message || "Unknown error")
+      );
+    }
+  };
+
+  const handleRestoreState = async (commitId: string, shortId: string) => {
+    if (!filename) return;
+    try {
+      const wf = await api.getWorkflow(decodeURIComponent(filename), commitId);
+      if (wf.content !== undefined) {
+        setYamlContent(wf.content);
+        toast.success(`Restored editor state from commit ${shortId}`);
+        if (diffState) setDiffState(null);
+      }
+    } catch (err: any) {
+      toast.error(
+        "Failed to restore version state: " + (err.message || "Unknown error")
+      );
+    }
+  };
   const [schedulingState, setSchedulingState] =
     useState<IResourcePlacementState>({
       workspaceIdentifier: "",
@@ -887,12 +933,7 @@ export default function CodeProject() {
                   history.map((commit) => (
                     <li
                       key={commit.id}
-                      className="p-4 hover:bg-gray-100 transition-colors cursor-pointer"
-                      onClick={() =>
-                        navigate(
-                          `/history/${encodeURIComponent(filename || "")}`
-                        )
-                      }
+                      className="p-4 hover:bg-gray-100/80 transition-colors"
                     >
                       <div className="flex flex-col mb-1">
                         <span
@@ -901,17 +942,54 @@ export default function CodeProject() {
                         >
                           {commit.title}
                         </span>
-                        <span className="text-xs text-gray-500 mt-1">
-                          {commit.author_name}
-                        </span>
+                        <div className="flex justify-between items-center text-xs text-gray-500 mt-1">
+                          <span>{commit.author_name}</span>
+                          {commit.stats && (
+                            <span className="font-mono text-[11px] space-x-1.5 font-semibold">
+                              <span className="text-emerald-600">
+                                +{commit.stats.additions || 0}
+                              </span>
+                              <span className="text-rose-600">
+                                -{commit.stats.deletions || 0}
+                              </span>
+                            </span>
+                          )}
+                        </div>
                       </div>
+
                       <div className="flex justify-between items-center text-xs text-gray-400 mt-2">
                         <span>
                           {new Date(commit.committed_date).toLocaleString()}
                         </span>
-                        <span className="font-mono bg-gray-200 px-1 py-0.5 rounded">
+                        <span className="font-mono bg-gray-200 px-1.5 py-0.5 rounded text-[10px] text-gray-700">
                           {commit.short_id}
                         </span>
+                      </div>
+
+                      {/* History Actions */}
+                      <div className="flex space-x-2 mt-3 pt-2.5 border-t border-gray-200">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleViewDiff(
+                              commit.id,
+                              commit.short_id,
+                              commit.title
+                            )
+                          }
+                          className="flex-1 px-2 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded border border-blue-200 transition-colors text-center"
+                        >
+                          View Diff
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleRestoreState(commit.id, commit.short_id)
+                          }
+                          className="px-2.5 py-1 text-xs font-semibold text-gray-700 bg-white hover:bg-gray-100 rounded border border-gray-300 transition-colors"
+                        >
+                          Restore State
+                        </button>
                       </div>
                     </li>
                   ))
@@ -1042,6 +1120,85 @@ export default function CodeProject() {
                     className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-sm"
                   >
                     Apply & Update YAML
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Diff Modal */}
+      {diffState && (
+        <div className="fixed z-50 inset-0 overflow-y-auto">
+          <div className="justify-center items-center flex fixed inset-0 z-50 p-4">
+            <div
+              onClick={() => setDiffState(null)}
+              className="opacity-50 fixed inset-0 bg-black backdrop-blur-sm"
+            ></div>
+            <div className="relative w-full max-w-5xl z-50 bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col h-[85vh]">
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 bg-gray-50 border-b border-gray-200">
+                <div>
+                  <h3 className="text-base font-bold text-gray-900">
+                    Compare Diff: {diffState.title}
+                  </h3>
+                  <p className="text-xs text-gray-500 font-mono mt-0.5">
+                    Commit {diffState.shortId} (Original) vs Current Editor
+                    State (Modified)
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDiffState(null)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors text-xl font-bold px-2"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Body: Monaco Diff Editor */}
+              <div
+                className={`flex-1 w-full ${isDark ? "bg-gray-900" : "bg-white"}`}
+              >
+                <DiffEditor
+                  height="100%"
+                  language="yaml"
+                  original={diffState.content}
+                  modified={yamlContent}
+                  theme={isDark ? "vs-dark" : "vs-light"}
+                  options={{
+                    readOnly: true,
+                    renderSideBySide: true,
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                    fontSize: 12
+                  }}
+                />
+              </div>
+
+              {/* Footer */}
+              <div className="flex justify-between items-center px-6 py-3 bg-gray-50 border-t border-gray-200">
+                <span className="text-xs text-gray-500">
+                  You can copy changes from the diff editor or restore the
+                  commit version directly.
+                </span>
+                <div className="flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setDiffState(null)}
+                    className="px-4 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleRestoreState(diffState.commitId, diffState.shortId)
+                    }
+                    className="px-4 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors shadow-sm"
+                  >
+                    Restore This Version
                   </button>
                 </div>
               </div>
