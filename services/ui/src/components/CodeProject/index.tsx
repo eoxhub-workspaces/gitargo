@@ -795,10 +795,10 @@ export default function CodeProject() {
             <button
               className="flex space-x-1 items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors"
               onClick={handleOpenSettingsClick}
-              title="Configure Workspace & Profiles"
+              title="Configure Configuration & Profiles"
             >
               <Cog8ToothIcon className="w-4 h-4 text-gray-500" />
-              <span>Workspace & Profiles</span>
+              <span>Configuration & Profiles</span>
             </button>
             {hasChanges ? (
               <>
@@ -1088,7 +1088,7 @@ export default function CodeProject() {
                     </div>
                     <div>
                       <h3 className="text-lg font-bold text-gray-900">
-                        Workspace & Profiles
+                        Configuration & Profiles
                       </h3>
                       <p className="text-xs text-gray-500 font-medium">
                         Configure workspace execution identity and step
