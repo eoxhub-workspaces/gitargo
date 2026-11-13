@@ -2,6 +2,8 @@ const express = require('express');
 const axios = require('axios');
 const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
 const k8s = require('@kubernetes/client-node');
+const tar = require('tar-stream');
+const zlib = require('zlib');
 
 function createLogRouter(ctx) {
   const router = express.Router();
