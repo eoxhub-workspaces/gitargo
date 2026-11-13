@@ -21,8 +21,6 @@ function createConfigRouter(ctx) {
     INGRESS_DEFAULTS,
     ingressClusterConfig,
     ARGO_PROFILES,
-    ARGO_AVAILABLE_TOLERATIONS,
-    ARGO_AVAILABLE_NODE_SELECTORS,
     EPHEMERAL_VOLUME_CONFIG,
     BASE_PATH,
     customObjectsApi,
@@ -102,11 +100,12 @@ if (!APP_VERSION) {
  * Expose relevant configuration and profiles to the frontend.
  */
 router.get("/config", (req, res) => {
+  const username = getUsername(req);
   res.json({
     version: APP_VERSION,
+    username,
+    multiTenantMode: MULTI_TENANT_MODE,
     profiles: ARGO_PROFILES,
-    availableTolerations: ARGO_AVAILABLE_TOLERATIONS,
-    availableNodeSelectors: ARGO_AVAILABLE_NODE_SELECTORS,
     ephemeralVolume: EPHEMERAL_VOLUME_CONFIG,
     allowPublishing: process.env.ALLOW_PUBLISHING === "true",
     enableWorkflows: ENABLE_WORKFLOWS,

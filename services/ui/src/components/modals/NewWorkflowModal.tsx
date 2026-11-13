@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { XMarkIcon } from "@heroicons/react/24/outline";
 import { getConfig, AppConfig } from "../../utils/api";
 import { InfoButton } from "../global/InfoButton";
+import { isProfileAllowedForWorkspace } from "../../utils/forms";
 
 interface INewWorkflowModalProps {
   onClose: () => void;
@@ -31,6 +32,15 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
         if (res.ephemeralVolume?.storage) {
           setEphemeralSize(res.ephemeralVolume.storage);
         }
+        if (res.profiles) {
+          const defaultWs = res.defaults?.namespace || "default";
+          const allowed = Object.entries(res.profiles).filter(([key, prof]) =>
+            isProfileAllowedForWorkspace(key, prof, defaultWs)
+          );
+          if (allowed.length > 0) {
+            setProfile(allowed[0][0]);
+          }
+        }
       })
       .catch(console.error);
   }, []);
@@ -53,8 +63,22 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    let finalName = name.trim();
+    let finalName = name.trim().replace(/\.ya?ml$/i, "");
     if (!finalName) return;
+
+    let cleanUsername = config?.username || "";
+    if (!cleanUsername) {
+      try {
+        const userObj = JSON.parse(sessionStorage.getItem("user") || "{}");
+        cleanUsername = userObj.username || userObj.sub || "";
+      } catch {
+        // ignore
+      }
+    }
+
+    if (cleanUsername && !finalName.startsWith(`${cleanUsername}-`)) {
+      finalName = `${cleanUsername}-${finalName}`;
+    }
 
     const validationError = validateName(finalName);
     if (validationError) {
@@ -62,8 +86,7 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
       return;
     }
 
-    // Ensure it always ends with .yaml and strip user-provided extensions
-    finalName = finalName.replace(/\.ya?ml$/i, "");
+    // Ensure it always ends with .yaml
     finalName += ".yaml";
 
     onSubmit(finalName, kind, { profile, ephemeral, ephemeralSize });
@@ -151,12 +174,19 @@ export const NewWorkflowModal: React.FC<INewWorkflowModalProps> = ({
                       onChange={(e) => setProfile(e.target.value)}
                       className="shadow border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline bg-white text-sm"
                     >
-                      <option value="">None (Default)</option>
-                      {Object.entries(config.profiles).map(([id, p]) => (
-                        <option key={id} value={id}>
-                          {p.label}
-                        </option>
-                      ))}
+                      {Object.entries(config.profiles)
+                        .filter(([key, prof]) =>
+                          isProfileAllowedForWorkspace(
+                            key,
+                            prof,
+                            config?.defaults?.namespace || "default"
+                          )
+                        )
+                        .map(([id, p]) => (
+                          <option key={id} value={id}>
+                            {p.display_name || p.label || id}
+                          </option>
+                        ))}
                     </select>
                     <p className="text-xs text-gray-500 mt-1">
                       Pre-configured resource limits and tolerations.

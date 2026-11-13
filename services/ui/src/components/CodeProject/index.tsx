@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import toast from "react-hot-toast";
 import { formatK8sError } from "../../utils";
@@ -21,173 +21,132 @@ import {
   ResourcePlacementForm,
   IResourcePlacementState
 } from "../global/ResourcePlacementForm";
+import {
+  translateKubespawnerOverride,
+  matchProfileForTemplate,
+  isProfileAllowedForWorkspace
+} from "../../utils/forms";
+
+const extractAvailableTemplates = (parsed: any): string[] => {
+  if (!parsed) return [];
+  const isCron = parsed.kind === "CronWorkflow";
+  const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
+  if (!spec || !Array.isArray(spec.templates)) return [];
+
+  return spec.templates
+    .filter((t: any) => t && (t.container || t.script))
+    .map((t: any) => t.name)
+    .filter(Boolean);
+};
 
 const extractResourcesAndScheduling = (
-  parsed: any
+  parsed: any,
+  configProfiles: Record<string, any> = {}
 ): IResourcePlacementState => {
   if (!parsed) {
     return {
-      namespace: "",
-      serviceAccount: "",
-      cpuRequest: "",
-      cpuLimit: "",
-      memoryRequest: "",
-      memoryLimit: "",
-      gpuLimit: "",
-      tolerations: [],
-      nodeSelector: {}
+      workspaceIdentifier: "",
+      templateProfiles: {}
     };
   }
 
   const isCron = parsed.kind === "CronWorkflow";
   const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
 
-  const state: IResourcePlacementState = {
-    namespace: parsed.metadata?.namespace || "",
-    serviceAccount: spec?.serviceAccountName || spec?.serviceAccount || "",
-    cpuRequest: "",
-    cpuLimit: "",
-    memoryRequest: "",
-    memoryLimit: "",
-    gpuLimit: "",
-    tolerations: spec?.tolerations || [],
-    nodeSelector: spec?.nodeSelector || {}
-  };
+  const wsId =
+    parsed.metadata?.namespace ||
+    spec?.serviceAccountName ||
+    spec?.serviceAccount ||
+    "";
 
-  if (spec) {
-    const entrypointName = spec.entrypoint;
-    if (entrypointName && spec.templates) {
-      const entryTemplate = spec.templates.find(
-        (t: any) => t.name === entrypointName
-      );
-      if (entryTemplate) {
-        const containerKey = entryTemplate.container
-          ? "container"
-          : entryTemplate.script
-            ? "script"
-            : null;
-        if (containerKey) {
-          const target = entryTemplate[containerKey];
-          const resources = target?.resources || {};
+  const templateProfiles: Record<string, string> = {};
 
-          state.cpuRequest = resources.requests?.cpu || "";
-          state.cpuLimit = resources.limits?.cpu || "";
-          state.memoryRequest = resources.requests?.memory || "";
-          state.memoryLimit = resources.limits?.memory || "";
-          state.gpuLimit = resources.limits?.["nvidia.com/gpu"] || "";
-        }
+  if (spec && Array.isArray(spec.templates)) {
+    spec.templates.forEach((template: any) => {
+      if (template && (template.container || template.script)) {
+        templateProfiles[template.name] = matchProfileForTemplate(
+          template,
+          configProfiles
+        );
       }
-    }
+    });
   }
-  return state;
+
+  return {
+    workspaceIdentifier: wsId,
+    templateProfiles
+  };
 };
 
 const injectResourcesAndScheduling = (
   parsed: any,
-  state: IResourcePlacementState
+  state: IResourcePlacementState,
+  configProfiles: Record<string, any> = {}
 ) => {
   if (!parsed) return parsed;
   const isCron = parsed.kind === "CronWorkflow";
 
-  // Inject Namespace
   if (!parsed.metadata) parsed.metadata = {};
-  if (state.namespace) {
-    parsed.metadata.namespace = state.namespace;
+  if (state.workspaceIdentifier) {
+    parsed.metadata.namespace = state.workspaceIdentifier;
   } else {
     delete parsed.metadata.namespace;
   }
 
   if (!parsed.spec) parsed.spec = {};
-
   if (isCron && !parsed.spec.workflowSpec) {
     parsed.spec.workflowSpec = {};
   }
   const spec = isCron ? parsed.spec.workflowSpec : parsed.spec;
 
-  // 0. Inject ServiceAccountName and clean up deprecated serviceAccount
-  if (state.serviceAccount) {
-    spec.serviceAccountName = state.serviceAccount;
+  if (state.workspaceIdentifier) {
+    spec.serviceAccountName = state.workspaceIdentifier;
     delete spec.serviceAccount;
   } else {
     delete spec.serviceAccountName;
     delete spec.serviceAccount;
   }
 
-  // 1. Inject global Tolerations
-  if (state.tolerations.length > 0) {
-    spec.tolerations = state.tolerations;
-  } else {
-    delete spec.tolerations;
-  }
+  if (spec.templates && Array.isArray(spec.templates)) {
+    spec.templates.forEach((template: any) => {
+      if (!template || (!template.container && !template.script)) return;
 
-  // 2. Inject global NodeSelector
-  if (Object.keys(state.nodeSelector).length > 0) {
-    spec.nodeSelector = state.nodeSelector;
-  } else {
-    delete spec.nodeSelector;
-  }
+      const profileKey = state.templateProfiles[template.name];
+      const profile = profileKey ? configProfiles[profileKey] : null;
 
-  // 3. Inject Resources into Entrypoint Template
-  const entrypointName = spec.entrypoint;
-  if (entrypointName && spec.templates) {
-    let entryTemplate = spec.templates.find(
-      (t: any) => t.name === entrypointName
-    );
-    if (!entryTemplate) {
-      // If template not found, create a placeholder main template
-      entryTemplate = {
-        name: entrypointName,
-        container: {
-          image: "alpine:latest",
-          command: ["sh", "-c"],
-          args: ["echo Hello World"]
+      if (profile) {
+        const override = profile.kubespawner_override || profile;
+        const translated = translateKubespawnerOverride(override);
+
+        const containerKey = template.container
+          ? "container"
+          : template.script
+            ? "script"
+            : "container";
+        if (!template[containerKey]) template[containerKey] = {};
+        const target = template[containerKey];
+
+        if (
+          translated.resources &&
+          Object.keys(translated.resources).length > 0
+        ) {
+          target.resources = translated.resources;
         }
-      };
-      spec.templates.push(entryTemplate);
-    }
 
-    const containerKey = entryTemplate.container
-      ? "container"
-      : entryTemplate.script
-        ? "script"
-        : "container";
-    if (!entryTemplate[containerKey]) {
-      entryTemplate[containerKey] = {};
-    }
-    const target = entryTemplate[containerKey];
-    if (!target.resources) target.resources = {};
-    if (!target.resources.requests) target.resources.requests = {};
-    if (!target.resources.limits) target.resources.limits = {};
+        if (translated.tolerations && translated.tolerations.length > 0) {
+          template.tolerations = translated.tolerations;
+        }
 
-    // CPU
-    if (state.cpuRequest) target.resources.requests.cpu = state.cpuRequest;
-    else delete target.resources.requests.cpu;
-
-    if (state.cpuLimit) target.resources.limits.cpu = state.cpuLimit;
-    else delete target.resources.limits.cpu;
-
-    // Memory
-    if (state.memoryRequest)
-      target.resources.requests.memory = state.memoryRequest;
-    else delete target.resources.requests.memory;
-
-    if (state.memoryLimit) target.resources.limits.memory = state.memoryLimit;
-    else delete target.resources.limits.memory;
-
-    // GPU
-    if (state.gpuLimit) {
-      target.resources.limits["nvidia.com/gpu"] = state.gpuLimit;
-    } else {
-      delete target.resources.limits["nvidia.com/gpu"];
-    }
-
-    // Clean up empty objects
-    if (Object.keys(target.resources.requests).length === 0)
-      delete target.resources.requests;
-    if (Object.keys(target.resources.limits).length === 0)
-      delete target.resources.limits;
-    if (Object.keys(target.resources).length === 0) delete target.resources;
+        if (
+          translated.nodeSelector &&
+          Object.keys(translated.nodeSelector).length > 0
+        ) {
+          template.nodeSelector = translated.nodeSelector;
+        }
+      }
+    });
   }
+
   return parsed;
 };
 
@@ -220,66 +179,42 @@ export default function CodeProject() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [schedulingState, setSchedulingState] =
     useState<IResourcePlacementState>({
-      namespace: "",
-      serviceAccount: "",
-      cpuRequest: "",
-      cpuLimit: "",
-      memoryRequest: "",
-      memoryLimit: "",
-      gpuLimit: "",
-      tolerations: [],
-      nodeSelector: {}
+      workspaceIdentifier: "",
+      templateProfiles: {}
     });
 
   useEffect(() => {
     try {
       if (yamlContent) {
         const parsed = YAML.parse(yamlContent);
-        const extracted = extractResourcesAndScheduling(parsed);
+        const extracted = extractResourcesAndScheduling(
+          parsed,
+          config?.profiles || {}
+        );
         setSchedulingState(extracted);
       }
     } catch {
       // Ignore parse errors during active editing
     }
-  }, [yamlContent]);
+  }, [yamlContent, config]);
 
   const checkHasWarnings = (parsed: any) => {
     if (!parsed) return false;
     const isCron = parsed.kind === "CronWorkflow";
     const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
-    const defaultNamespace = config?.defaults?.namespace || "default";
+    const defaultWorkspace = config?.defaults?.namespace || "default";
 
-    // 0. Namespace is missing or mismatched
+    // Workspace identifier missing or mismatched
     const namespace = parsed.metadata?.namespace || "";
-    if (!namespace || namespace !== defaultNamespace) {
-      return true;
-    }
-
-    const defaultServiceAccount = config?.defaults?.serviceAccount || "default";
-
-    // 1. Service account is missing or mismatched
     const serviceAccount =
       spec?.serviceAccountName || spec?.serviceAccount || "";
-    if (!serviceAccount || serviceAccount !== defaultServiceAccount) {
+
+    if (!namespace || namespace !== defaultWorkspace) {
       return true;
     }
-
-    // 2. Unsupported tolerations
-    const tolerations = spec?.tolerations || [];
-    const availableTols = config?.availableTolerations || [];
-    const hasUnsupportedTols = tolerations.some(
-      (t: any) => !availableTols.some((at) => at.key === t.key)
-    );
-    if (hasUnsupportedTols) return true;
-
-    // 3. Unsupported node selectors
-    const nodeSelector = spec?.nodeSelector || {};
-    const availableSelectors = config?.availableNodeSelectors || [];
-    const hasUnsupportedSelectors = Object.entries(nodeSelector).some(
-      ([key, value]) =>
-        !availableSelectors.some((as) => as.key === key && as.value === value)
-    );
-    if (hasUnsupportedSelectors) return true;
+    if (!serviceAccount || serviceAccount !== defaultWorkspace) {
+      return true;
+    }
 
     return false;
   };
@@ -401,58 +336,69 @@ export default function CodeProject() {
           setYamlContent(content);
           setOriginalYaml(content);
         } else if (initialName) {
-          const logicalInitialName = initialName.replace(/\.ya?ml$/i, "");
+          let logicalInitialName = initialName.replace(/\.ya?ml$/i, "");
           const isCron = initialKind === "CronWorkflow";
+
+          // Auto-prepend username prefix in multi-tenant mode if not present
+          let cleanUsername = appConfig.username || "";
+          if (!cleanUsername) {
+            try {
+              const userObj = JSON.parse(
+                sessionStorage.getItem("user") || "{}"
+              );
+              cleanUsername = userObj.username || userObj.sub || "";
+            } catch {
+              // ignore session storage parse error
+            }
+          }
+
+          if (
+            cleanUsername &&
+            !logicalInitialName.startsWith(`${cleanUsername}-`)
+          ) {
+            logicalInitialName = `${cleanUsername}-${logicalInitialName}`;
+            setCurrentFilename(`${logicalInitialName}.yaml`);
+          }
+
+          const defaultWs = appConfig.defaults?.namespace || "default";
 
           const skeleton: any = {
             apiVersion: "argoproj.io/v1alpha1",
             kind: initialKind,
             metadata: {
-              name: logicalInitialName
+              name: logicalInitialName,
+              namespace: defaultWs
             },
             spec: isCron
               ? {
                   schedule: "0 0 * * *",
                   workflowSpec: {
                     entrypoint: "execute",
+                    serviceAccountName: defaultWs,
                     templates: []
                   }
                 }
               : {
                   entrypoint: "execute",
+                  serviceAccountName: defaultWs,
                   templates: []
                 }
           };
 
           const spec = isCron ? skeleton.spec.workflowSpec : skeleton.spec;
 
-          // 1. Inject default Service Account
-          if (appConfig.defaults?.serviceAccount) {
-            spec.serviceAccountName = appConfig.defaults.serviceAccount;
-          }
+          // Fetch selected or first allowed profile
+          const allowedProfiles = Object.entries(
+            appConfig.profiles || {}
+          ).filter(([key, prof]) =>
+            isProfileAllowedForWorkspace(key, prof, defaultWs)
+          );
+          const firstAllowedKey =
+            allowedProfiles.length > 0 ? allowedProfiles[0][0] : "";
+          const activeProfileKey = initialProfile || firstAllowedKey;
+          const selectedProfileData =
+            appConfig.profiles?.[activeProfileKey] || null;
 
-          // 2. Fetch selected profile resources & tolerations
-          let selectedProfileData = null;
-          if (initialProfile && appConfig.profiles?.[initialProfile]) {
-            selectedProfileData = appConfig.profiles[initialProfile];
-          }
-
-          if (selectedProfileData) {
-            // Tolerations
-            if (selectedProfileData.tolerations) {
-              spec.tolerations = selectedProfileData.tolerations;
-            }
-            // Node Selector
-            if (selectedProfileData.nodeSelector) {
-              spec.nodeSelector = selectedProfileData.nodeSelector;
-            }
-            // Affinity
-            if (selectedProfileData.affinity) {
-              spec.affinity = selectedProfileData.affinity;
-            }
-          }
-
-          // 3. Create main template
           const mainTemplate: any = {
             name: "execute",
             container: {
@@ -462,11 +408,29 @@ export default function CodeProject() {
             }
           };
 
-          if (selectedProfileData?.resources) {
-            mainTemplate.container.resources = selectedProfileData.resources;
+          if (selectedProfileData) {
+            const override =
+              selectedProfileData.kubespawner_override || selectedProfileData;
+            const translated = translateKubespawnerOverride(override);
+
+            if (
+              translated.resources &&
+              Object.keys(translated.resources).length > 0
+            ) {
+              mainTemplate.container.resources = translated.resources;
+            }
+            if (translated.tolerations && translated.tolerations.length > 0) {
+              mainTemplate.tolerations = translated.tolerations;
+            }
+            if (
+              translated.nodeSelector &&
+              Object.keys(translated.nodeSelector).length > 0
+            ) {
+              mainTemplate.nodeSelector = translated.nodeSelector;
+            }
           }
 
-          // 4. Inject Ephemeral Volume Claim template
+          // Inject Ephemeral Volume Claim template
           if (initialEphemeral && appConfig.ephemeralVolume) {
             const vol = appConfig.ephemeralVolume;
             mainTemplate.container.volumeMounts = [
@@ -525,13 +489,26 @@ export default function CodeProject() {
 
   const hasChanges = isNewWorkflow || yamlContent !== originalYaml;
 
+  const availableTemplates = useMemo(() => {
+    try {
+      const parsed = YAML.parse(yamlContent);
+      return extractAvailableTemplates(parsed);
+    } catch {
+      return [];
+    }
+  }, [yamlContent]);
+
   const handleSaveSettings = () => {
     try {
       const parsed = YAML.parse(yamlContent);
-      const updated = injectResourcesAndScheduling(parsed, schedulingState);
+      const updated = injectResourcesAndScheduling(
+        parsed,
+        schedulingState,
+        config?.profiles || {}
+      );
       setYamlContent(YAML.stringify(updated));
       setShowSettingsModal(false);
-      toast.success("Workflow scheduling and resources updated!");
+      toast.success("Workspace and container profiles updated!");
     } catch (e: any) {
       toast.error("Failed to parse and update YAML: " + e.message);
     }
@@ -746,10 +723,10 @@ export default function CodeProject() {
             <button
               className="flex space-x-1 items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors"
               onClick={handleOpenSettingsClick}
-              title="Configure Scheduling & Resources"
+              title="Configure Workspace & Profiles"
             >
               <Cog8ToothIcon className="w-4 h-4 text-gray-500" />
-              <span>Scheduling & Resources</span>
+              <span>Workspace & Profiles</span>
             </button>
             {hasChanges ? (
               <>
@@ -1007,11 +984,11 @@ export default function CodeProject() {
                     </div>
                     <div>
                       <h3 className="text-lg font-bold text-gray-900">
-                        Workflow Scheduling & Resources
+                        Workspace & Profiles
                       </h3>
                       <p className="text-xs text-gray-500 font-medium">
-                        Configure resources and scheduling globally for this
-                        workflow
+                        Configure workspace execution identity and step
+                        container profiles
                       </p>
                     </div>
                   </div>
@@ -1022,6 +999,7 @@ export default function CodeProject() {
                   <ResourcePlacementForm
                     state={schedulingState}
                     onChange={setSchedulingState}
+                    availableTemplates={availableTemplates}
                     config={config}
                   />
                 </div>

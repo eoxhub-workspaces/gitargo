@@ -22,8 +22,6 @@ function createApplicationRouter(ctx) {
     INGRESS_DEFAULTS,
     ingressClusterConfig,
     ARGO_PROFILES,
-    ARGO_AVAILABLE_TOLERATIONS,
-    ARGO_AVAILABLE_NODE_SELECTORS,
     EPHEMERAL_VOLUME_CONFIG,
     BASE_PATH,
     customObjectsApi,

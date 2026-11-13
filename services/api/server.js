@@ -290,29 +290,65 @@ const validateArgoWorkflow = (req, res, next) => {
 
 // --- Configuration & Profiles ---
 const DEFAULT_PROFILES = {
-  "cpu-standard": {
-    label: "Standard CPU (2 CPU, 4Gi RAM)",
-    resources: {
-      limits: { cpu: "2", memory: "4Gi" },
-      requests: { cpu: "500m", memory: "1Gi" }
+  small: {
+    display_name: "Small (4 GB RAM, 1 CPU)",
+    kubespawner_override: {
+      mem_guarantee: "3.6G",
+      mem_limit: "4G",
+      cpu_guarantee: 0.5,
+      cpu_limit: 1
     }
   },
-  "cpu-performance": {
-    label: "Performance CPU (10 CPU, 48Gi RAM)",
-    resources: {
-      limits: { cpu: "10", memory: "48Gi" },
-      requests: { cpu: "5", memory: "24Gi" }
+  medium: {
+    display_name: "Medium (12 GB RAM, 3 CPUs)",
+    kubespawner_override: {
+      mem_guarantee: "10.8G",
+      mem_limit: "12G",
+      cpu_guarantee: 1.5,
+      cpu_limit: 3,
+      tolerations: [
+        {
+          key: "hub.jupyter.org/dedicated",
+          operator: "Equal",
+          value: "user",
+          effect: "NoSchedule"
+        }
+      ]
     }
   },
-  "gpu-nvidia": {
-    label: "NVIDIA GPU (1 GPU, 4 CPU, 16Gi RAM)",
-    resources: {
-      limits: { "nvidia.com/gpu": "1", cpu: "4", memory: "16Gi" },
-      requests: { "nvidia.com/gpu": "1", cpu: "2", memory: "8Gi" }
-    },
-    tolerations: [
-      { key: "nvidia.com/gpu", operator: "Exists", effect: "NoSchedule" }
-    ]
+  gpu: {
+    display_name: "12 GB RAM, 3 CPUs, 1 GPU",
+    kubespawner_override: {
+      mem_guarantee: "10.8G",
+      mem_limit: "12G",
+      cpu_guarantee: 1.5,
+      cpu_limit: 3,
+      extra_resource_limits: {
+        "nvidia.com/gpu": "1"
+      },
+      node_selector: {
+        "cce.cloud.com/cce-nodepool": "userg"
+      },
+      tolerations: [
+        {
+          key: "hub.jupyter.org/dedicated",
+          operator: "Equal",
+          value: "user",
+          effect: "NoSchedule"
+        },
+        {
+          key: "hub.jupyter.org_dedicated",
+          operator: "Equal",
+          value: "user",
+          effect: "NoSchedule"
+        },
+        {
+          key: "nvidia.com_gpu",
+          value: "true",
+          effect: "NoSchedule"
+        }
+      ]
+    }
   }
 };
 
@@ -332,23 +368,6 @@ const parseEnvJson = (envVal, defaultVal) => {
 let ARGO_PROFILES = DEFAULT_PROFILES;
 if (process.env.ARGO_PROFILES) {
   ARGO_PROFILES = parseEnvJson(process.env.ARGO_PROFILES, DEFAULT_PROFILES);
-}
-
-const DEFAULT_TOLERATIONS = [
-  { key: "nvidia.com/gpu", operator: "Exists", effect: "NoSchedule", label: "NVIDIA GPU Pool" },
-  { key: "dedicated", operator: "Equal", value: "high-mem", effect: "NoSchedule", label: "High-Memory Dedicated Pool" }
-];
-
-const DEFAULT_NODE_SELECTORS = [];
-
-let ARGO_AVAILABLE_TOLERATIONS = DEFAULT_TOLERATIONS;
-if (process.env.ARGO_AVAILABLE_TOLERATIONS) {
-  ARGO_AVAILABLE_TOLERATIONS = parseEnvJson(process.env.ARGO_AVAILABLE_TOLERATIONS, DEFAULT_TOLERATIONS);
-}
-
-let ARGO_AVAILABLE_NODE_SELECTORS = DEFAULT_NODE_SELECTORS;
-if (process.env.ARGO_AVAILABLE_NODE_SELECTORS) {
-  ARGO_AVAILABLE_NODE_SELECTORS = parseEnvJson(process.env.ARGO_AVAILABLE_NODE_SELECTORS, DEFAULT_NODE_SELECTORS);
 }
 
 const EPHEMERAL_VOLUME_CONFIG = {
@@ -476,8 +495,6 @@ const routerContext = {
   INGRESS_DEFAULTS,
   ingressClusterConfig,
   ARGO_PROFILES,
-  ARGO_AVAILABLE_TOLERATIONS,
-  ARGO_AVAILABLE_NODE_SELECTORS,
   EPHEMERAL_VOLUME_CONFIG,
   BASE_PATH,
   customObjectsApi,

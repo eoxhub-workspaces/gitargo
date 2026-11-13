@@ -34,8 +34,32 @@ export interface IngressConfig {
   extraAnnotations?: Record<string, string>;
 }
 
+export interface KubespawnerOverride {
+  mem_guarantee?: string;
+  mem_limit?: string;
+  cpu_guarantee?: number | string;
+  cpu_limit?: number | string;
+  extra_resource_limits?: Record<string, string>;
+  extra_resource_requests?: Record<string, string>;
+  node_selector?: Record<string, string>;
+  tolerations?: any[];
+  allowed_groups?: string[];
+}
+
+export interface JupyterHubProfile {
+  display_name?: string;
+  label?: string;
+  kubespawner_override?: KubespawnerOverride;
+  resources?: any;
+  tolerations?: any[];
+  nodeSelector?: Record<string, string>;
+  allowed_groups?: string[];
+}
+
 export interface AppConfig {
   version?: string;
+  username?: string;
+  multiTenantMode?: boolean;
   enableWorkflows?: boolean;
   enableOgcPackages?: boolean;
   enableApplications?: boolean;
@@ -44,18 +68,7 @@ export interface AppConfig {
     ogcPackages?: boolean;
     applications?: boolean;
   };
-  profiles: Record<
-    string,
-    {
-      label: string;
-      resources: any;
-      tolerations?: any[];
-      nodeSelector?: Record<string, string>;
-      affinity?: any;
-    }
-  >;
-  availableTolerations?: any[];
-  availableNodeSelectors?: any[];
+  profiles: Record<string, JupyterHubProfile>;
   ephemeralVolume: {
     name: string;
     storage: string;
@@ -66,10 +79,10 @@ export interface AppConfig {
     namespace: string;
     serviceAccount: string;
   };
-  logViewerUrl?: string;
-  allowPublishing: boolean;
+  allowPublishing?: boolean;
   allowPublicIngress?: boolean;
-  ingress?: IngressConfig;
+  ingress?: any;
+  logViewerUrl?: string;
 }
 
 export interface WorkflowExecution {

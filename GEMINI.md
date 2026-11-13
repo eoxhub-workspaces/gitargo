@@ -20,13 +20,21 @@ This file contains instructions and context for Gemini CLI agents working on the
 - `GITLAB_PACKAGES_PATH`: Subfolder in GitLab for saving CWL Application Packages (default `packages`).
 - `JUPYTERHUB_PVC_NAME`: Name of the shared PersistentVolumeClaim (default `jupyterhub-home`) mounted into executions with `subPath: <username>`.
 - `JUPYTER_PVC_MOUNT_PATH`: Mount point on the Gitargo API pod for workspace file browsing (default `/shared-workspace`).
-- `ARGO_PROFILES`: JSON string defining resource profiles.
+- `ARGO_PROFILES`: JSON string defining resource profiles in JupyterHub `kubespawner_override` format.
   ```json
   {
     "gpu": {
-      "label": "GPU Profile",
-      "resources": { "limits": { "nvidia.com/gpu": "1" } },
-      "tolerations": [ { "key": "gpu", "operator": "Exists", "effect": "NoSchedule" } ]
+      "display_name": "12 GB RAM, 3 CPUs, 1 GPU",
+      "kubespawner_override": {
+        "mem_guarantee": "10.8G",
+        "mem_limit": "12G",
+        "cpu_guarantee": 1.5,
+        "cpu_limit": 3,
+        "extra_resource_limits": { "nvidia.com/gpu": "1" },
+        "node_selector": { "cce.cloud.com/cce-nodepool": "userg" },
+        "tolerations": [ { "key": "hub.jupyter.org/dedicated", "operator": "Equal", "value": "user", "effect": "NoSchedule" } ],
+        "allowed_groups": ["/hub-test-ws3"]
+      }
     }
   }
   ```

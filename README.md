@@ -72,9 +72,7 @@ The easiest way to run the service is using Docker.
 | `ARGO_WORKFLOW_LABEL` | Label key for workflow name in Loki. | `workflows_argoproj_io_workflow` |
 | `ARGO_NAMESPACE` | Default namespace for workflows. | `default` |
 | `ARGO_SERVICE_ACCOUNT` | Recommended default service account to check and set. | `default` |
-| `ARGO_AVAILABLE_TOLERATIONS` | JSON string of cluster-supported tolerations for the form dropdowns. | - |
-| `ARGO_AVAILABLE_NODE_SELECTORS` | JSON string of cluster-supported node selectors (only renders if configured). | - |
-| `ARGO_PROFILES` | JSON string of default presets available during new file template creation. | - |
+| `ARGO_PROFILES` | JSON string defining resource profiles in JupyterHub `kubespawner_override` format. | *(See defaults)* |
 | `ENABLE_APPLICATIONS` | Enable the experimental Application Deployment Management tab. | `false` |
 | `GITLAB_APPLICATIONS_PATH` | The subdirectory in the repo containing application folders. | `applications` |
 | `ALLOW_PUBLIC_INGRESS` | Allow creating/editing `ingress.yaml` to expose applications publicly. | `false` |
