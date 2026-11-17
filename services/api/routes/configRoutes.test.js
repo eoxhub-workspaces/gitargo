@@ -32,6 +32,7 @@ test('configRoutes resolves application version from root package.json', () => {
   // Execute route handler
   route.route.stack[0].handle(req, res);
 
+  const expectedVersion = require('../../../package.json').version;
   assert(jsonResponse, 'Response should be returned');
-  assert.strictEqual(jsonResponse.version, '0.6.0');
+  assert.strictEqual(jsonResponse.version, expectedVersion);
 });

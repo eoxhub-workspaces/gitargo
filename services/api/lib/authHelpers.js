@@ -1,3 +1,5 @@
+const YAML = require('yaml');
+
 function getUsername(req) {
   if (!req) return null;
   let rawUser = null;
@@ -111,7 +113,13 @@ function getGitLabPath(virtualPath, req = null, envConfig = {}) {
     }
   }
 
-  return basePath ? `${basePath}/${cleanVirtualPath}` : cleanVirtualPath;
+  if (!basePath) return cleanVirtualPath;
+
+  if (cleanVirtualPath.startsWith(`${basePath}/`) || cleanVirtualPath === basePath) {
+    return cleanVirtualPath;
+  }
+
+  return `${basePath}/${cleanVirtualPath}`;
 }
 
 function getGitLabPackagesPath(virtualPath, req = null, envConfig = {}) {
@@ -127,6 +135,12 @@ function getGitLabPackagesPath(virtualPath, req = null, envConfig = {}) {
     if (user) {
       basePath = `${basePath}/${user}`;
     }
+  }
+
+  if (!basePath) return cleanVirtualPath;
+
+  if (cleanVirtualPath.startsWith(`${basePath}/`) || cleanVirtualPath === basePath) {
+    return cleanVirtualPath;
   }
 
   return `${basePath}/${cleanVirtualPath}`;
@@ -177,6 +191,74 @@ function getAppFilename(prefix, type) {
   return `${prefix}-${type}.yaml`;
 }
 
+function validateAndSanitizeAppYaml(appName, content, fileType, options = {}) {
+  const allowPublicIngress = options.allowPublicIngress ?? (process.env.ALLOW_PUBLIC_INGRESS !== 'false');
+  const enforcedNamespace = options.enforcedNamespace || process.env.ARGO_NAMESPACE || "default";
+
+  const documents = content.split("---").map(doc => doc.trim()).filter(Boolean);
+  if (documents.length === 0) {
+    throw new Error(`Empty YAML content for ${fileType}.yaml`);
+  }
+
+  const sanitizedDocs = documents.map(docStr => {
+    const lines = docStr.split("\n").filter(l => l.trim().length > 0);
+    const isDocDisabled = lines.length > 0 && lines.every(line => line.trim().startsWith("#"));
+    if (isDocDisabled) {
+      return docStr;
+    }
+
+    const parsed = YAML.parse(docStr);
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error(`Invalid YAML document format in ${fileType}.yaml`);
+    }
+
+    if (!parsed.metadata) parsed.metadata = {};
+    parsed.metadata.namespace = enforcedNamespace;
+
+    if (!parsed.metadata.labels) parsed.metadata.labels = {};
+    parsed.metadata.labels['app.kubernetes.io/service'] = appName;
+
+    if (fileType === 'deployment' && parsed.kind === 'Deployment') {
+      if (!parsed.spec) parsed.spec = {};
+      if (!parsed.spec.selector) parsed.spec.selector = {};
+      if (!parsed.spec.selector.matchLabels) parsed.spec.selector.matchLabels = {};
+      parsed.spec.selector.matchLabels['app.kubernetes.io/service'] = appName;
+
+      if (!parsed.spec.template) parsed.spec.template = {};
+      if (!parsed.spec.template.metadata) parsed.spec.template.metadata = {};
+      if (!parsed.spec.template.metadata.labels) parsed.spec.template.metadata.labels = {};
+      parsed.spec.template.metadata.labels['app.kubernetes.io/service'] = appName;
+    }
+
+    if (fileType === 'service' && parsed.kind === 'Service') {
+      if (!parsed.spec) parsed.spec = {};
+      if (!parsed.spec.selector) parsed.spec.selector = {};
+      parsed.spec.selector['app.kubernetes.io/service'] = appName;
+    }
+
+    if (fileType === 'ingress' && parsed.kind === 'Ingress') {
+      if (!allowPublicIngress) {
+        throw new Error("Ingress creation is disabled by administrator.");
+      }
+      if (parsed.spec?.rules) {
+        for (const rule of parsed.spec.rules) {
+          if (rule.http?.paths) {
+            for (const p of rule.http.paths) {
+              if (p.backend?.service?.name && p.backend.service.name !== appName) {
+                p.backend.service.name = appName;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return YAML.stringify(parsed);
+  });
+
+  return sanitizedDocs.join("\n---\n");
+}
+
 module.exports = {
   getUsername,
   getCandidateUsernames,
@@ -185,5 +267,6 @@ module.exports = {
   getVirtualPath,
   parseAppFilename,
   resolveAppLocation,
-  getAppFilename
+  getAppFilename,
+  validateAndSanitizeAppYaml
 };

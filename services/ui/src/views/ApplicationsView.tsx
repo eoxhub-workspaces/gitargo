@@ -553,37 +553,32 @@ const ApplicationsView: React.FC = () => {
       setApps(applications);
       setConfig(appConfig);
 
-      // Fetch YAMLs and statuses in small concurrency batches (3 at a time)
+      // Populate YAMLs immediately from pre-fetched server response
       const newYamls: Record<string, ApplicationYamls> = {};
-      const newStatuses: Record<string, ApplicationStatus> = {};
+      applications.forEach((app: any) => {
+        if (app.yamls) {
+          newYamls[app.name] = app.yamls;
+        }
+      });
+      setAppYamls((prev) => ({ ...prev, ...newYamls }));
+
+      // Fetch statuses progressively in small background batches (3 at a time)
       const batchSize = 3;
       for (let i = 0; i < applications.length; i += batchSize) {
         const batch = applications.slice(i, i + batchSize);
         await Promise.all(
           batch.map(async (app) => {
             try {
-              const details = await getApplication(app.name);
-              if (details) {
-                newYamls[app.name] = {
-                  deployment: details.deployment || "",
-                  service: details.service || "",
-                  ingress: details.ingress || ""
-                };
-              }
-            } catch {
-              // Ignore missing application details
-            }
-            try {
               const status = await getApplicationStatus(app.name);
-              if (status) newStatuses[app.name] = status;
+              if (status) {
+                setStatuses((prev) => ({ ...prev, [app.name]: status }));
+              }
             } catch (err) {
-              console.error(`Error loading status for ${app.name}`, err);
+              console.warn(`Error loading status for ${app.name}`, err);
             }
           })
         );
       }
-      setAppYamls((prev) => ({ ...prev, ...newYamls }));
-      setStatuses((prev) => ({ ...prev, ...newStatuses }));
     } catch (err: any) {
       toast.error("Failed to fetch applications list: " + err.message);
     } finally {
@@ -595,21 +590,10 @@ const ApplicationsView: React.FC = () => {
 
   useEffect(() => {
     loadData();
-    // Poll status every 15 seconds sequentially
-    const interval = setInterval(async () => {
-      if (apps.length > 0 && !isFetchingRef.current) {
-        for (const app of apps) {
-          try {
-            const status = await getApplicationStatus(app.name);
-            if (status) {
-              setStatuses((prev) => ({ ...prev, [app.name]: status }));
-            }
-          } catch {
-            // Ignore background polling errors
-          }
-        }
-      }
-    }, 15000);
+    // Auto-refresh applications and statuses every 10 seconds
+    const interval = setInterval(() => {
+      loadData();
+    }, 10000);
     return () => clearInterval(interval);
   }, []);
 

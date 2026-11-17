@@ -154,49 +154,59 @@ const ListView: React.FC = () => {
       setPublishedWorkflows(published);
       setConfig(appConfig);
 
-      data.forEach(async (wf) => {
-        setMetadata((prev) => ({ ...prev, [wf.path]: { isParsing: true } }));
-        try {
-          const wfObj = await getWorkflow(wf.path);
-          const content = wfObj.content || "";
-          const parsed = YAML.parse(content);
-          const kind: string = parsed?.kind || "Unknown";
-          let schedule: string | null = null;
-          let entrypoint: string | null = null;
-          let hasExecute = false;
+      // Populate metadata immediately from pre-parsed server response if available
+      const preParsedMeta: Record<string, any> = {};
+      const fallbackWorkflows: typeof data = [];
 
-          if (kind === "CronWorkflow") {
-            schedule = parsed?.spec?.schedule;
-            entrypoint = parsed?.spec?.workflowSpec?.entrypoint;
-          } else if (kind === "WorkflowTemplate") {
-            entrypoint = parsed?.spec?.templates?.[0]?.name;
-            // Check for entrypoint named "execute" or a template named "execute"
-            const specEntrypoint = parsed?.spec?.entrypoint;
-            const templates = parsed?.spec?.templates || [];
-            hasExecute =
-              specEntrypoint === "execute" ||
-              templates.some((t: any) => t.name === "execute");
-          } else {
-            entrypoint = parsed?.spec?.entrypoint;
-          }
-
-          setMetadata((prev) => ({
-            ...prev,
-            [wf.path]: {
-              kind,
-              schedule: schedule || undefined,
-              entrypoint: entrypoint || undefined,
-              isParsing: false,
-              hasExecute
-            }
-          }));
-        } catch {
-          setMetadata((prev) => ({
-            ...prev,
-            [wf.path]: { kind: "Error", isParsing: false }
-          }));
+      data.forEach((wf: any) => {
+        if (wf.metadata) {
+          preParsedMeta[wf.path] = wf.metadata;
+        } else if (!wf.name.endsWith(".deleted")) {
+          fallbackWorkflows.push(wf);
         }
       });
+
+      setMetadata((prev) => ({ ...prev, ...preParsedMeta }));
+
+      // Fallback: fetch individual content only for items missing pre-parsed metadata
+      if (fallbackWorkflows.length > 0) {
+        fallbackWorkflows.forEach(async (wf) => {
+          setMetadata((prev) => ({ ...prev, [wf.path]: { isParsing: true } }));
+          try {
+            const wfObj = await getWorkflow(wf.path);
+            const content = wfObj.content || "";
+            const parsed = YAML.parse(content);
+            const kind: string = parsed?.kind || "Unknown";
+            let schedule: string | null = null;
+            let entrypoint: string | null = null;
+            let hasExecute = false;
+
+            if (kind === "CronWorkflow") {
+              schedule = parsed?.spec?.schedule;
+              entrypoint = parsed?.spec?.workflowSpec?.entrypoint;
+            } else if (kind === "WorkflowTemplate") {
+              entrypoint = parsed?.spec?.templates?.[0]?.name;
+              const specEntrypoint = parsed?.spec?.entrypoint;
+              const templates = parsed?.spec?.templates || [];
+              hasExecute =
+                specEntrypoint === "execute" ||
+                templates.some((t: any) => t.name === "execute");
+            } else {
+              entrypoint = parsed?.spec?.entrypoint;
+            }
+
+            setMetadata((prev) => ({
+              ...prev,
+              [wf.path]: { kind, schedule, entrypoint, hasExecute }
+            }));
+          } catch (err) {
+            setMetadata((prev) => ({
+              ...prev,
+              [wf.path]: { kind: "Unknown" }
+            }));
+          }
+        });
+      }
     } catch (err: any) {
       const serverMessage =
         err.response?.data?.message ||
@@ -210,6 +220,11 @@ const ListView: React.FC = () => {
 
   useEffect(() => {
     fetchWorkflows();
+    // Auto-refresh workflows list every 10 seconds
+    const interval = setInterval(() => {
+      fetchWorkflows();
+    }, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleDelete = async (path: string) => {

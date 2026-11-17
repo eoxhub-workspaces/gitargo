@@ -227,6 +227,37 @@ router.get(/^\/workflows\/(.+)\/sync-status$/, async (req, res, next) => {
   }
 });
 
+const workflowMetadataCache = new Map();
+
+function parseWorkflowMetadata(content) {
+  try {
+    const parsed = YAML.parse(content);
+    if (!parsed || typeof parsed !== "object") return null;
+    const kind = parsed.kind || "Unknown";
+    let schedule = null;
+    let entrypoint = null;
+    let hasExecute = false;
+
+    if (kind === "CronWorkflow") {
+      schedule = parsed?.spec?.schedule || null;
+      entrypoint = parsed?.spec?.workflowSpec?.entrypoint || null;
+    } else if (kind === "WorkflowTemplate") {
+      entrypoint = parsed?.spec?.templates?.[0]?.name || null;
+      const specEntrypoint = parsed?.spec?.entrypoint;
+      const templates = parsed?.spec?.templates || [];
+      hasExecute =
+        specEntrypoint === "execute" ||
+        templates.some((t) => t && t.name === "execute");
+    } else {
+      entrypoint = parsed?.spec?.entrypoint || null;
+    }
+
+    return { kind, schedule, entrypoint, hasExecute };
+  } catch (e) {
+    return null;
+  }
+}
+
 /**
  * GET /api/workflows
  * List files ending in .yaml, .yml, or .deleted in the GITLAB_WORKFLOWS_PATH.
@@ -255,19 +286,53 @@ router.get("/workflows", async (req, res, next) => {
 
     const prefix = searchPath ? `${searchPath.replace(/\/$/, "")}/` : "";
 
-    const workflows = response.data
-      .filter(
-        (file) =>
-          file.type === "blob" &&
-          (file.name.endsWith(".yaml") || file.name.endsWith(".yml") || file.name.endsWith(".deleted"))
-      )
-      .map((file) => {
+    const rawFiles = response.data.filter((file) => {
+      if (file.type !== "blob") return false;
+      if (!file.name.endsWith(".yaml") && !file.name.endsWith(".yml") && !file.name.endsWith(".deleted")) return false;
+
+      let relativePath = file.path;
+      if (prefix && relativePath.startsWith(prefix)) {
+        relativePath = relativePath.slice(prefix.length);
+      }
+
+      // In single-tenant mode (MULTI_TENANT_MODE = false), exclude files inside user subdirectories
+      if (!MULTI_TENANT_MODE && relativePath.includes("/")) {
+        return false;
+      }
+
+      return true;
+    });
+
+    const workflows = await Promise.all(
+      rawFiles.map(async (file) => {
         let relativePath = file.path;
         if (prefix && relativePath.startsWith(prefix)) {
           relativePath = relativePath.slice(prefix.length);
         }
-        return { ...file, path: relativePath };
-      });
+
+        let metadata = null;
+        if (!file.name.endsWith(".deleted") && file.id) {
+          if (workflowMetadataCache.has(file.id)) {
+            metadata = workflowMetadataCache.get(file.id);
+          } else {
+            try {
+              const rawResponse = await gitlabApi.get(
+                `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(file.path)}/raw`,
+                { params: { ref: GITLAB_BRANCH } }
+              );
+              metadata = parseWorkflowMetadata(rawResponse.data || "");
+              if (metadata) {
+                workflowMetadataCache.set(file.id, metadata);
+              }
+            } catch (err) {
+              // Ignore metadata fetch error
+            }
+          }
+        }
+
+        return { ...file, path: relativePath, metadata };
+      })
+    );
 
     res.json(workflows);
   } catch (error) {
@@ -286,18 +351,47 @@ router.get(/^\/workflows\/(.+)\/history$/, async (req, res, next) => {
   try {
     const virtualPath = getVirtualPath(req);
     const filePath = getGitLabPath(virtualPath, req);
+    const filename = virtualPath.split('/').pop();
+
     const response = await gitlabApi.get(
       `/projects/${GITLAB_PROJECT_ID}/repository/commits`,
       {
         params: {
           path: filePath,
           ref_name: GITLAB_BRANCH,
-          with_stats: true
+          with_stats: true,
+          per_page: 50
         }
       }
     );
 
-    res.json(response.data);
+    const rawCommits = response.data || [];
+
+    // Concurrently verify that each commit actually modified this file
+    const filteredCommits = await Promise.all(
+      rawCommits.map(async (commit) => {
+        try {
+          const diffRes = await gitlabApi.get(
+            `/projects/${GITLAB_PROJECT_ID}/repository/commits/${commit.id}/diff`
+          );
+          const diffs = diffRes.data || [];
+          const touchesFile = diffs.some(
+            (d) =>
+              d.new_path === filePath ||
+              d.old_path === filePath ||
+              (filename && (d.new_path.endsWith(`/${filename}`) || d.old_path.endsWith(`/${filename}`) || d.new_path === filename || d.old_path === filename))
+          );
+          return touchesFile ? commit : null;
+        } catch (e) {
+          const title = commit.title || commit.message || "";
+          if (filename && title.includes(filename)) return commit;
+          return null;
+        }
+      })
+    );
+
+    const validCommits = filteredCommits.filter(Boolean);
+    res.json(validCommits);
   } catch (error) {
     next(error);
   }

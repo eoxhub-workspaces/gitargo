@@ -1167,6 +1167,8 @@ export default function CodeProject() {
                   original={diffState.content}
                   modified={yamlContent}
                   theme={isDark ? "vs-dark" : "vs-light"}
+                  keepCurrentOriginalModel={false}
+                  keepCurrentModifiedModel={false}
                   options={{
                     readOnly: true,
                     renderSideBySide: true,

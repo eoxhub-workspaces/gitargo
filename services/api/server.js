@@ -20,7 +20,8 @@ const {
   getVirtualPath,
   parseAppFilename,
   resolveAppLocation,
-  getAppFilename
+  getAppFilename,
+  validateAndSanitizeAppYaml
 } = require('./lib/authHelpers');
 
 const { kc, customObjectsApi, appsV1Api, coreV1Api, networkingV1Api } = createK8sClients();
@@ -520,7 +521,8 @@ const routerContext = {
   requiresApplicationsEnabled,
   resolveSafeWorkspacePath,
   listWorkspaceDirectory,
-  validateArgoWorkflow
+  validateArgoWorkflow,
+  validateAndSanitizeAppYaml
 };
 
 const apiRouter = express.Router();

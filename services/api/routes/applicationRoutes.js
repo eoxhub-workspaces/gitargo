@@ -47,109 +47,93 @@ function createApplicationRouter(ctx) {
     requiresApplicationsEnabled,
     resolveSafeWorkspacePath,
     listWorkspaceDirectory,
-    validateArgoWorkflow
+    validateArgoWorkflow,
+    validateAndSanitizeAppYaml
   } = ctx;
 
-router.get("/applications", requiresApplicationsEnabled, async (req, res, next) => {
-  try {
-    const response = await gitlabApi.get(
-      `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
-      {
-        params: {
-          path: GITLAB_APPLICATIONS_PATH,
-          ref: GITLAB_BRANCH,
-          recursive: true,
-          per_page: 200
-        }
-      }
-    );
+const appBlobCache = new Map();
+const appStatusCache = new Map();
+const APP_STATUS_TTL = 10000;
 
-    const appsMap = {};
-    for (const file of response.data) {
-      if (file.type === "blob" && file.path.startsWith(GITLAB_APPLICATIONS_PATH + "/")) {
-        const relativePath = file.path.slice(GITLAB_APPLICATIONS_PATH.length + 1);
-        const parts = relativePath.split('/');
-        if (parts.length === 2) {
-          const folderName = parts[0];
-          const filename = parts[1];
-          const parsed = parseAppFilename(filename);
-          if (parsed) {
-            const comp = parsed.comp;
-            const appKey = comp ? `${folderName}/${comp}` : folderName;
-            if (!appsMap[appKey]) {
-              appsMap[appKey] = {
-                name: appKey,
-                folder: folderName,
-                component: comp,
-                files: [],
-                hasDeployment: false
-              };
-            }
-            appsMap[appKey].files.push(filename);
-            if (parsed.type === "deployment") {
-              appsMap[appKey].hasDeployment = true;
-            }
-          }
-        }
-      }
-    }
+let trivyReportsCache = null;
+const TRIVY_CACHE_TTL = 30000;
 
-    // Only return application entries that possess a deployment YAML file
-    const validApps = Object.values(appsMap)
-      .filter(app => app.hasDeployment)
-      .map(({ hasDeployment, ...app }) => app);
-
-    res.json(validApps);
-  } catch (error) {
-    if (error.response && error.response.status === 404) {
-      return res.json([]);
-    }
-    next(error);
+async function getCachedTrivyReports(namespace) {
+  if (
+    trivyReportsCache &&
+    trivyReportsCache.namespace === namespace &&
+    Date.now() - trivyReportsCache.timestamp < TRIVY_CACHE_TTL
+  ) {
+    return trivyReportsCache.items;
   }
-});
-
-// Helper to detect 404 Not Found errors across all @kubernetes/client-node error formats
-function isK8sNotFoundError(err) {
-  if (!err) return false;
-  return (
-    err.statusCode === 404 ||
-    err.code === 404 ||
-    err.response?.statusCode === 404 ||
-    err.response?.body?.code === 404 ||
-    (typeof err.body === 'string' && err.body.includes('"code":404')) ||
-    (typeof err.message === 'string' && (err.message.includes('not found') || err.message.includes('HTTP-Code: 404')))
-  );
+  if (!customObjectsApi) return [];
+  try {
+    const trivyRes = await customObjectsApi.listNamespacedCustomObject({
+      group: "aquasecurity.github.io",
+      version: "v1alpha1",
+      namespace,
+      plural: "vulnerabilityreports"
+    });
+    const items = trivyRes.body?.items || trivyRes.items || [];
+    trivyReportsCache = { timestamp: Date.now(), namespace, items };
+    return items;
+  } catch (err) {
+    if (!isK8sIgnorableError(err)) {
+      console.debug("Failed to fetch Trivy vulnerability reports:", err.message || err);
+    }
+    return [];
+  }
 }
 
-// GET /api/applications/:appName/status
-router.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, async (req, res, next) => {
-  try {
-    const appName = getVirtualPath(req);
-    const { folder, prefix } = resolveAppLocation(appName);
-    let namespace = process.env.ARGO_NAMESPACE || "default";
+async function fetchAppStatus(appName, deploymentContent = null) {
+  const cached = appStatusCache.get(appName);
+  if (cached && (Date.now() - cached.timestamp < APP_STATUS_TTL)) {
+    return cached.data;
+  }
 
-    // Read deployment YAML from Git to determine exact metadata.name, metadata.namespace & spec.selector.matchLabels
-    let targetK8sName = prefix || folder;
-    const depFile = getAppFilename(prefix, "deployment");
-    const filePath = `${GITLAB_APPLICATIONS_PATH}/${folder}/${depFile}`;
+  const { folder, prefix } = resolveAppLocation(appName);
+  let namespace = process.env.ARGO_NAMESPACE || "default";
+  let targetK8sName = prefix || folder;
+
+  if (!deploymentContent) {
     try {
+      const depFile = getAppFilename(prefix, "deployment");
+      const filePath = `${GITLAB_APPLICATIONS_PATH}/${folder}/${depFile}`;
       const rawResponse = await gitlabApi.get(
         `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
         { params: { ref: GITLAB_BRANCH } }
       );
-      const parsed = YAML.parse(rawResponse.data);
-      if (parsed?.metadata?.name) {
-        targetK8sName = parsed.metadata.name;
-      }
-      if (parsed?.metadata?.namespace) {
-        namespace = parsed.metadata.namespace;
-      }
-    } catch (err) {
-      // Ignore
+      deploymentContent = rawResponse.data || null;
+    } catch (e) {}
+  }
+
+  if (deploymentContent) {
+    const lines = deploymentContent.split("\n").filter(l => l.trim().length > 0);
+    const isAppDisabled = lines.length > 0 && lines.every(l => l.trim().startsWith("#"));
+    if (isAppDisabled) {
+      const result = {
+        name: appName,
+        deployed: false,
+        deployment: null,
+        service: null,
+        ingress: null,
+        pods: [],
+        vulnerabilities: null
+      };
+      appStatusCache.set(appName, { timestamp: Date.now(), data: result });
+      return result;
     }
 
-    let deploymentStatus = null;
-    let deploymentMatchLabels = null;
+    try {
+      const parsed = YAML.parse(deploymentContent);
+      if (parsed?.metadata?.name) targetK8sName = parsed.metadata.name;
+      if (parsed?.metadata?.namespace) namespace = parsed.metadata.namespace;
+    } catch (e) {}
+  }
+
+  let deploymentStatus = null;
+  let deploymentMatchLabels = null;
+  if (appsV1Api) {
     try {
       const depResponse = await appsV1Api.readNamespacedDeployment({ name: targetK8sName, namespace });
       const d = depResponse.body || depResponse;
@@ -161,12 +145,14 @@ router.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, async 
         conditions: d.spec?.replicas === 0 ? [{ type: "ScaledToZero", status: "True", message: "Application is scaled to zero." }] : (d.status?.conditions || [])
       };
     } catch (err) {
-      if (!isK8sNotFoundError(err)) {
+      if (!isK8sIgnorableError(err)) {
         console.error(`Failed to read deployment "${targetK8sName}" from K8s:`, err.message || err);
       }
     }
+  }
 
-    let serviceStatus = null;
+  let serviceStatus = null;
+  if (coreV1Api) {
     try {
       const svcResponse = await coreV1Api.readNamespacedService({ name: targetK8sName, namespace });
       const s = svcResponse.body || svcResponse;
@@ -175,11 +161,11 @@ router.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, async 
         clusterIP: s.spec?.clusterIP,
         ports: s.spec?.ports || []
       };
-    } catch (err) {
-      // 404 is expected if not reconciled
-    }
+    } catch (err) {}
+  }
 
-    let ingressStatus = null;
+  let ingressStatus = null;
+  if (networkingV1Api) {
     try {
       const ingResponse = await networkingV1Api.readNamespacedIngress({ name: targetK8sName, namespace });
       const ing = ingResponse.body || ingResponse;
@@ -191,114 +177,41 @@ router.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, async 
         ready: !!isIngressReady,
         loadBalancer: lb
       };
-    } catch (err) {
-      // 404 is expected if ingress doesn't exist
-    }
+    } catch (err) {}
+  }
 
-    let pods = [];
+  let pods = [];
+  if (coreV1Api) {
     try {
-      let labelSelectors = [];
+      let labelSelector = "";
       if (deploymentMatchLabels && Object.keys(deploymentMatchLabels).length > 0) {
-        const sel = Object.entries(deploymentMatchLabels)
+        labelSelector = Object.entries(deploymentMatchLabels)
           .map(([k, v]) => `${k}=${v}`)
           .join(",");
-        labelSelectors.push(sel);
       } else {
-        labelSelectors = [
-          `app.kubernetes.io/service=${targetK8sName}`,
-          `app.kubernetes.io/name=${targetK8sName}`,
-          `app.kubernetes.io/instance=${targetK8sName}`,
-          `app=${targetK8sName}`
-        ];
+        labelSelector = `app.kubernetes.io/service=${targetK8sName}`;
       }
 
-      const podPromises = labelSelectors.map(labelSelector =>
-        coreV1Api.listNamespacedPod({ namespace, labelSelector })
-          .then(res => res.body?.items || res.items || [])
-          .catch(() => [])
-      );
+      const res = await coreV1Api.listNamespacedPod({ namespace, labelSelector });
+      const rawPods = res.body?.items || res.items || [];
+      pods = rawPods.map(p => ({
+        name: p.metadata?.name,
+        phase: p.status?.phase,
+        restarts: p.status?.containerStatuses?.reduce((acc, c) => acc + (c.restartCount || 0), 0) || 0,
+        age: p.metadata?.creationTimestamp,
+        containerStatus: p.status?.containerStatuses?.map(c => ({
+          name: c.name,
+          ready: c.ready,
+          state: c.state
+        })) || []
+      }));
+    } catch (err) {}
+  }
 
-      const results = await Promise.all(podPromises);
-      const podMap = new Map();
-
-      for (const items of results) {
-        for (const p of items) {
-          if (p.metadata?.name && !podMap.has(p.metadata.name)) {
-            podMap.set(p.metadata.name, p);
-          }
-        }
-      }
-
-      if (podMap.size === 0) {
-        try {
-          const allPodsRes = await coreV1Api.listNamespacedPod({ namespace });
-          const allItems = allPodsRes.body?.items || allPodsRes.items || [];
-          for (const p of allItems) {
-            const pName = p.metadata?.name || '';
-            if (isPodOwnedByApp(p, targetK8sName) && !podMap.has(pName)) {
-              podMap.set(pName, p);
-            }
-          }
-        } catch (e) {
-          // Ignore fallback error
-        }
-      }
-
-      let k8sEvents = [];
-      try {
-        const eventsRes = await coreV1Api.listNamespacedEvent({ namespace });
-        k8sEvents = eventsRes.body?.items || eventsRes.items || [];
-      } catch (e) {
-        // Ignore if events listing is not permitted
-      }
-
-      pods = Array.from(podMap.values()).map(p => {
-        const pName = p.metadata?.name;
-        const pUid = p.metadata?.uid;
-
-        const podEvents = k8sEvents.filter(e => {
-          const inv = e.involvedObject || {};
-          return inv.name === pName || (pUid && inv.uid === pUid);
-        });
-
-        const warnings = podEvents
-          .filter(e => e.type === 'Warning' || (e.reason && (e.reason.includes('Failed') || e.reason.includes('Error') || e.reason.includes('Unscheduled') || e.reason.includes('BackOff'))))
-          .sort((a, b) => new Date(b.lastTimestamp || b.eventTime || b.metadata?.creationTimestamp || 0).getTime() - new Date(a.lastTimestamp || a.eventTime || a.metadata?.creationTimestamp || 0).getTime())
-          .map(e => ({
-            reason: e.reason,
-            message: e.message,
-            count: e.count || 1,
-            lastTimestamp: e.lastTimestamp || e.eventTime || e.metadata?.creationTimestamp
-          }));
-
-        return {
-          name: pName,
-          phase: p.status?.phase,
-          restarts: p.status?.containerStatuses?.reduce((acc, c) => acc + (c.restartCount || 0), 0) || 0,
-          age: p.metadata?.creationTimestamp,
-          containerStatus: p.status?.containerStatuses?.map(c => ({
-            name: c.name,
-            ready: c.ready,
-            state: c.state
-          })) || [],
-          events: warnings.length > 0 ? warnings : undefined,
-          lastWarning: warnings.length > 0 ? warnings[0].message : undefined
-        };
-      });
-    } catch (err) {
-      console.error("Failed to list pods from K8s:", err.message);
-    }
-
-    let vulnerabilities = null;
+  let vulnerabilities = null;
+  if (customObjectsApi) {
     try {
-      const reportsResponse = await customObjectsApi.listNamespacedCustomObject({
-        group: 'aquasecurity.github.io',
-        version: 'v1alpha1',
-        namespace,
-        plural: 'vulnerabilityreports'
-      });
-      const items = reportsResponse.body?.items || reportsResponse.items || [];
-      
+      const items = await getCachedTrivyReports(namespace);
       const appReports = items.filter(item => {
         const rName = item.metadata?.labels?.['trivy-operator.resource.name'] || '';
         const cName = item.metadata?.labels?.['trivy-operator.container.name'] || '';
@@ -325,19 +238,130 @@ router.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, async 
           })) || []
         }));
       }
-    } catch (err) {
-      console.debug("Failed to fetch Trivy vulnerability reports:", err.message);
+    } catch (err) {}
+  }
+
+  const result = {
+    name: appName,
+    deployed: !!deploymentStatus,
+    deployment: deploymentStatus,
+    service: serviceStatus,
+    ingress: ingressStatus,
+    pods: pods,
+    vulnerabilities: vulnerabilities
+  };
+
+  appStatusCache.set(appName, { timestamp: Date.now(), data: result });
+  return result;
+}
+
+router.get("/applications", requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const response = await gitlabApi.get(
+      `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
+      {
+        params: {
+          path: GITLAB_APPLICATIONS_PATH,
+          ref: GITLAB_BRANCH,
+          recursive: true,
+          per_page: 200
+        }
+      }
+    );
+
+    const appsMap = {};
+    const fileEntries = [];
+
+    for (const file of response.data) {
+      if (file.type === "blob" && file.path.startsWith(GITLAB_APPLICATIONS_PATH + "/")) {
+        const relativePath = file.path.slice(GITLAB_APPLICATIONS_PATH.length + 1);
+        const parts = relativePath.split('/');
+        if (parts.length === 2) {
+          const folderName = parts[0];
+          const filename = parts[1];
+          const parsed = parseAppFilename(filename);
+          if (parsed) {
+            const comp = parsed.comp;
+            const appKey = comp ? `${folderName}/${comp}` : folderName;
+            if (!appsMap[appKey]) {
+              appsMap[appKey] = {
+                name: appKey,
+                folder: folderName,
+                component: comp,
+                files: [],
+                hasDeployment: false,
+                yamls: { deployment: "", service: "", ingress: "" }
+              };
+            }
+            appsMap[appKey].files.push(filename);
+            fileEntries.push({ appKey, type: parsed.type, file });
+            if (parsed.type === "deployment") {
+              appsMap[appKey].hasDeployment = true;
+            }
+          }
+        }
+      }
     }
 
-    res.json({
-      name: appName,
-      deployed: !!deploymentStatus,
-      deployment: deploymentStatus,
-      service: serviceStatus,
-      ingress: ingressStatus,
-      pods: pods,
-      vulnerabilities: vulnerabilities
-    });
+    // Fetch raw file contents in parallel (using Git blob SHA cache)
+    await Promise.all(
+      fileEntries.map(async ({ appKey, type, file }) => {
+        let content = "";
+        if (file.id && appBlobCache.has(file.id)) {
+          content = appBlobCache.get(file.id);
+        } else {
+          try {
+            const raw = await gitlabApi.get(
+              `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(file.path)}/raw`,
+              { params: { ref: GITLAB_BRANCH } }
+            );
+            content = raw.data || "";
+            if (file.id) {
+              appBlobCache.set(file.id, content);
+            }
+          } catch (e) {}
+        }
+        if (appsMap[appKey]) {
+          appsMap[appKey].yamls[type] = content;
+        }
+      })
+    );
+
+    const validApps = Object.values(appsMap)
+      .filter(app => app.hasDeployment)
+      .map(({ hasDeployment, ...app }) => app);
+
+    res.json(validApps);
+  } catch (error) {
+    if (error.response && error.response.status === 404) {
+      return res.json([]);
+    }
+    next(error);
+  }
+});
+
+// Helper to detect 404 Not Found or 403 Forbidden errors across all @kubernetes/client-node error formats
+function isK8sIgnorableError(err) {
+  if (!err) return false;
+  const status = err.statusCode || err.code || err.response?.statusCode || err.response?.body?.code || err.status;
+  if (status === 404 || status === 403) return true;
+  if (typeof err.body === 'string' && (err.body.includes('"code":404') || err.body.includes('"code":403'))) return true;
+  if (typeof err.message === 'string' && (
+    err.message.includes('not found') ||
+    err.message.includes('forbidden') ||
+    err.message.includes('Forbidden') ||
+    err.message.includes('HTTP-Code: 404') ||
+    err.message.includes('HTTP-Code: 403')
+  )) return true;
+  return false;
+}
+
+// GET /api/applications/:appName/status
+router.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, async (req, res, next) => {
+  try {
+    const appName = getVirtualPath(req);
+    const status = await fetchAppStatus(appName);
+    res.json(status);
   } catch (error) {
     next(error);
   }
@@ -689,260 +713,6 @@ function isPodOwnedByApp(pod, appName) {
 
   return false;
 }
-
-router.get(/^\/applications\/(.+)\/status$/, requiresApplicationsEnabled, async (req, res, next) => {
-  try {
-    const appName = req.params[0];
-    const { folder, prefix } = resolveAppLocation(appName);
-    let namespace = process.env.ARGO_NAMESPACE || "default";
-
-    // Read deployment YAML from Git to determine exact metadata.name, metadata.namespace & spec.selector.matchLabels
-    let targetK8sName = prefix || folder;
-    const depFile = getAppFilename(prefix, "deployment");
-    const filePath = `${GITLAB_APPLICATIONS_PATH}/${folder}/${depFile}`;
-    try {
-      const rawResponse = await gitlabApi.get(
-        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
-        { params: { ref: GITLAB_BRANCH } }
-      );
-      const parsed = YAML.parse(rawResponse.data);
-      if (parsed?.metadata?.name) {
-        targetK8sName = parsed.metadata.name;
-      }
-      if (parsed?.metadata?.namespace) {
-        namespace = parsed.metadata.namespace;
-      }
-    } catch (err) {
-      // Ignore
-    }
-
-    let deploymentStatus = null;
-    let deploymentMatchLabels = null;
-    try {
-      const depResponse = await appsV1Api.readNamespacedDeployment({ name: targetK8sName, namespace });
-      const d = depResponse.body || depResponse;
-      deploymentMatchLabels = d.spec?.selector?.matchLabels || null;
-      deploymentStatus = {
-        replicas: d.status?.replicas || 0,
-        readyReplicas: d.status?.readyReplicas || 0,
-        availableReplicas: d.status?.availableReplicas || 0,
-        conditions: d.spec?.replicas === 0 ? [{ type: "ScaledToZero", status: "True", message: "Application is scaled to zero." }] : (d.status?.conditions || [])
-      };
-    } catch (err) {
-      if (err.statusCode !== 404) {
-        console.error(`Failed to read deployment "${targetK8sName}" from K8s:`, err.message);
-      }
-    }
-
-    let serviceStatus = null;
-    try {
-      const svcResponse = await coreV1Api.readNamespacedService({ name: targetK8sName, namespace });
-      const s = svcResponse.body || svcResponse;
-      serviceStatus = {
-        type: s.spec?.type,
-        clusterIP: s.spec?.clusterIP,
-        ports: s.spec?.ports || []
-      };
-    } catch (err) {
-      // 404 is expected if not reconciled
-    }
-
-    let ingressStatus = null;
-    try {
-      const ingResponse = await networkingV1Api.readNamespacedIngress({ name: targetK8sName, namespace });
-      const ing = ingResponse.body || ingResponse;
-      const lb = ing.status?.loadBalancer?.ingress || [];
-      const hasRules = ing.spec?.rules && ing.spec.rules.length > 0;
-      const isIngressReady = (lb.length > 0 && (lb[0].ip || lb[0].hostname)) || hasRules;
-
-      ingressStatus = {
-        ready: !!isIngressReady,
-        loadBalancer: lb
-      };
-    } catch (err) {
-      // 404 is expected if ingress doesn't exist
-    }
-
-    let pods = [];
-    try {
-      let labelSelectors = [];
-      if (deploymentMatchLabels && Object.keys(deploymentMatchLabels).length > 0) {
-        const sel = Object.entries(deploymentMatchLabels)
-          .map(([k, v]) => `${k}=${v}`)
-          .join(",");
-        labelSelectors.push(sel);
-      } else {
-        labelSelectors = [
-          `app.kubernetes.io/service=${targetK8sName}`,
-          `app.kubernetes.io/name=${targetK8sName}`,
-          `app.kubernetes.io/instance=${targetK8sName}`,
-          `app=${targetK8sName}`
-        ];
-      }
-
-      const podPromises = labelSelectors.map(labelSelector =>
-        coreV1Api.listNamespacedPod({ namespace, labelSelector })
-          .then(res => res.body?.items || res.items || [])
-          .catch(() => [])
-      );
-
-      const results = await Promise.all(podPromises);
-      const podMap = new Map();
-
-      for (const items of results) {
-        for (const p of items) {
-          if (p.metadata?.name && !podMap.has(p.metadata.name)) {
-            podMap.set(p.metadata.name, p);
-          }
-        }
-      }
-
-      // If no pods matched standard label queries, list all pods in namespace and use strict ownership verification
-      if (podMap.size === 0) {
-        try {
-          const allPodsRes = await coreV1Api.listNamespacedPod({ namespace });
-          const allItems = allPodsRes.body?.items || allPodsRes.items || [];
-          for (const p of allItems) {
-            const pName = p.metadata?.name || '';
-            if (isPodOwnedByApp(p, targetK8sName) && !podMap.has(pName)) {
-              podMap.set(pName, p);
-            }
-          }
-        } catch (e) {
-          // Ignore fallback error
-        }
-      }
-
-      let k8sEvents = [];
-      try {
-        const eventsRes = await coreV1Api.listNamespacedEvent({ namespace });
-        k8sEvents = eventsRes.body?.items || eventsRes.items || [];
-      } catch (e) {
-        // Ignore if events listing is not permitted
-      }
-
-      pods = Array.from(podMap.values()).map(p => {
-        const pName = p.metadata?.name;
-        const pUid = p.metadata?.uid;
-
-        const podEvents = k8sEvents.filter(e => {
-          const inv = e.involvedObject || {};
-          return inv.name === pName || (pUid && inv.uid === pUid);
-        });
-
-        const warnings = podEvents
-          .filter(e => e.type === 'Warning' || (e.reason && (e.reason.includes('Failed') || e.reason.includes('Error') || e.reason.includes('Unscheduled') || e.reason.includes('BackOff'))))
-          .sort((a, b) => new Date(b.lastTimestamp || b.eventTime || b.metadata?.creationTimestamp || 0).getTime() - new Date(a.lastTimestamp || a.eventTime || a.metadata?.creationTimestamp || 0).getTime())
-          .map(e => ({
-            reason: e.reason,
-            message: e.message,
-            count: e.count || 1,
-            lastTimestamp: e.lastTimestamp || e.eventTime || e.metadata?.creationTimestamp
-          }));
-
-        return {
-          name: pName,
-          phase: p.status?.phase,
-          restarts: p.status?.containerStatuses?.reduce((acc, c) => acc + (c.restartCount || 0), 0) || 0,
-          age: p.metadata?.creationTimestamp,
-          containerStatus: p.status?.containerStatuses?.map(c => ({
-            name: c.name,
-            ready: c.ready,
-            state: c.state
-          })) || [],
-          events: warnings.length > 0 ? warnings : undefined,
-          lastWarning: warnings.length > 0 ? warnings[0].message : undefined
-        };
-      });
-    } catch (err) {
-      console.error("Failed to list pods from K8s:", err.message);
-    }
-
-    let vulnerabilities = null;
-    try {
-      const reportsResponse = await customObjectsApi.listNamespacedCustomObject({
-        group: 'aquasecurity.github.io',
-        version: 'v1alpha1',
-        namespace,
-        plural: 'vulnerabilityreports'
-      });
-      const items = reportsResponse.body?.items || reportsResponse.items || [];
-      
-      const appReports = items.filter(item => {
-        const rName = item.metadata?.labels?.['trivy-operator.resource.name'] || '';
-        const cName = item.metadata?.labels?.['trivy-operator.container.name'] || '';
-        const repName = item.metadata?.name || '';
-        return rName === targetK8sName || 
-               rName.startsWith(`${targetK8sName}-`) || 
-               cName === targetK8sName ||
-               repName.startsWith(`replicaset-${targetK8sName}-`) ||
-               repName.startsWith(`deployment-${targetK8sName}-`);
-      });
-
-      if (appReports.length > 0) {
-        vulnerabilities = appReports.map(item => ({
-          container: item.metadata?.labels?.['trivy-operator.container.name'] || 'unknown',
-          summary: item.report?.summary || { criticalCount: 0, highCount: 0, mediumCount: 0, lowCount: 0 },
-          topVulnerabilities: item.report?.vulnerabilities?.slice(0, 5).map(v => ({
-            id: v.vulnerabilityID,
-            title: v.title,
-            severity: v.severity,
-            pkg: v.resource,
-            installedVersion: v.installedVersion,
-            fixedVersion: v.fixedVersion,
-            link: v.primaryLink
-          })) || []
-        }));
-      }
-    } catch (err) {
-      console.debug("Failed to fetch Trivy vulnerability reports:", err.message);
-    }
-
-    res.json({
-      name: appName,
-      deployed: !!deploymentStatus,
-      deployment: deploymentStatus,
-      service: serviceStatus,
-      ingress: ingressStatus,
-      pods: pods,
-      vulnerabilities: vulnerabilities
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.delete("/applications/:name/pods/:podName", requiresApplicationsEnabled, async (req, res, next) => {
-  try {
-    const { name, podName } = req.params;
-    const namespace = process.env.ARGO_NAMESPACE || "default";
-
-    // 1. Get the pod first to verify it belongs to this application (strict isolation)
-    let pod;
-    try {
-      const podResponse = await coreV1Api.readNamespacedPod({ name: podName, namespace });
-      pod = podResponse.body || podResponse;
-    } catch (err) {
-      if (err.statusCode === 404) {
-        return res.status(404).json({ message: `Pod ${podName} not found.` });
-      }
-      throw err;
-    }
-
-    if (!isPodOwnedByApp(pod, name)) {
-      return res.status(403).json({ message: `Unauthorized: Pod ${podName} does not belong to application ${name}.` });
-    }
-
-    // 2. Pod is verified, delete it
-    await coreV1Api.deleteNamespacedPod({ name: podName, namespace });
-    res.json({ message: `Pod ${podName} deleted successfully.` });
-  } catch (error) {
-    if (error.body) {
-      return sendK8sError(res, error);
-    }
-    next(error);
-  }
-});
 
 // --- Loki Log Integration ---
 const LOKI_URL = process.env.LOKI_URL || "http://localhost:4567";

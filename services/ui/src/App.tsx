@@ -24,6 +24,7 @@ window.addEventListener("unhandledrejection", (event) => {
     event.reason &&
     event.reason.message &&
     (event.reason.message.includes("resetSchema") ||
+      event.reason.message.includes("TextModel got disposed") ||
       event.reason.message.includes("Missing requestHandler or method:"))
   ) {
     event.preventDefault();
@@ -34,6 +35,7 @@ window.addEventListener("error", (event) => {
   if (
     event.message &&
     (event.message.includes("resetSchema") ||
+      event.message.includes("TextModel got disposed") ||
       event.message.includes("Missing requestHandler or method:"))
   ) {
     event.preventDefault();
