@@ -88,10 +88,23 @@ router.use((req, res, next) => {
 
 let APP_VERSION = process.env.APP_VERSION;
 if (!APP_VERSION) {
-  try {
-    APP_VERSION = require("./package.json").version;
-  } catch (e) {
-    APP_VERSION = null;
+  const possiblePaths = [
+    "../../../package.json",
+    "../../package.json",
+    "../package.json",
+    "../root-package.json",
+    "./package.json"
+  ];
+  for (const p of possiblePaths) {
+    try {
+      const pkg = require(p);
+      if (pkg && pkg.version) {
+        APP_VERSION = pkg.version;
+        break;
+      }
+    } catch (e) {
+      // Continue searching
+    }
   }
 }
 

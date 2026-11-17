@@ -12,6 +12,7 @@ FROM node:26-alpine AS development
 ENV NODE_ENV=development
 RUN apk update && apk upgrade --no-cache
 WORKDIR /app
+COPY package.json ./root-package.json
 COPY services/api/package*.json ./
 RUN npm install
 COPY services/api/ ./

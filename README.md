@@ -167,30 +167,16 @@ npm run lint:fix
 
 ### Version Bumping
 
-To maintain consistency across the project, the version number is synchronized across three configuration files:
-1. Root `package.json`
-2. Backend `services/api/package.json`
-3. Frontend `services/ui/package.json`
+The project uses the root `package.json` as the single source of truth for the application version. Both the API service and UI automatically resolve and expose this version.
 
-The most robust way to bump the version and generate standard Git release tags is:
+To bump the version and generate standard Git release tags:
 
-#### Standard Automated Bump:
-You can use standard npm version commands at the root of the project to bump all three files and tag your git repository in a single action:
 ```bash
-# Bumps patch version (e.g. 0.3.0 -> 0.3.1) and creates a git tag
+# Bumps patch version (e.g. 0.6.0 -> 0.6.1) and creates a git tag
 npm version patch
 
-# Bumps minor version (e.g. 0.3.0 -> 0.4.0) and creates a git tag
+# Bumps minor version (e.g. 0.6.0 -> 0.7.0) and creates a git tag
 npm version minor
-```
-
-#### Manual Sync (Alternative):
-If you need to manually change the version, update the `"version"` field in all three `package.json` files to match exactly, then run the installs to synchronize the lockfiles:
-```bash
-# Sync root and subdirectory lockfiles
-npm install --no-audit
-cd services/api && npm install --no-audit
-cd ../ui && npm install --no-audit
 ```
 
 ## Container Security (DevSecOps)

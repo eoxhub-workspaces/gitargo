@@ -29,6 +29,7 @@ for POD in $PODS; do
   kubectl -n $NAMESPACE exec ${POD} -- mkdir -p /app/routes /app/lib /app/public
 
   # Copy backend files explicitly to /app
+  kubectl cp package.json $NAMESPACE/${POD}:/app/root-package.json
   kubectl cp services/api/server.js $NAMESPACE/${POD}:/app/server.js
   kubectl cp services/api/package.json $NAMESPACE/${POD}:/app/package.json
   kubectl cp services/api/routes/. $NAMESPACE/${POD}:/app/routes/

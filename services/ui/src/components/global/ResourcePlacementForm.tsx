@@ -55,30 +55,26 @@ export const ResourcePlacementForm: React.FC<ResourcePlacementFormProps> = ({
 
   return (
     <div className="space-y-6 text-sm text-gray-700">
-      {/* Workspace Identifier Section */}
-      <div>
-        <h4 className="text-sm font-semibold text-gray-900 border-b pb-2 mb-3 flex items-center">
-          <span>Workspace Identifier</span>
-          <InfoButton text="The Workspace Identifier defines both the Kubernetes Namespace and Service Account used to execute your workflow tasks." />
-        </h4>
-        <div className="flex space-x-2">
-          <input
-            type="text"
-            value={state.workspaceIdentifier}
-            onChange={(e) => handleWorkspaceChange(e.target.value)}
-            placeholder={`e.g. ${defaultWorkspace}`}
-            className="flex-1 bg-white border border-gray-300 text-sm rounded-lg p-2 focus:ring-blue-500 focus:border-blue-500 font-mono"
-          />
-        </div>
+      {/* Workspace Identifier Section - Only shown if not matching expected default */}
+      {isWorkspaceMismatched && (
+        <div>
+          <h4 className="text-sm font-semibold text-gray-900 border-b pb-2 mb-3 flex items-center">
+            <span>Workspace Identifier</span>
+            <InfoButton text="The Workspace Identifier defines the Kubernetes Namespace used to execute your workflow tasks." />
+          </h4>
+          <div className="flex space-x-2">
+            <input
+              type="text"
+              value={state.workspaceIdentifier}
+              onChange={(e) => handleWorkspaceChange(e.target.value)}
+              placeholder={`e.g. ${defaultWorkspace}`}
+              className="flex-1 bg-white border border-gray-300 text-sm rounded-lg p-2 focus:ring-blue-500 focus:border-blue-500 font-mono"
+            />
+          </div>
 
-        {/* Workspace Identifier Warning Alert */}
-        {(!state.workspaceIdentifier || isWorkspaceMismatched) && (
           <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-xs text-yellow-800 space-y-2">
             <p className="font-semibold leading-relaxed">
-              ⚠️{" "}
-              {!state.workspaceIdentifier
-                ? "No Workspace Identifier specified. This can cause the workflow to run in an incorrect namespace or service account."
-                : `Current Workspace Identifier "${state.workspaceIdentifier}" does not match the recommended default "${defaultWorkspace}".`}
+              ⚠️ Current Workspace Identifier "{state.workspaceIdentifier}" does not match the recommended default "{defaultWorkspace}".
             </p>
             <button
               type="button"
@@ -88,8 +84,8 @@ export const ResourcePlacementForm: React.FC<ResourcePlacementFormProps> = ({
               Set to Recommended Default: "{defaultWorkspace}"
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Container / Step Resource Profiles */}
       <div>
