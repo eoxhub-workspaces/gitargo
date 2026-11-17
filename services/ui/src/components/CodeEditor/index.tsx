@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import Editor, { useMonaco } from "@monaco-editor/react";
+import { useDarkMode } from "../global/DarkModeSwitch/userDarkMode";
 
 // The window.MonacoEnvironment needs to be set up to tell Monaco where to find the workers.
 // The workers must be served from the public directory (static/js).
@@ -34,9 +35,15 @@ interface ICodeEditorProps {
 const CodeEditor = (props: ICodeEditorProps) => {
   const { data, language, onChange, disabled, lineWrapping, height } = props;
   const monaco = useMonaco();
+  const [isDark] = useDarkMode();
 
   useEffect(() => {
-    if (monaco && language === "yaml") {
+    if (
+      monaco &&
+      language === "yaml" &&
+      !(window as any).__monacoYamlConfigured
+    ) {
+      (window as any).__monacoYamlConfigured = true;
       import("monaco-yaml")
         .then(({ configureMonacoYaml }) => {
           configureMonacoYaml(monaco, {
@@ -44,7 +51,7 @@ const CodeEditor = (props: ICodeEditorProps) => {
             hover: true,
             completion: true,
             validate: true,
-            format: true,
+            format: true as any,
             schemas: [
               {
                 uri: "https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json",
@@ -53,7 +60,9 @@ const CodeEditor = (props: ICodeEditorProps) => {
             ]
           });
         })
-        .catch(console.error);
+        .catch(() => {
+          (window as any).__monacoYamlConfigured = false;
+        });
     }
   }, [monaco, language]);
 
@@ -68,7 +77,7 @@ const CodeEditor = (props: ICodeEditorProps) => {
       <Editor
         height={typeof height === "number" ? `${height}px` : height}
         language={language}
-        theme="vs-light"
+        theme={isDark ? "vs-dark" : "vs-light"}
         value={data}
         onChange={handleEditorChange}
         options={{

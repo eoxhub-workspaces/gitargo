@@ -597,14 +597,12 @@ outputs:
         ).toISOString();
       }
 
-      const logs = await getLogs(
-        execName,
-        "workflow",
-        undefined,
-        startBuf,
-        endBuf,
-        execName
-      );
+      const logs = await getLogs(execName, {
+        type: "workflow",
+        startTime: startBuf,
+        endTime: endBuf,
+        workflow: execName
+      });
       setLogsText(logs || "No logs recorded for this execution.");
     } catch (err: any) {
       setLogsText(
@@ -1122,13 +1120,15 @@ outputs:
                                             ? `Default: ${input.default}`
                                             : "Paste file/credentials content or path /workspace/file.json..."
                                         }
-                                        style={{
-                                          WebkitTextSecurity: hiddenFields[
-                                            input.id
-                                          ]
-                                            ? ("disc" as any)
-                                            : "none"
-                                        }}
+                                        style={
+                                          {
+                                            WebkitTextSecurity: hiddenFields[
+                                              input.id
+                                            ]
+                                              ? ("disc" as any)
+                                              : "none"
+                                          } as any
+                                        }
                                         className={`w-full px-3 py-1.5 rounded border text-xs font-mono outline-none focus:ring-1 focus:ring-blue-500 transition ${
                                           hiddenFields[input.id]
                                             ? "border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200"

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import toast from "react-hot-toast";
 import { formatK8sError } from "../../utils";
@@ -16,178 +16,145 @@ import * as api from "../../utils/api";
 import { useTitle } from "../../hooks";
 import Header from "../global/Header";
 import CodeEditor from "../CodeEditor";
+import { DiffEditor } from "@monaco-editor/react";
 import { SubmitWorkflowModal } from "../modals/SubmitWorkflowModal";
 import {
   ResourcePlacementForm,
   IResourcePlacementState
 } from "../global/ResourcePlacementForm";
+import {
+  translateKubespawnerOverride,
+  matchProfileForTemplate,
+  isProfileAllowedForWorkspace
+} from "../../utils/forms";
+import { useDarkMode } from "../global/DarkModeSwitch/userDarkMode";
+
+const extractAvailableTemplates = (parsed: any): string[] => {
+  if (!parsed) return [];
+  const isCron = parsed.kind === "CronWorkflow";
+  const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
+  if (!spec || !Array.isArray(spec.templates)) return [];
+
+  return spec.templates
+    .filter((t: any) => t && (t.container || t.script))
+    .map((t: any) => t.name)
+    .filter(Boolean);
+};
 
 const extractResourcesAndScheduling = (
-  parsed: any
+  parsed: any,
+  configProfiles: Record<string, any> = {}
 ): IResourcePlacementState => {
   if (!parsed) {
     return {
-      namespace: "",
-      serviceAccount: "",
-      cpuRequest: "",
-      cpuLimit: "",
-      memoryRequest: "",
-      memoryLimit: "",
-      gpuLimit: "",
-      tolerations: [],
-      nodeSelector: {}
+      workspaceIdentifier: "",
+      templateProfiles: {}
     };
   }
 
   const isCron = parsed.kind === "CronWorkflow";
   const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
 
-  const state: IResourcePlacementState = {
-    namespace: parsed.metadata?.namespace || "",
-    serviceAccount: spec?.serviceAccountName || spec?.serviceAccount || "",
-    cpuRequest: "",
-    cpuLimit: "",
-    memoryRequest: "",
-    memoryLimit: "",
-    gpuLimit: "",
-    tolerations: spec?.tolerations || [],
-    nodeSelector: spec?.nodeSelector || {}
-  };
+  const wsId =
+    parsed.metadata?.namespace ||
+    spec?.serviceAccountName ||
+    spec?.serviceAccount ||
+    "";
 
-  if (spec) {
-    const entrypointName = spec.entrypoint;
-    if (entrypointName && spec.templates) {
-      const entryTemplate = spec.templates.find(
-        (t: any) => t.name === entrypointName
-      );
-      if (entryTemplate) {
-        const containerKey = entryTemplate.container
-          ? "container"
-          : entryTemplate.script
-            ? "script"
-            : null;
-        if (containerKey) {
-          const target = entryTemplate[containerKey];
-          const resources = target?.resources || {};
+  const templateProfiles: Record<string, string> = {};
 
-          state.cpuRequest = resources.requests?.cpu || "";
-          state.cpuLimit = resources.limits?.cpu || "";
-          state.memoryRequest = resources.requests?.memory || "";
-          state.memoryLimit = resources.limits?.memory || "";
-          state.gpuLimit = resources.limits?.["nvidia.com/gpu"] || "";
-        }
+  if (spec && Array.isArray(spec.templates)) {
+    spec.templates.forEach((template: any) => {
+      if (template && (template.container || template.script)) {
+        templateProfiles[template.name] = matchProfileForTemplate(
+          template,
+          configProfiles
+        );
       }
-    }
+    });
   }
-  return state;
+
+  return {
+    workspaceIdentifier: wsId,
+    templateProfiles
+  };
 };
 
 const injectResourcesAndScheduling = (
   parsed: any,
-  state: IResourcePlacementState
+  state: IResourcePlacementState,
+  configProfiles: Record<string, any> = {}
 ) => {
   if (!parsed) return parsed;
   const isCron = parsed.kind === "CronWorkflow";
 
-  // Inject Namespace
   if (!parsed.metadata) parsed.metadata = {};
-  if (state.namespace) {
-    parsed.metadata.namespace = state.namespace;
+  if (state.workspaceIdentifier) {
+    parsed.metadata.namespace = state.workspaceIdentifier;
   } else {
     delete parsed.metadata.namespace;
   }
 
   if (!parsed.spec) parsed.spec = {};
-
   if (isCron && !parsed.spec.workflowSpec) {
     parsed.spec.workflowSpec = {};
   }
   const spec = isCron ? parsed.spec.workflowSpec : parsed.spec;
 
-  // 0. Inject ServiceAccountName and clean up deprecated serviceAccount
-  if (state.serviceAccount) {
-    spec.serviceAccountName = state.serviceAccount;
+  if (state.workspaceIdentifier) {
+    spec.serviceAccountName = state.workspaceIdentifier;
     delete spec.serviceAccount;
   } else {
     delete spec.serviceAccountName;
     delete spec.serviceAccount;
   }
 
-  // 1. Inject global Tolerations
-  if (state.tolerations.length > 0) {
-    spec.tolerations = state.tolerations;
-  } else {
-    delete spec.tolerations;
-  }
+  if (spec.templates && Array.isArray(spec.templates)) {
+    spec.templates.forEach((template: any) => {
+      if (!template || (!template.container && !template.script)) return;
 
-  // 2. Inject global NodeSelector
-  if (Object.keys(state.nodeSelector).length > 0) {
-    spec.nodeSelector = state.nodeSelector;
-  } else {
-    delete spec.nodeSelector;
-  }
+      const profileKey = state.templateProfiles[template.name];
+      const profile = profileKey ? configProfiles[profileKey] : null;
 
-  // 3. Inject Resources into Entrypoint Template
-  const entrypointName = spec.entrypoint;
-  if (entrypointName && spec.templates) {
-    let entryTemplate = spec.templates.find(
-      (t: any) => t.name === entrypointName
-    );
-    if (!entryTemplate) {
-      // If template not found, create a placeholder main template
-      entryTemplate = {
-        name: entrypointName,
-        container: {
-          image: "alpine:latest",
-          command: ["sh", "-c"],
-          args: ["echo Hello World"]
+      if (profile) {
+        const override = profile.kubespawner_override || profile;
+        const translated = translateKubespawnerOverride(override);
+
+        const containerKey = template.container
+          ? "container"
+          : template.script
+            ? "script"
+            : "container";
+        if (!template[containerKey]) template[containerKey] = {};
+        const target = template[containerKey];
+
+        if (
+          translated.resources &&
+          Object.keys(translated.resources).length > 0
+        ) {
+          target.resources = translated.resources;
+        } else {
+          delete target.resources;
         }
-      };
-      spec.templates.push(entryTemplate);
-    }
 
-    const containerKey = entryTemplate.container
-      ? "container"
-      : entryTemplate.script
-        ? "script"
-        : "container";
-    if (!entryTemplate[containerKey]) {
-      entryTemplate[containerKey] = {};
-    }
-    const target = entryTemplate[containerKey];
-    if (!target.resources) target.resources = {};
-    if (!target.resources.requests) target.resources.requests = {};
-    if (!target.resources.limits) target.resources.limits = {};
+        if (translated.tolerations && translated.tolerations.length > 0) {
+          template.tolerations = translated.tolerations;
+        } else {
+          delete template.tolerations;
+        }
 
-    // CPU
-    if (state.cpuRequest) target.resources.requests.cpu = state.cpuRequest;
-    else delete target.resources.requests.cpu;
-
-    if (state.cpuLimit) target.resources.limits.cpu = state.cpuLimit;
-    else delete target.resources.limits.cpu;
-
-    // Memory
-    if (state.memoryRequest)
-      target.resources.requests.memory = state.memoryRequest;
-    else delete target.resources.requests.memory;
-
-    if (state.memoryLimit) target.resources.limits.memory = state.memoryLimit;
-    else delete target.resources.limits.memory;
-
-    // GPU
-    if (state.gpuLimit) {
-      target.resources.limits["nvidia.com/gpu"] = state.gpuLimit;
-    } else {
-      delete target.resources.limits["nvidia.com/gpu"];
-    }
-
-    // Clean up empty objects
-    if (Object.keys(target.resources.requests).length === 0)
-      delete target.resources.requests;
-    if (Object.keys(target.resources.limits).length === 0)
-      delete target.resources.limits;
-    if (Object.keys(target.resources).length === 0) delete target.resources;
+        if (
+          translated.nodeSelector &&
+          Object.keys(translated.nodeSelector).length > 0
+        ) {
+          template.nodeSelector = translated.nodeSelector;
+        } else {
+          delete template.nodeSelector;
+        }
+      }
+    });
   }
+
   return parsed;
 };
 
@@ -195,6 +162,7 @@ export default function CodeProject() {
   const { filename } = useParams<{ filename?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const [isDark] = useDarkMode();
   const queryParams = new URLSearchParams(location.search);
   const initialName = queryParams.get("name") || undefined;
   const initialKind = queryParams.get("kind") || "WorkflowTemplate";
@@ -218,68 +186,100 @@ export default function CodeProject() {
   const [ignoreWarningsChecked, setIgnoreWarningsChecked] = useState(false);
   const [executingWorkflow, setExecutingWorkflow] = useState<any | null>(null);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [diffState, setDiffState] = useState<{
+    commitId: string;
+    shortId: string;
+    title: string;
+    content: string;
+  } | null>(null);
+
+  const handleViewDiff = async (
+    commitId: string,
+    shortId: string,
+    title: string
+  ) => {
+    if (!filename) return;
+    try {
+      const wf = await api.getWorkflow(decodeURIComponent(filename), commitId);
+      setDiffState({
+        commitId,
+        shortId,
+        title,
+        content: wf.content || ""
+      });
+    } catch (err: any) {
+      toast.error(
+        "Failed to fetch commit content: " + (err.message || "Unknown error")
+      );
+    }
+  };
+
+  const handleRestoreState = async (commitId: string, shortId: string) => {
+    if (!filename) return;
+    try {
+      const wf = await api.getWorkflow(decodeURIComponent(filename), commitId);
+      if (wf.content !== undefined) {
+        setYamlContent(wf.content);
+        toast.success(`Restored editor state from commit ${shortId}`);
+        if (diffState) setDiffState(null);
+      }
+    } catch (err: any) {
+      toast.error(
+        "Failed to restore version state: " + (err.message || "Unknown error")
+      );
+    }
+  };
   const [schedulingState, setSchedulingState] =
     useState<IResourcePlacementState>({
-      namespace: "",
-      serviceAccount: "",
-      cpuRequest: "",
-      cpuLimit: "",
-      memoryRequest: "",
-      memoryLimit: "",
-      gpuLimit: "",
-      tolerations: [],
-      nodeSelector: {}
+      workspaceIdentifier: "",
+      templateProfiles: {}
     });
 
   useEffect(() => {
     try {
       if (yamlContent) {
         const parsed = YAML.parse(yamlContent);
-        const extracted = extractResourcesAndScheduling(parsed);
+        const extracted = extractResourcesAndScheduling(
+          parsed,
+          config?.profiles || {}
+        );
         setSchedulingState(extracted);
       }
     } catch {
       // Ignore parse errors during active editing
     }
-  }, [yamlContent]);
+  }, [yamlContent, config]);
 
   const checkHasWarnings = (parsed: any) => {
     if (!parsed) return false;
     const isCron = parsed.kind === "CronWorkflow";
     const spec = isCron ? parsed.spec?.workflowSpec : parsed.spec;
-    const defaultNamespace = config?.defaults?.namespace || "default";
+    const defaultWorkspace = config?.defaults?.namespace || "default";
 
-    // 0. Namespace is missing or mismatched
+    // 1. Workspace identifier missing or mismatched on namespace OR serviceAccountName
     const namespace = parsed.metadata?.namespace || "";
-    if (!namespace || namespace !== defaultNamespace) {
-      return true;
-    }
-
-    const defaultServiceAccount = config?.defaults?.serviceAccount || "default";
-
-    // 1. Service account is missing or mismatched
     const serviceAccount =
       spec?.serviceAccountName || spec?.serviceAccount || "";
-    if (!serviceAccount || serviceAccount !== defaultServiceAccount) {
+
+    if (!namespace || namespace !== defaultWorkspace) {
+      return true;
+    }
+    if (!serviceAccount || serviceAccount !== defaultWorkspace) {
       return true;
     }
 
-    // 2. Unsupported tolerations
-    const tolerations = spec?.tolerations || [];
-    const availableTols = config?.availableTolerations || [];
-    const hasUnsupportedTols = tolerations.some(
-      (t: any) => !availableTols.some((at) => at.key === t.key)
-    );
-    if (hasUnsupportedTols) return true;
-
-    // 3. Unsupported node selectors
-    const nodeSelector = spec?.nodeSelector || {};
-    const availableSelectors = config?.availableNodeSelectors || [];
-    const hasUnsupportedSelectors = Object.entries(nodeSelector).some(
-      ([key, value]) =>
-        !availableSelectors.some((as) => as.key === key && as.value === value)
-    );
-    if (hasUnsupportedSelectors) return true;
+    // 2. Profile mismatch on any container template
+    if (spec && Array.isArray(spec.templates)) {
+      const profiles = config?.profiles || {};
+      for (const template of spec.templates) {
+        if (template && (template.container || template.script)) {
+          const matched = matchProfileForTemplate(template, profiles);
+          if (!matched) {
+            return true;
+          }
+        }
+      }
+    }
 
     return false;
   };
@@ -287,7 +287,10 @@ export default function CodeProject() {
   const handleReviewClick = () => {
     try {
       const parsed = YAML.parse(yamlContent);
-      const extracted = extractResourcesAndScheduling(parsed);
+      const extracted = extractResourcesAndScheduling(
+        parsed,
+        config?.profiles || {}
+      );
       setSchedulingState(extracted);
     } catch (e) {
       console.warn("Failed to parse latest YAML on review click", e);
@@ -299,7 +302,10 @@ export default function CodeProject() {
   const handleOpenSettingsClick = () => {
     try {
       const parsed = YAML.parse(yamlContent);
-      const extracted = extractResourcesAndScheduling(parsed);
+      const extracted = extractResourcesAndScheduling(
+        parsed,
+        config?.profiles || {}
+      );
       setSchedulingState(extracted);
     } catch (e: any) {
       toast.error(
@@ -347,11 +353,15 @@ export default function CodeProject() {
           exe.metadata.labels?.["workflows.argoproj.io/workflow-template"];
         const cronLabel =
           exe.metadata.labels?.["workflows.argoproj.io/cron-workflow"];
+        const exeName = exe.metadata.name;
 
         return (
           tplLabel === logicalName ||
+          tplLabel?.endsWith(`-${logicalName}`) ||
           cronLabel === logicalName ||
-          exe.metadata.name.startsWith(`${logicalName}-`)
+          cronLabel?.endsWith(`-${logicalName}`) ||
+          exeName.startsWith(`${logicalName}-`) ||
+          exeName.includes(`-${logicalName}-`)
         );
       });
 
@@ -392,62 +402,75 @@ export default function CodeProject() {
         setConfig(appConfig);
 
         if (filename) {
-          const content = await api.getWorkflow(decodeURIComponent(filename));
+          const wf = await api.getWorkflow(decodeURIComponent(filename));
+          const content = wf.content || "";
           setYamlContent(content);
           setOriginalYaml(content);
         } else if (initialName) {
-          const logicalInitialName = initialName.replace(/\.ya?ml$/i, "");
+          let logicalInitialName = initialName.replace(/\.ya?ml$/i, "");
           const isCron = initialKind === "CronWorkflow";
+
+          // Auto-prepend username prefix in multi-tenant mode if not present
+          let cleanUsername = appConfig.username || "";
+          if (!cleanUsername) {
+            try {
+              const userObj = JSON.parse(
+                sessionStorage.getItem("user") || "{}"
+              );
+              cleanUsername = userObj.username || userObj.sub || "";
+            } catch {
+              // ignore session storage parse error
+            }
+          }
+
+          if (
+            appConfig.multiTenantMode &&
+            cleanUsername &&
+            !logicalInitialName.startsWith(`${cleanUsername}-`)
+          ) {
+            logicalInitialName = `${cleanUsername}-${logicalInitialName}`;
+            setCurrentFilename(`${logicalInitialName}.yaml`);
+          }
+
+          const defaultWs = appConfig.defaults?.namespace || "default";
 
           const skeleton: any = {
             apiVersion: "argoproj.io/v1alpha1",
             kind: initialKind,
             metadata: {
-              name: logicalInitialName
+              name: logicalInitialName,
+              namespace: defaultWs
             },
             spec: isCron
               ? {
                   schedule: "0 0 * * *",
                   workflowSpec: {
                     entrypoint: "execute",
+                    serviceAccountName: defaultWs,
                     templates: []
                   }
                 }
               : {
                   entrypoint: "execute",
+                  serviceAccountName: defaultWs,
                   templates: []
                 }
           };
 
           const spec = isCron ? skeleton.spec.workflowSpec : skeleton.spec;
 
-          // 1. Inject default Service Account
-          if (appConfig.defaults?.serviceAccount) {
-            spec.serviceAccountName = appConfig.defaults.serviceAccount;
-          }
+          // Fetch selected or first allowed profile
+          const allowedProfiles = Object.entries(
+            appConfig.profiles || {}
+          ).filter(([key, prof]) =>
+            isProfileAllowedForWorkspace(key, prof, defaultWs)
+          );
+          const firstAllowedKey =
+            allowedProfiles.length > 0 ? allowedProfiles[0][0] : "";
+          const activeProfileKey = initialProfile || firstAllowedKey;
+          const selectedProfileData =
+            appConfig.profiles?.[activeProfileKey] || null;
 
-          // 2. Fetch selected profile resources & tolerations
-          let selectedProfileData = null;
-          if (initialProfile && appConfig.profiles?.[initialProfile]) {
-            selectedProfileData = appConfig.profiles[initialProfile];
-          }
-
-          if (selectedProfileData) {
-            // Tolerations
-            if (selectedProfileData.tolerations) {
-              spec.tolerations = selectedProfileData.tolerations;
-            }
-            // Node Selector
-            if (selectedProfileData.nodeSelector) {
-              spec.nodeSelector = selectedProfileData.nodeSelector;
-            }
-            // Affinity
-            if (selectedProfileData.affinity) {
-              spec.affinity = selectedProfileData.affinity;
-            }
-          }
-
-          // 3. Create main template
           const mainTemplate: any = {
             name: "execute",
             container: {
@@ -457,11 +480,29 @@ export default function CodeProject() {
             }
           };
 
-          if (selectedProfileData?.resources) {
-            mainTemplate.container.resources = selectedProfileData.resources;
+          if (selectedProfileData) {
+            const override =
+              selectedProfileData.kubespawner_override || selectedProfileData;
+            const translated = translateKubespawnerOverride(override);
+
+            if (
+              translated.resources &&
+              Object.keys(translated.resources).length > 0
+            ) {
+              mainTemplate.container.resources = translated.resources;
+            }
+            if (translated.tolerations && translated.tolerations.length > 0) {
+              mainTemplate.tolerations = translated.tolerations;
+            }
+            if (
+              translated.nodeSelector &&
+              Object.keys(translated.nodeSelector).length > 0
+            ) {
+              mainTemplate.nodeSelector = translated.nodeSelector;
+            }
           }
 
-          // 4. Inject Ephemeral Volume Claim template
+          // Inject Ephemeral Volume Claim template
           if (initialEphemeral && appConfig.ephemeralVolume) {
             const vol = appConfig.ephemeralVolume;
             mainTemplate.container.volumeMounts = [
@@ -520,13 +561,26 @@ export default function CodeProject() {
 
   const hasChanges = isNewWorkflow || yamlContent !== originalYaml;
 
+  const availableTemplates = useMemo(() => {
+    try {
+      const parsed = YAML.parse(yamlContent);
+      return extractAvailableTemplates(parsed);
+    } catch {
+      return [];
+    }
+  }, [yamlContent]);
+
   const handleSaveSettings = () => {
     try {
       const parsed = YAML.parse(yamlContent);
-      const updated = injectResourcesAndScheduling(parsed, schedulingState);
+      const updated = injectResourcesAndScheduling(
+        parsed,
+        schedulingState,
+        config?.profiles || {}
+      );
       setYamlContent(YAML.stringify(updated));
       setShowSettingsModal(false);
-      toast.success("Workflow scheduling and resources updated!");
+      toast.success("Workspace and container profiles updated!");
     } catch (e: any) {
       toast.error("Failed to parse and update YAML: " + e.message);
     }
@@ -741,10 +795,10 @@ export default function CodeProject() {
             <button
               className="flex space-x-1 items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 transition-colors"
               onClick={handleOpenSettingsClick}
-              title="Configure Scheduling & Resources"
+              title="Configure Configuration & Profiles"
             >
               <Cog8ToothIcon className="w-4 h-4 text-gray-500" />
-              <span>Scheduling & Resources</span>
+              <span>Configuration & Profiles</span>
             </button>
             {hasChanges ? (
               <>
@@ -880,12 +934,7 @@ export default function CodeProject() {
                   history.map((commit) => (
                     <li
                       key={commit.id}
-                      className="p-4 hover:bg-gray-100 transition-colors cursor-pointer"
-                      onClick={() =>
-                        navigate(
-                          `/history/${encodeURIComponent(filename || "")}`
-                        )
-                      }
+                      className="p-4 hover:bg-gray-100/80 transition-colors"
                     >
                       <div className="flex flex-col mb-1">
                         <span
@@ -894,17 +943,54 @@ export default function CodeProject() {
                         >
                           {commit.title}
                         </span>
-                        <span className="text-xs text-gray-500 mt-1">
-                          {commit.author_name}
-                        </span>
+                        <div className="flex justify-between items-center text-xs text-gray-500 mt-1">
+                          <span>{commit.author_name}</span>
+                          {commit.stats && (
+                            <span className="font-mono text-[11px] space-x-1.5 font-semibold">
+                              <span className="text-emerald-600">
+                                +{commit.stats.additions || 0}
+                              </span>
+                              <span className="text-rose-600">
+                                -{commit.stats.deletions || 0}
+                              </span>
+                            </span>
+                          )}
+                        </div>
                       </div>
+
                       <div className="flex justify-between items-center text-xs text-gray-400 mt-2">
                         <span>
                           {new Date(commit.committed_date).toLocaleString()}
                         </span>
-                        <span className="font-mono bg-gray-200 px-1 py-0.5 rounded">
+                        <span className="font-mono bg-gray-200 px-1.5 py-0.5 rounded text-[10px] text-gray-700">
                           {commit.short_id}
                         </span>
+                      </div>
+
+                      {/* History Actions */}
+                      <div className="flex space-x-2 mt-3 pt-2.5 border-t border-gray-200">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleViewDiff(
+                              commit.id,
+                              commit.short_id,
+                              commit.title
+                            )
+                          }
+                          className="flex-1 px-2 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded border border-blue-200 transition-colors text-center"
+                        >
+                          View Diff
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleRestoreState(commit.id, commit.short_id)
+                          }
+                          className="px-2.5 py-1 text-xs font-semibold text-gray-700 bg-white hover:bg-gray-100 rounded border border-gray-300 transition-colors"
+                        >
+                          Restore State
+                        </button>
                       </div>
                     </li>
                   ))
@@ -1002,11 +1088,11 @@ export default function CodeProject() {
                     </div>
                     <div>
                       <h3 className="text-lg font-bold text-gray-900">
-                        Workflow Scheduling & Resources
+                        Configuration & Profiles
                       </h3>
                       <p className="text-xs text-gray-500 font-medium">
-                        Configure resources and scheduling globally for this
-                        workflow
+                        Configure workspace execution identity and step
+                        container profiles
                       </p>
                     </div>
                   </div>
@@ -1017,6 +1103,7 @@ export default function CodeProject() {
                   <ResourcePlacementForm
                     state={schedulingState}
                     onChange={setSchedulingState}
+                    availableTemplates={availableTemplates}
                     config={config}
                   />
                 </div>
@@ -1034,6 +1121,85 @@ export default function CodeProject() {
                     className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-sm"
                   >
                     Apply & Update YAML
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Diff Modal */}
+      {diffState && (
+        <div className="fixed z-50 inset-0 overflow-y-auto">
+          <div className="justify-center items-center flex fixed inset-0 z-50 p-4">
+            <div
+              onClick={() => setDiffState(null)}
+              className="opacity-50 fixed inset-0 bg-black backdrop-blur-sm"
+            ></div>
+            <div className="relative w-full max-w-5xl z-50 bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col h-[85vh]">
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 bg-gray-50 border-b border-gray-200">
+                <div>
+                  <h3 className="text-base font-bold text-gray-900">
+                    Compare Diff: {diffState.title}
+                  </h3>
+                  <p className="text-xs text-gray-500 font-mono mt-0.5">
+                    Commit {diffState.shortId} (Original) vs Current Editor
+                    State (Modified)
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDiffState(null)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors text-xl font-bold px-2"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Body: Monaco Diff Editor */}
+              <div
+                className={`flex-1 w-full ${isDark ? "bg-gray-900" : "bg-white"}`}
+              >
+                <DiffEditor
+                  height="100%"
+                  language="yaml"
+                  original={diffState.content}
+                  modified={yamlContent}
+                  theme={isDark ? "vs-dark" : "vs-light"}
+                  options={{
+                    readOnly: true,
+                    renderSideBySide: true,
+                    minimap: { enabled: false },
+                    scrollBeyondLastLine: false,
+                    fontSize: 12
+                  }}
+                />
+              </div>
+
+              {/* Footer */}
+              <div className="flex justify-between items-center px-6 py-3 bg-gray-50 border-t border-gray-200">
+                <span className="text-xs text-gray-500">
+                  You can copy changes from the diff editor or restore the
+                  commit version directly.
+                </span>
+                <div className="flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setDiffState(null)}
+                    className="px-4 py-1.5 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleRestoreState(diffState.commitId, diffState.shortId)
+                    }
+                    className="px-4 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors shadow-sm"
+                  >
+                    Restore This Version
                   </button>
                 </div>
               </div>

@@ -29,3 +29,5 @@ export const GridColumn: FunctionComponent<IGridColumnProps> = (
 
   return <Root spans={spans}>{fields.map(renderField)}</Root>;
 };
+
+export default GridColumn;

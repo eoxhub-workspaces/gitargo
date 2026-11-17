@@ -1,5 +1,5 @@
 # --- Stage 1: Build Frontend ---
-FROM node:20-alpine AS build-frontend
+FROM node:26-alpine AS build-frontend
 WORKDIR /app/ui
 COPY services/ui/package*.json ./
 RUN npm install
@@ -8,7 +8,7 @@ RUN npm run build
 
 # --- Stage 2: Development Stage ---
 # Keeps npm, npx, and dev tools fully intact for rapid development workflows
-FROM node:20-alpine AS development
+FROM node:26-alpine AS development
 ENV NODE_ENV=development
 RUN apk update && apk upgrade --no-cache
 WORKDIR /app
@@ -21,7 +21,7 @@ CMD ["npm", "run", "dev"]
 
 # --- Stage 3: Hardened Production Stage ---
 # Defaults to strict, non-root, zero-vulnerability security by purging npm/npx
-FROM node:20-alpine AS production
+FROM node:26-alpine AS production
 ENV NODE_ENV=production
 
 # Update Alpine repositories and upgrade all OS-level packages 

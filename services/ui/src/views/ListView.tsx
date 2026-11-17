@@ -106,7 +106,8 @@ const ListView: React.FC = () => {
   const handleExecute = async (path: string) => {
     const fetchToast = toast.loading("Preparing workflow...");
     try {
-      const content = await getWorkflow(path);
+      const wf = await getWorkflow(path);
+      const content = wf.content || "";
       let parsed = YAML.parse(content);
       toast.dismiss(fetchToast);
 
@@ -156,7 +157,8 @@ const ListView: React.FC = () => {
       data.forEach(async (wf) => {
         setMetadata((prev) => ({ ...prev, [wf.path]: { isParsing: true } }));
         try {
-          const content = await getWorkflow(wf.path);
+          const wfObj = await getWorkflow(wf.path);
+          const content = wfObj.content || "";
           const parsed = YAML.parse(content);
           const kind: string = parsed?.kind || "Unknown";
           let schedule: string | null = null;

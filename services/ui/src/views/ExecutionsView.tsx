@@ -1,14 +1,19 @@
 import React, { useEffect, useState, useMemo } from "react";
+
+declare const process: { env: Record<string, string | undefined> };
 import { useLocation, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   getExecutions,
   WorkflowExecution,
+  WorkflowExecutionMetrics,
+  getExecutionMetrics,
   getLogs,
   deleteExecution,
   terminateExecution
 } from "../utils/api";
 import Spinner from "../components/global/Spinner";
+import { InfoButton } from "../components/global/InfoButton";
 import {
   CheckCircleIcon,
   XCircleIcon,
@@ -26,6 +31,36 @@ import {
   CpuChipIcon,
   InboxStackIcon
 } from "@heroicons/react/24/outline";
+
+const PHASE_BADGE_CLASSES: Record<string, string> = {
+  Succeeded: "bg-green-100 text-green-800 border-green-200",
+  Running: "bg-blue-100 text-blue-800 border-blue-200",
+  Failed: "bg-red-100 text-red-800 border-red-200",
+  Error: "bg-red-100 text-red-800 border-red-200",
+  Pending: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  PodInitializing: "bg-yellow-100 text-yellow-800 border-yellow-200"
+};
+
+const getPhaseBadgeClass = (phase?: string): string => {
+  return (
+    PHASE_BADGE_CLASSES[phase || ""] ||
+    "bg-gray-100 text-gray-800 border-gray-200"
+  );
+};
+
+const getPhaseTextClass = (phase?: string): string => {
+  switch (phase) {
+    case "Succeeded":
+      return "text-green-400";
+    case "Running":
+      return "text-blue-400 font-semibold animate-pulse";
+    case "Pending":
+    case "PodInitializing":
+      return "text-yellow-400 font-semibold animate-pulse";
+    default:
+      return "text-red-400";
+  }
+};
 
 // Helper function to simplify Argo status messages and determine type
 const parseStatusMessage = (exe: any, specificMessage?: string) => {
@@ -109,6 +144,111 @@ const ExecutionsView: React.FC = () => {
   } | null>(null);
   const [artifactContent, setArtifactContent] = useState<string | null>(null);
   const [artifactLoading, setArtifactLoading] = useState(false);
+  const [executionMetrics, setExecutionMetrics] =
+    useState<WorkflowExecutionMetrics | null>(null);
+  const [stepMetrics, setStepMetrics] =
+    useState<WorkflowExecutionMetrics | null>(null);
+
+  const formatCpu = (cores: number) => {
+    if (!cores || cores <= 0) return "< 1m";
+    if (cores < 0.001) return "< 1m";
+    if (cores < 1) return `${Math.round(cores * 1000)}m`;
+    return `${cores.toFixed(2)} Cores`;
+  };
+
+  const formatMemory = (bytes: number) => {
+    if (!bytes) return "0 Bytes";
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return `${gb.toFixed(2)} GiB`;
+    const mb = bytes / (1024 * 1024);
+    return `${mb.toFixed(0)} MiB`;
+  };
+
+  useEffect(() => {
+    let timer: any = null;
+    let retryTimer: any = null;
+
+    if (selectedExe?.metadata.name) {
+      const fetchMetrics = () => {
+        getExecutionMetrics(selectedExe.metadata.name)
+          .then((m) => {
+            setExecutionMetrics(m);
+            if ((!m || !m.available) && selectedExe.status?.phase) {
+              retryTimer = setTimeout(() => {
+                getExecutionMetrics(selectedExe.metadata.name)
+                  .then((m2) => setExecutionMetrics(m2))
+                  .catch(() => {});
+              }, 3000);
+            }
+          })
+          .catch(() => setExecutionMetrics(null));
+      };
+
+      fetchMetrics();
+
+      if (selectedExe.status?.phase === "Running") {
+        timer = setInterval(fetchMetrics, 10000);
+      }
+    } else {
+      setExecutionMetrics(null);
+    }
+
+    return () => {
+      if (timer) clearInterval(timer);
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [
+    selectedExe?.metadata.name,
+    selectedExe?.status?.phase,
+    selectedExe?.status?.finishedAt
+  ]);
+
+  useEffect(() => {
+    let timer: any = null;
+    let retryTimer: any = null;
+
+    if (
+      selectedExe?.metadata.name &&
+      selectedNodeId &&
+      selectedNodeId !== "workflow-overview"
+    ) {
+      const nodeObj = selectedExe.status?.nodes?.[selectedNodeId];
+      const stepPod = nodeObj?.id || nodeObj?.name || selectedNodeId;
+
+      const fetchStepMetrics = () => {
+        getExecutionMetrics(selectedExe.metadata.name, stepPod)
+          .then((m) => {
+            setStepMetrics(m);
+            if ((!m || !m.available) && selectedExe.status?.phase) {
+              retryTimer = setTimeout(() => {
+                getExecutionMetrics(selectedExe.metadata.name, stepPod)
+                  .then((m2) => setStepMetrics(m2))
+                  .catch(() => {});
+              }, 3000);
+            }
+          })
+          .catch(() => setStepMetrics(null));
+      };
+
+      fetchStepMetrics();
+
+      if (selectedExe.status?.phase === "Running") {
+        timer = setInterval(fetchStepMetrics, 10000);
+      }
+    } else {
+      setStepMetrics(null);
+    }
+
+    return () => {
+      if (timer) clearInterval(timer);
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [
+    selectedExe?.metadata.name,
+    selectedNodeId,
+    selectedExe?.status?.phase,
+    selectedExe?.status?.finishedAt
+  ]);
 
   const queryParams = useMemo(
     () => new URLSearchParams(location.search),
@@ -286,18 +426,29 @@ const ExecutionsView: React.FC = () => {
       result = result.filter(
         (exe) =>
           (exe.metadata.labels &&
-            exe.metadata.labels["workflows.argoproj.io/workflow-template"] ===
-              workflowFilter) ||
-          exe.metadata.name.startsWith(`${workflowFilter}-`)
+            (exe.metadata.labels["workflows.argoproj.io/workflow-template"] ===
+              workflowFilter ||
+              exe.metadata.labels[
+                "workflows.argoproj.io/workflow-template"
+              ]?.endsWith(`-${workflowFilter}`))) ||
+          exe.metadata.name.startsWith(`${workflowFilter}-`) ||
+          exe.metadata.name.includes(`-${workflowFilter}-`)
       );
     }
     if (uiWorkflowFilter) {
       result = result.filter((exe) => {
         const templateName =
           exe.metadata.labels?.["workflows.argoproj.io/workflow-template"];
-        if (templateName === uiWorkflowFilter) return true;
+        if (
+          templateName === uiWorkflowFilter ||
+          templateName?.endsWith(`-${uiWorkflowFilter}`)
+        )
+          return true;
         // Fallback for names if labels missing
-        return exe.metadata.name.startsWith(`${uiWorkflowFilter}-`);
+        return (
+          exe.metadata.name.startsWith(`${uiWorkflowFilter}-`) ||
+          exe.metadata.name.includes(`-${uiWorkflowFilter}-`)
+        );
       });
     }
     if (uiPhaseFilter) {
@@ -432,14 +583,13 @@ const ExecutionsView: React.FC = () => {
       }
 
       const workflowName = selectedExe?.metadata.name;
-      const data = await getLogs(
-        id,
+      const data = await getLogs(id, {
         type,
         query,
         startTime,
         endTime,
-        workflowName
-      );
+        workflow: workflowName
+      });
       setLogs(data);
     } catch (err: any) {
       if (!isPolling) setLogs("Failed to fetch logs: " + err.message);
@@ -639,19 +789,9 @@ const ExecutionsView: React.FC = () => {
                             {exe.metadata.name}
                           </p>
                           <span
-                            className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium border ${
-                              exe.status?.phase === "Succeeded"
-                                ? "bg-green-100 text-green-800 border-green-200"
-                                : exe.status?.phase === "Running"
-                                  ? "bg-blue-100 text-blue-800 border-blue-200"
-                                  : exe.status?.phase === "Failed" ||
-                                      exe.status?.phase === "Error"
-                                    ? "bg-red-100 text-red-800 border-red-200"
-                                    : exe.status?.phase === "Pending" ||
-                                        exe.status?.phase === "PodInitializing"
-                                      ? "bg-yellow-100 text-yellow-800 border-yellow-200"
-                                      : "bg-gray-100 text-gray-800 border-gray-200"
-                            }`}
+                            className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium border ${getPhaseBadgeClass(
+                              exe.status?.phase
+                            )}`}
                           >
                             {exe.status?.phase || "Pending"}
                           </span>
@@ -1173,8 +1313,110 @@ const ExecutionsView: React.FC = () => {
                       <div>
                         <h4 className="flex items-center text-sm font-bold text-green-400 mb-4 uppercase tracking-wider">
                           <CpuChipIcon className="w-4 h-4 mr-2" />
-                          Resources Consumption
+                          Resource Usage & Peak Maxima
                         </h4>
+
+                        {/* Peak Resource Usage */}
+                        {executionMetrics && executionMetrics.available && (
+                          <div className="mb-6 bg-gradient-to-r from-gray-900 to-gray-800 rounded-lg p-5 border border-blue-500/30 shadow-md">
+                            <div className="flex items-center justify-between mb-4">
+                              <h5 className="text-xs font-bold text-blue-400 uppercase tracking-wider flex items-center">
+                                <CpuChipIcon className="w-4 h-4 mr-1.5" />
+                                Peak Resource Usage
+                                <InfoButton text="Metrics are sampled periodically (every 15–30s). Extremely short tasks (<5s) may show <1m if no scraping interval delta was captured during execution." />
+                              </h5>
+                              <span className="text-[10px] text-blue-300 bg-blue-950/80 px-2.5 py-0.5 rounded border border-blue-700 font-mono">
+                                Peak Maxima
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              {/* Peak CPU */}
+                              <div className="bg-gray-800/80 rounded-lg p-4 border border-gray-700/80">
+                                <div className="flex justify-between items-start mb-1">
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold">
+                                    Peak CPU Usage (Max Cores)
+                                  </span>
+                                  {executionMetrics.cpuLimitsCores > 0 && (
+                                    <span className="text-[10px] text-blue-300 font-mono">
+                                      Limit:{" "}
+                                      {formatCpu(
+                                        executionMetrics.cpuLimitsCores
+                                      )}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-2xl font-extrabold text-blue-400 font-mono">
+                                  {formatCpu(executionMetrics.peakCpuCores)}
+                                </div>
+                                {executionMetrics.cpuLimitsCores > 0 && (
+                                  <div className="mt-2 w-full bg-gray-700 rounded-full h-1.5">
+                                    <div
+                                      className={`h-1.5 rounded-full ${
+                                        executionMetrics.peakCpuCores /
+                                          executionMetrics.cpuLimitsCores >
+                                        0.9
+                                          ? "bg-red-500"
+                                          : "bg-blue-500"
+                                      }`}
+                                      style={{
+                                        width: `${Math.min(
+                                          100,
+                                          (executionMetrics.peakCpuCores /
+                                            executionMetrics.cpuLimitsCores) *
+                                            100
+                                        )}%`
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Peak Memory */}
+                              <div className="bg-gray-800/80 rounded-lg p-4 border border-gray-700/80">
+                                <div className="flex justify-between items-start mb-1">
+                                  <span className="text-[10px] text-gray-400 uppercase font-bold">
+                                    Peak RAM Usage (Max Working Set)
+                                  </span>
+                                  {executionMetrics.memoryLimitsBytes > 0 && (
+                                    <span className="text-[10px] text-emerald-300 font-mono">
+                                      Limit:{" "}
+                                      {formatMemory(
+                                        executionMetrics.memoryLimitsBytes
+                                      )}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-2xl font-extrabold text-emerald-400 font-mono">
+                                  {formatMemory(
+                                    executionMetrics.peakMemoryBytes
+                                  )}
+                                </div>
+                                {executionMetrics.memoryLimitsBytes > 0 && (
+                                  <div className="mt-2 w-full bg-gray-700 rounded-full h-1.5">
+                                    <div
+                                      className={`h-1.5 rounded-full ${
+                                        executionMetrics.peakMemoryBytes /
+                                          executionMetrics.memoryLimitsBytes >
+                                        0.9
+                                          ? "bg-red-500"
+                                          : "bg-emerald-500"
+                                      }`}
+                                      style={{
+                                        width: `${Math.min(
+                                          100,
+                                          (executionMetrics.peakMemoryBytes /
+                                            executionMetrics.memoryLimitsBytes) *
+                                            100
+                                        )}%`
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
                         {selectedExe?.status?.resourcesDuration ? (
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             {Object.entries(
@@ -1234,22 +1476,10 @@ const ExecutionsView: React.FC = () => {
                               <div className="flex justify-between">
                                 <span className="text-gray-500">Phase:</span>
                                 <span
-                                  className={`font-bold ${
+                                  className={`font-bold ${getPhaseTextClass(
                                     selectedExe.status.nodes[selectedNodeId]
-                                      .phase === "Succeeded"
-                                      ? "text-green-400"
-                                      : selectedExe.status.nodes[selectedNodeId]
-                                            .phase === "Running"
-                                        ? "text-blue-400 font-semibold animate-pulse"
-                                        : selectedExe.status.nodes[
-                                              selectedNodeId
-                                            ].phase === "Pending" ||
-                                            selectedExe.status.nodes[
-                                              selectedNodeId
-                                            ].phase === "PodInitializing"
-                                          ? "text-yellow-400 font-semibold animate-pulse"
-                                          : "text-red-400"
-                                  }`}
+                                      ?.phase
+                                  )}`}
                                 >
                                   {
                                     selectedExe.status.nodes[selectedNodeId]
@@ -1332,6 +1562,36 @@ const ExecutionsView: React.FC = () => {
                                         </span>
                                       </div>
                                     ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Step Level Peak Usage */}
+                              {stepMetrics && stepMetrics.available && (
+                                <div className="mt-4 pt-4 border-t border-gray-700">
+                                  <span className="text-xs font-bold text-blue-400 block mb-2 uppercase tracking-wider flex items-center">
+                                    <CpuChipIcon className="w-3.5 h-3.5 mr-1" />
+                                    Step Peak Usage
+                                  </span>
+                                  <div className="grid grid-cols-2 gap-2 bg-black/30 p-3 rounded border border-blue-500/20">
+                                    <div>
+                                      <span className="text-[10px] text-gray-400 block mb-0.5">
+                                        Peak CPU
+                                      </span>
+                                      <span className="text-sm font-extrabold text-blue-400 font-mono">
+                                        {formatCpu(stepMetrics.peakCpuCores)}
+                                      </span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[10px] text-gray-400 block mb-0.5">
+                                        Peak RAM
+                                      </span>
+                                      <span className="text-sm font-extrabold text-emerald-400 font-mono">
+                                        {formatMemory(
+                                          stepMetrics.peakMemoryBytes
+                                        )}
+                                      </span>
+                                    </div>
                                   </div>
                                 </div>
                               )}

@@ -5,7 +5,6 @@ import { ExclamationTriangleIcon } from "@heroicons/react/24/outline";
 
 import CodeProject from "./components/CodeProject";
 import ListView from "./views/ListView";
-import HistoryView from "./views/HistoryView";
 import ExecutionsView from "./views/ExecutionsView";
 import ResourcesView from "./views/ResourcesView";
 import ApplicationsView from "./views/ApplicationsView";
@@ -18,15 +17,24 @@ import { getConfig, AppConfig } from "./utils/api";
 
 import "./index.css";
 
-// Global handler to swallow the specific monaco-yaml schema error that triggers
-// the full-screen overlay, without crashing the application.
+// Global handler to swallow monaco-yaml schema/worker RPC errors that trigger
+// full-screen overlays, without crashing the application.
 window.addEventListener("unhandledrejection", (event) => {
   if (
     event.reason &&
     event.reason.message &&
-    event.reason.message.includes(
-      "Missing requestHandler or method: resetSchema"
-    )
+    (event.reason.message.includes("resetSchema") ||
+      event.reason.message.includes("Missing requestHandler or method:"))
+  ) {
+    event.preventDefault();
+  }
+});
+
+window.addEventListener("error", (event) => {
+  if (
+    event.message &&
+    (event.message.includes("resetSchema") ||
+      event.message.includes("Missing requestHandler or method:"))
   ) {
     event.preventDefault();
   }
@@ -67,15 +75,18 @@ export default function App() {
     };
   }, []);
 
+  const deploymentBase = (
+    window.BASE_PATH || window.location.pathname
+  ).toLowerCase();
+
+  // Detect dedicated deployment targets (e.g., gitargo-dev-applications or gitargo-dev-packages)
   const isApplicationsDeployment =
-    window.BASE_PATH?.includes("gitargo-applications") ||
-    window.location.pathname.includes("gitargo-applications") ||
-    window.location.pathname.includes("-applications");
+    deploymentBase.includes("-applications") ||
+    deploymentBase.includes("gitargo-applications");
 
   const isPackagesDeployment =
-    window.BASE_PATH?.includes("gitargo-packages") ||
-    window.location.pathname.includes("gitargo-packages") ||
-    window.location.pathname.includes("-packages");
+    deploymentBase.includes("-packages") ||
+    deploymentBase.includes("gitargo-packages");
 
   const enableApplications =
     config?.enableApplications ?? isApplicationsDeployment;
@@ -166,16 +177,6 @@ export default function App() {
             element={
               enableWorkflows ? (
                 <CodeProject />
-              ) : (
-                <DisabledModuleView message="Workflow Management is currently disabled." />
-              )
-            }
-          />
-          <Route
-            path="/history/:filename"
-            element={
-              enableWorkflows ? (
-                <HistoryView />
               ) : (
                 <DisabledModuleView message="Workflow Management is currently disabled." />
               )

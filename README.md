@@ -72,9 +72,7 @@ The easiest way to run the service is using Docker.
 | `ARGO_WORKFLOW_LABEL` | Label key for workflow name in Loki. | `workflows_argoproj_io_workflow` |
 | `ARGO_NAMESPACE` | Default namespace for workflows. | `default` |
 | `ARGO_SERVICE_ACCOUNT` | Recommended default service account to check and set. | `default` |
-| `ARGO_AVAILABLE_TOLERATIONS` | JSON string of cluster-supported tolerations for the form dropdowns. | - |
-| `ARGO_AVAILABLE_NODE_SELECTORS` | JSON string of cluster-supported node selectors (only renders if configured). | - |
-| `ARGO_PROFILES` | JSON string of default presets available during new file template creation. | - |
+| `ARGO_PROFILES` | JSON string defining resource profiles in JupyterHub `kubespawner_override` format. | *(See defaults)* |
 | `ENABLE_APPLICATIONS` | Enable the experimental Application Deployment Management tab. | `false` |
 | `GITLAB_APPLICATIONS_PATH` | The subdirectory in the repo containing application folders. | `applications` |
 | `ALLOW_PUBLIC_INGRESS` | Allow creating/editing `ingress.yaml` to expose applications publicly. | `false` |
@@ -198,7 +196,7 @@ cd ../ui && npm install --no-audit
 ## Container Security (DevSecOps)
 
 This project strictly adheres to secure, enterprise-grade container standards:
-* **Minimal Base Images**: Uses `node:20-alpine` to minimize package surface area and CVE vulnerabilities.
+* **Minimal Base Images**: Uses `node:26-alpine` to minimize package surface area and CVE vulnerabilities.
 * **Non-Root Execution**: Runs strictly as an unprivileged, custom user (`gitargo`, UID `10001`). Root container configurations are rejected by cluster security policies.
 * **No unnecessary files**: A `.dockerignore` policy is implemented in the repository to guarantee that local configuration are not added the context build or the published image.
 * **Local Scanning (Trivy)**: Image builds should be audited locally using Trivy before release:
