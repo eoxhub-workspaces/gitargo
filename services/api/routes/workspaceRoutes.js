@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const { S3Client, ListObjectsV2Command, GetObjectCommand } = require('@aws-sdk/client-s3');
 
 function createWorkspaceRouter(ctx) {
   const router = express.Router();
@@ -115,7 +116,6 @@ router.get("/workspace/files", async (req, res, next) => {
 
     if (bucket && endpoint && accessKey && secretKey) {
       try {
-        const { ListObjectsV2Command } = require('@aws-sdk/client-s3');
         let endpointUrl = endpoint;
         if (!endpointUrl.startsWith('http://') && !endpointUrl.startsWith('https://')) {
           endpointUrl = 'https://' + endpointUrl;
@@ -307,7 +307,6 @@ router.get("/workspace/files/download", async (req, res, next) => {
 
     if (bucket && endpoint && accessKey && secretKey) {
       try {
-        const { GetObjectCommand } = require('@aws-sdk/client-s3');
         let endpointUrl = endpoint;
         if (!endpointUrl.startsWith('http://') && !endpointUrl.startsWith('https://')) {
           endpointUrl = 'https://' + endpointUrl;

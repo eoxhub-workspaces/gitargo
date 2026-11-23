@@ -743,6 +743,39 @@ sys.exit(ret.returncode)
     }
 
     if (!MULTI_TENANT_MODE && bucket && endpoint && accessKey && secretKey) {
+      let endpointHost = endpoint.replace(/^https?:\/\//, '');
+      const isInsecure = endpoint.startsWith('http://') || process.env.S3_SECURE === "false";
+
+      // Ensure S3 credentials secret exists in K8s namespace so Argo sidecar can upload output artifact
+      try {
+        const podCoreApi = coreV1Api || k8sCoreApi || (kc ? kc.makeApiClient(k8s.CoreV1Api) : null);
+        if (podCoreApi) {
+          const secretName = "gitargo-s3-credentials";
+          try {
+            await podCoreApi.readNamespacedSecret({ name: secretName, namespace });
+          } catch (secErr) {
+            const status = secErr.response?.status || secErr.statusCode || secErr.status;
+            if (status === 404) {
+              await podCoreApi.createNamespacedSecret({
+                namespace,
+                body: {
+                  apiVersion: "v1",
+                  kind: "Secret",
+                  metadata: { name: secretName, namespace },
+                  type: "Opaque",
+                  stringData: {
+                    accessKey,
+                    secretKey
+                  }
+                }
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[S3 SECRET WARNING] Could not ensure gitargo-s3-credentials secret:", err.message);
+      }
+
       workflowSpec.templates[0].outputs = {
         artifacts: [
           {
@@ -752,7 +785,18 @@ sys.exit(ret.returncode)
               none: {}
             },
             s3: {
-              key: "application_packages_executions/{{workflow.name}}"
+              key: "application_packages_executions/{{workflow.name}}",
+              endpoint: endpointHost,
+              bucket: bucket,
+              insecure: isInsecure,
+              accessKeySecret: {
+                name: "gitargo-s3-credentials",
+                key: "accessKey"
+              },
+              secretKeySecret: {
+                name: "gitargo-s3-credentials",
+                key: "secretKey"
+              }
             }
           }
         ]
