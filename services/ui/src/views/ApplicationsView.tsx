@@ -1303,6 +1303,18 @@ const ApplicationsView: React.FC = () => {
           Pending
         </span>
       );
+    if (status.namespaceWarning) {
+      return (
+        <span
+          className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300 flex items-center w-max"
+          title={status.namespaceWarning.message}
+        >
+          <ExclamationTriangleIcon className="h-3.5 w-3.5 mr-1 text-amber-600" />
+          Namespace Mismatch ('{status.namespaceWarning.configured}')
+        </span>
+      );
+    }
+
     if (!status.deployed)
       return (
         <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800">
@@ -1348,11 +1360,11 @@ const ApplicationsView: React.FC = () => {
   };
 
   return (
-    <div className="w-full max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+    <div className="flex flex-col flex-1 h-full bg-gray-50 overflow-hidden min-h-0">
       {/* View Header */}
-      <div className="flex justify-between items-center px-4 sm:px-0 mb-6">
+      <header className="bg-white border-b border-gray-200 px-8 py-5 flex justify-between items-center flex-shrink-0 z-10 shadow-sm">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 flex items-center">
+          <h1 className="text-2xl font-bold text-[#004170] flex items-center">
             <CpuChipIcon className="h-7 w-7 mr-3 text-[#004170]" />
             Applications Management
           </h1>
@@ -1380,9 +1392,11 @@ const ApplicationsView: React.FC = () => {
             New Application
           </button>
         </div>
-      </div>
+      </header>
 
-      {loading ? (
+      {/* Main Scrollable Content */}
+      <div className="flex-1 overflow-y-auto p-8 max-w-7xl mx-auto w-full space-y-6 pb-8 min-h-0">
+        {loading ? (
         <div className="flex justify-center items-center h-64">
           <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#004170]"></div>
         </div>
@@ -1594,6 +1608,7 @@ const ApplicationsView: React.FC = () => {
           </table>
         </div>
       )}
+      </div>
 
       {/* 1. Modal: Create / Edit Application */}
       {showFormModal && (
@@ -2177,6 +2192,29 @@ const ApplicationsView: React.FC = () => {
               </div>
 
               <div className="bg-white px-6 py-4 space-y-6">
+                {/* Namespace Misconfiguration Warning */}
+                {statuses[selectedAppName]?.namespaceWarning && (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-md flex items-start text-xs text-amber-900">
+                    <ExclamationTriangleIcon className="h-5 w-5 text-amber-500 mr-2 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-semibold text-amber-900">
+                        Namespace Misconfiguration Warning
+                      </div>
+                      <div className="mt-0.5 text-amber-800 leading-relaxed">
+                        The manifest specifies namespace{" "}
+                        <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono font-bold">
+                          {statuses[selectedAppName].namespaceWarning!.configured}
+                        </code>
+                        , but the target workspace namespace is{" "}
+                        <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono font-bold">
+                          {statuses[selectedAppName].namespaceWarning!.expected}
+                        </code>
+                        . Please update or remove <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono">metadata.namespace</code> in deployment.yaml.
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* 1. K8s Controller Sync Check */}
                 <div>
                   <h4 className="text-sm font-bold text-gray-800 border-b border-gray-100 pb-2 mb-3">

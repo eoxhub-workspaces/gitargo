@@ -148,6 +148,11 @@ export interface ApplicationStatus {
     ready: boolean;
   };
   vulnerabilities?: any[];
+  namespaceWarning?: {
+    configured: string;
+    expected: string;
+    message: string;
+  } | null;
   pods: {
     name: string;
     status: string;

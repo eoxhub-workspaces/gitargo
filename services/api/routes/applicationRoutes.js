@@ -58,31 +58,39 @@ const APP_STATUS_TTL = 10000;
 let trivyReportsCache = null;
 const TRIVY_CACHE_TTL = 30000;
 
-async function getCachedTrivyReports(namespace) {
-  if (
-    trivyReportsCache &&
-    trivyReportsCache.namespace === namespace &&
-    Date.now() - trivyReportsCache.timestamp < TRIVY_CACHE_TTL
-  ) {
-    return trivyReportsCache.items;
-  }
-  if (!customObjectsApi) return [];
-  try {
-    const trivyRes = await customObjectsApi.listNamespacedCustomObject({
-      group: "aquasecurity.github.io",
-      version: "v1alpha1",
-      namespace,
-      plural: "vulnerabilityreports"
-    });
-    const items = trivyRes.body?.items || trivyRes.items || [];
-    trivyReportsCache = { timestamp: Date.now(), namespace, items };
-    return items;
-  } catch (err) {
-    if (!isK8sIgnorableError(err)) {
-      console.debug("Failed to fetch Trivy vulnerability reports:", err.message || err);
+async function getCachedTrivyReports(targetNamespace) {
+  const trivyEnvNs = process.env.TRIVY_NAMESPACE;
+  const namespacesToTry = Array.from(new Set([targetNamespace, trivyEnvNs, process.env.ARGO_NAMESPACE, "trivy-system", "default"].filter(Boolean)));
+
+  if (!trivyReportsCache) trivyReportsCache = {};
+  let allItems = [];
+
+  for (const ns of namespacesToTry) {
+    if (
+      trivyReportsCache[ns] &&
+      Date.now() - trivyReportsCache[ns].timestamp < TRIVY_CACHE_TTL
+    ) {
+      allItems.push(...trivyReportsCache[ns].items);
+      continue;
     }
-    return [];
+    if (!customObjectsApi) continue;
+    try {
+      const trivyRes = await customObjectsApi.listNamespacedCustomObject({
+        group: "aquasecurity.github.io",
+        version: "v1alpha1",
+        namespace: ns,
+        plural: "vulnerabilityreports"
+      });
+      const items = trivyRes.body?.items || trivyRes.items || [];
+      trivyReportsCache[ns] = { timestamp: Date.now(), items };
+      allItems.push(...items);
+    } catch (err) {
+      if (!isK8sIgnorableError(err)) {
+        console.debug(`Failed to fetch Trivy vulnerability reports in namespace ${ns}:`, err.message || err);
+      }
+    }
   }
+  return allItems;
 }
 
 async function fetchAppStatus(appName, deploymentContent = null) {
@@ -92,19 +100,32 @@ async function fetchAppStatus(appName, deploymentContent = null) {
   }
 
   const { folder, prefix } = resolveAppLocation(appName);
-  let namespace = process.env.ARGO_NAMESPACE || "default";
+  const expectedNamespace = process.env.ARGO_NAMESPACE || "default";
   let targetK8sName = prefix || folder;
+  let configuredNamespace = null;
 
   if (!deploymentContent) {
-    try {
-      const depFile = getAppFilename(prefix, "deployment");
-      const filePath = `${GITLAB_APPLICATIONS_PATH}/${folder}/${depFile}`;
-      const rawResponse = await gitlabApi.get(
-        `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
-        { params: { ref: GITLAB_BRANCH } }
-      );
-      deploymentContent = rawResponse.data || null;
-    } catch (e) {}
+    const candidateDepFiles = [
+      getAppFilename(prefix, "deployment"),
+      `${prefix ? `${prefix}-` : ""}deployment.yml`,
+      `${prefix ? `${prefix}-` : ""}deploy.yaml`,
+      `${prefix ? `${prefix}-` : ""}deploy.yml`,
+      "app.yaml",
+      "app.yml"
+    ];
+    for (const depFile of candidateDepFiles) {
+      try {
+        const filePath = `${GITLAB_APPLICATIONS_PATH}/${folder}/${depFile}`;
+        const rawResponse = await gitlabApi.get(
+          `/projects/${GITLAB_PROJECT_ID}/repository/files/${encodeURIComponent(filePath)}/raw`,
+          { params: { ref: GITLAB_BRANCH } }
+        );
+        if (rawResponse.data) {
+          deploymentContent = rawResponse.data;
+          break;
+        }
+      } catch (e) {}
+    }
   }
 
   if (deploymentContent) {
@@ -118,24 +139,46 @@ async function fetchAppStatus(appName, deploymentContent = null) {
         service: null,
         ingress: null,
         pods: [],
-        vulnerabilities: null
+        vulnerabilities: null,
+        namespaceWarning: null
       };
       appStatusCache.set(appName, { timestamp: Date.now(), data: result });
       return result;
     }
 
     try {
-      const parsed = YAML.parse(deploymentContent);
-      if (parsed?.metadata?.name) targetK8sName = parsed.metadata.name;
-      if (parsed?.metadata?.namespace) namespace = parsed.metadata.namespace;
+      const docs = deploymentContent.split(/^---$/m).map(d => d.trim()).filter(Boolean);
+      for (const docStr of docs) {
+        try {
+          const parsed = YAML.parse(docStr);
+          if (parsed && parsed.kind === "Deployment") {
+            if (parsed.metadata?.name) targetK8sName = parsed.metadata.name;
+            if (parsed.metadata?.namespace) configuredNamespace = parsed.metadata.namespace;
+            break;
+          } else if (parsed && parsed.metadata?.name && !targetK8sName) {
+            targetK8sName = parsed.metadata.name;
+            if (parsed.metadata?.namespace && !configuredNamespace) configuredNamespace = parsed.metadata.namespace;
+          }
+        } catch (e) {}
+      }
     } catch (e) {}
+  }
+
+  let namespaceWarning = null;
+  if (configuredNamespace && configuredNamespace !== expectedNamespace) {
+    namespaceWarning = {
+      configured: configuredNamespace,
+      expected: expectedNamespace,
+      message: `Manifest specifies namespace '${configuredNamespace}', but expected namespace is '${expectedNamespace}'.`
+    };
   }
 
   let deploymentStatus = null;
   let deploymentMatchLabels = null;
+
   if (appsV1Api) {
     try {
-      const depResponse = await appsV1Api.readNamespacedDeployment({ name: targetK8sName, namespace });
+      const depResponse = await appsV1Api.readNamespacedDeployment({ name: targetK8sName, namespace: expectedNamespace });
       const d = depResponse.body || depResponse;
       deploymentMatchLabels = d.spec?.selector?.matchLabels || null;
       deploymentStatus = {
@@ -145,16 +188,33 @@ async function fetchAppStatus(appName, deploymentContent = null) {
         conditions: d.spec?.replicas === 0 ? [{ type: "ScaledToZero", status: "True", message: "Application is scaled to zero." }] : (d.status?.conditions || [])
       };
     } catch (err) {
-      if (!isK8sIgnorableError(err)) {
-        console.error(`Failed to read deployment "${targetK8sName}" from K8s:`, err.message || err);
-      }
+      // Fallback: list deployments in expectedNamespace to find matching deployment by label
+      try {
+        const depListRes = await appsV1Api.listNamespacedDeployment({ namespace: expectedNamespace });
+        const items = depListRes.body?.items || depListRes.items || [];
+        const matchedDep = items.find(d => {
+          const dName = d.metadata?.name || '';
+          const matchLabels = d.spec?.selector?.matchLabels || {};
+          const appLabel = matchLabels['app'] || matchLabels['app.kubernetes.io/name'] || matchLabels['app.kubernetes.io/instance'] || matchLabels['app.kubernetes.io/service'] || '';
+          return dName === targetK8sName || dName.includes(appName) || dName.includes(folder) || appLabel === appName || appLabel === targetK8sName || appLabel === folder;
+        });
+        if (matchedDep) {
+          deploymentMatchLabels = matchedDep.spec?.selector?.matchLabels || null;
+          deploymentStatus = {
+            replicas: matchedDep.status?.replicas || 0,
+            readyReplicas: matchedDep.status?.readyReplicas || 0,
+            availableReplicas: matchedDep.status?.availableReplicas || 0,
+            conditions: matchedDep.spec?.replicas === 0 ? [{ type: "ScaledToZero", status: "True", message: "Application is scaled to zero." }] : (matchedDep.status?.conditions || [])
+          };
+        }
+      } catch (listErr) {}
     }
   }
 
   let serviceStatus = null;
   if (coreV1Api) {
     try {
-      const svcResponse = await coreV1Api.readNamespacedService({ name: targetK8sName, namespace });
+      const svcResponse = await coreV1Api.readNamespacedService({ name: targetK8sName, namespace: expectedNamespace });
       const s = svcResponse.body || svcResponse;
       serviceStatus = {
         type: s.spec?.type,
@@ -167,7 +227,7 @@ async function fetchAppStatus(appName, deploymentContent = null) {
   let ingressStatus = null;
   if (networkingV1Api) {
     try {
-      const ingResponse = await networkingV1Api.readNamespacedIngress({ name: targetK8sName, namespace });
+      const ingResponse = await networkingV1Api.readNamespacedIngress({ name: targetK8sName, namespace: expectedNamespace });
       const ing = ingResponse.body || ingResponse;
       const lb = ing.status?.loadBalancer?.ingress || [];
       const hasRules = ing.spec?.rules && ing.spec.rules.length > 0;
@@ -192,7 +252,7 @@ async function fetchAppStatus(appName, deploymentContent = null) {
         labelSelector = `app.kubernetes.io/service=${targetK8sName}`;
       }
 
-      const res = await coreV1Api.listNamespacedPod({ namespace, labelSelector });
+      const res = await coreV1Api.listNamespacedPod({ namespace: expectedNamespace, labelSelector });
       const rawPods = res.body?.items || res.items || [];
       pods = rawPods.map(p => ({
         name: p.metadata?.name,
@@ -211,16 +271,22 @@ async function fetchAppStatus(appName, deploymentContent = null) {
   let vulnerabilities = null;
   if (customObjectsApi) {
     try {
-      const items = await getCachedTrivyReports(namespace);
+      const items = await getCachedTrivyReports(expectedNamespace);
       const appReports = items.filter(item => {
         const rName = item.metadata?.labels?.['trivy-operator.resource.name'] || '';
         const cName = item.metadata?.labels?.['trivy-operator.container.name'] || '';
         const repName = item.metadata?.name || '';
         return rName === targetK8sName || 
+               rName === appName ||
+               rName === folder ||
                rName.startsWith(`${targetK8sName}-`) || 
+               rName.startsWith(`${appName}-`) ||
                cName === targetK8sName ||
+               cName === appName ||
                repName.startsWith(`replicaset-${targetK8sName}-`) ||
-               repName.startsWith(`deployment-${targetK8sName}-`);
+               repName.startsWith(`deployment-${targetK8sName}-`) ||
+               repName.startsWith(`replicaset-${appName}-`) ||
+               repName.startsWith(`deployment-${appName}-`);
       });
 
       if (appReports.length > 0) {
@@ -248,7 +314,8 @@ async function fetchAppStatus(appName, deploymentContent = null) {
     service: serviceStatus,
     ingress: ingressStatus,
     pods: pods,
-    vulnerabilities: vulnerabilities
+    vulnerabilities: vulnerabilities,
+    namespaceWarning: namespaceWarning
   };
 
   appStatusCache.set(appName, { timestamp: Date.now(), data: result });
