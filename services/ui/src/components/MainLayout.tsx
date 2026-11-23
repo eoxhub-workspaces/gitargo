@@ -52,9 +52,9 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }, []);
 
   return (
-    <div className="flex flex-col min-h-screen relative pb-6 overflow-y-auto">
+    <div className="flex flex-col h-screen overflow-hidden relative">
       {!hideHeader && (
-        <nav className="bg-white border-b border-gray-200">
+        <nav className="bg-white border-b border-gray-200 flex-shrink-0">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex justify-between h-16">
               <div className="flex">
@@ -107,7 +107,9 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           </div>
         </nav>
       )}
-      <div className="flex-1 bg-gray-50">{children}</div>
+      <div className="flex-1 min-h-0 bg-gray-50 flex flex-col overflow-hidden">
+        {children}
+      </div>
       {version && (
         <div className="fixed bottom-1 right-2 text-[10px] font-mono text-gray-400 opacity-60 hover:opacity-100 transition-opacity select-none pointer-events-none z-50">
           v{version}

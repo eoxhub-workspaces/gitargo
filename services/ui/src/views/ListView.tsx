@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import YAML from "yaml";
 import { formatK8sError } from "../utils";
@@ -57,6 +57,7 @@ const ListView: React.FC = () => {
 
   const [showNewModal, setShowNewModal] = useState(false);
   const [executingWorkflow, setExecutingWorkflow] = useState<any | null>(null);
+  const isInitialLoadRef = useRef(true);
 
   useEffect(() => {
     const handleGlobalClick = (e: MouseEvent) => {
@@ -142,9 +143,11 @@ const ListView: React.FC = () => {
     }
   };
 
-  const fetchWorkflows = async () => {
+  const fetchWorkflows = async (showLoading = false) => {
     try {
-      setLoading(true);
+      if (showLoading || isInitialLoadRef.current) {
+        setLoading(true);
+      }
       const [data, published, appConfig] = await Promise.all([
         getWorkflows(),
         getPublishedWorkflows(),
@@ -171,7 +174,10 @@ const ListView: React.FC = () => {
       // Fallback: fetch individual content only for items missing pre-parsed metadata
       if (fallbackWorkflows.length > 0) {
         fallbackWorkflows.forEach(async (wf) => {
-          setMetadata((prev) => ({ ...prev, [wf.path]: { isParsing: true } }));
+          setMetadata((prev) => {
+            if (prev[wf.path]) return prev;
+            return { ...prev, [wf.path]: { isParsing: true } };
+          });
           try {
             const wfObj = await getWorkflow(wf.path);
             const content = wfObj.content || "";
@@ -214,15 +220,16 @@ const ListView: React.FC = () => {
         "Failed to fetch workflows";
       setError(serverMessage);
     } finally {
+      isInitialLoadRef.current = false;
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchWorkflows();
+    fetchWorkflows(true);
     // Auto-refresh workflows list every 10 seconds
     const interval = setInterval(() => {
-      fetchWorkflows();
+      fetchWorkflows(false);
     }, 10000);
     return () => clearInterval(interval);
   }, []);
@@ -293,7 +300,7 @@ const ListView: React.FC = () => {
     viewTab === "active" ? activeWorkflows : deletedWorkflows;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] bg-gray-50 overflow-hidden">
+    <div className="flex flex-col flex-1 h-full bg-gray-50 overflow-hidden min-h-0">
       {showNewModal && (
         <NewWorkflowModal
           onClose={() => setShowNewModal(false)}
@@ -401,7 +408,7 @@ const ListView: React.FC = () => {
             )}
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto pb-32">
+          <div className="flex-1 overflow-y-auto pb-8">
             <div className="bg-white shadow rounded-md border border-gray-200 mb-8">
               <ul className="divide-y divide-gray-200">
                 {displayedWorkflows.map((workflow) => (

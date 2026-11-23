@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 
 declare const process: { env: Record<string, string | undefined> };
 import { useLocation, useNavigate } from "react-router-dom";
@@ -126,6 +126,7 @@ const ExecutionsView: React.FC = () => {
   const navigate = useNavigate();
   const [executions, setExecutions] = useState<WorkflowExecution[]>([]);
   const [loading, setLoading] = useState(true);
+  const isInitialLoadRef = useRef(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedExe, setSelectedExe] = useState<WorkflowExecution | null>(
     null
@@ -380,9 +381,9 @@ const ExecutionsView: React.FC = () => {
     }
   };
 
-  const fetchExecutions = async () => {
+  const fetchExecutions = async (showLoading = false) => {
     try {
-      if (!selectedExe) setLoading(true);
+      if (showLoading || isInitialLoadRef.current) setLoading(true);
       const data = await getExecutions();
 
       // Defensive check: ensure data is an array
@@ -408,6 +409,7 @@ const ExecutionsView: React.FC = () => {
     } catch (err: any) {
       setError(err.message || "Failed to fetch executions");
     } finally {
+      isInitialLoadRef.current = false;
       setLoading(false);
     }
   };
@@ -488,8 +490,10 @@ const ExecutionsView: React.FC = () => {
   }, [executions]);
 
   useEffect(() => {
-    fetchExecutions();
-    const interval = setInterval(fetchExecutions, 5000); // Refresh every 5s
+    fetchExecutions(true);
+    const interval = setInterval(() => {
+      fetchExecutions(false);
+    }, 5000); // Refresh every 5s
     return () => clearInterval(interval);
   }, [selectedExe?.metadata.name, runFilter]);
 
@@ -660,7 +664,7 @@ const ExecutionsView: React.FC = () => {
   if (error) return <div className="p-8 text-red-500 text-center">{error}</div>;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] bg-gray-50 overflow-hidden">
+    <div className="flex flex-col flex-1 h-full bg-gray-50 overflow-hidden min-h-0">
       <header className="bg-white border-b border-gray-200 px-8 py-5 flex justify-between items-center flex-shrink-0 z-10 shadow-sm">
         <div className="flex items-center space-x-5">
           {selectedExe && (
@@ -727,7 +731,7 @@ const ExecutionsView: React.FC = () => {
         </div>
       </header>
 
-      <div className="flex-1 p-8 max-w-7xl mx-auto w-full flex flex-col overflow-hidden">
+      <div className="flex-1 p-8 max-w-7xl mx-auto w-full flex flex-col overflow-hidden min-h-0">
         {!selectedExe && (
           <div className="flex space-x-4 mb-4 flex-shrink-0 bg-gray-50 p-4 rounded-md border border-gray-200">
             <div className="flex flex-col">
@@ -768,7 +772,7 @@ const ExecutionsView: React.FC = () => {
         )}
 
         {!selectedExe ? (
-          <div className="bg-white shadow overflow-y-auto sm:rounded-md border border-gray-200 flex-1">
+          <div className="bg-white shadow overflow-y-auto sm:rounded-md border border-gray-200 flex-1 min-h-0 mb-6">
             <ul className="divide-y divide-gray-200">
               {filteredExecutions.map((exe) => (
                 <li key={exe.metadata.name}>

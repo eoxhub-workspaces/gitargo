@@ -684,7 +684,7 @@ outputs:
     });
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] bg-gray-50 overflow-hidden">
+    <div className="flex flex-col flex-1 h-full bg-gray-50 overflow-hidden min-h-0">
       {/* Top Bar */}
       <div className="bg-white border-b px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 dark:bg-gray-800 dark:border-gray-700">
         <div>

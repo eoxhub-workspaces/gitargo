@@ -387,7 +387,7 @@ const ResourcesView: React.FC = () => {
     );
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] bg-gray-50 overflow-hidden">
+    <div className="flex flex-col flex-1 h-full bg-gray-50 overflow-hidden min-h-0">
       <header className="bg-white border-b border-gray-200 px-8 py-5 flex justify-between items-center flex-shrink-0 z-10 shadow-sm">
         <div>
           <h1 className="text-2xl font-bold text-[#004170]">
@@ -406,7 +406,7 @@ const ResourcesView: React.FC = () => {
         </button>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-8 max-w-7xl mx-auto w-full space-y-8 pb-20">
+      <div className="flex-1 overflow-y-auto p-8 max-w-7xl mx-auto w-full space-y-8 pb-8">
         {/* Filters */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
           <div className="flex flex-col">
