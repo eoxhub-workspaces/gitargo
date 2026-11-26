@@ -2,6 +2,137 @@ const express = require('express');
 const YAML = require('yaml');
 const path = require('path');
 
+function checkIsKev(v) {
+  if (!v) return false;
+  if (v.knownExploitable === true || v.knownExploitable === 'true') return true;
+  if (v.kev === true || v.kev === 'true' || v.isKev === true || v.cisaKev === true) return true;
+  if (v.vendorAttributes && (v.vendorAttributes.KEV === true || v.vendorAttributes.cisaKev === true)) return true;
+  if (typeof v.primaryLink === 'string' && (v.primaryLink.includes('cisa.gov/known-exploitable') || v.primaryLink.includes('known-exploitable-vulnerabilities'))) return true;
+  if (Array.isArray(v.links) && v.links.some(l => typeof l === 'string' && l.includes('cisa.gov/known-exploitable'))) return true;
+  return false;
+}
+
+function parseEpssScore(v) {
+  if (!v) return null;
+  let raw = null;
+  if (v.epssScore !== undefined && v.epssScore !== null) {
+    raw = v.epssScore;
+  } else if (typeof v.epss === 'number') {
+    raw = v.epss;
+  } else if (v.epss && typeof v.epss.score === 'number') {
+    raw = v.epss.score;
+  } else if (v.epss_score !== undefined && v.epss_score !== null) {
+    raw = v.epss_score;
+  }
+  if (raw === null || raw === undefined) return null;
+
+  let val = null;
+  if (typeof raw === 'string') {
+    const isPercent = raw.includes('%');
+    const parsed = parseFloat(raw.replace('%', ''));
+    if (isNaN(parsed)) return null;
+    val = isPercent ? parsed / 100 : (parsed > 1 ? parsed / 100 : parsed);
+  } else if (typeof raw === 'number') {
+    if (isNaN(raw)) return null;
+    val = raw > 1 ? raw / 100 : raw;
+  }
+  if (val === null) return null;
+  return Math.round(val * 10000) / 10000;
+}
+
+function formatEpssPercentage(epssScore) {
+  if (epssScore === null || epssScore === undefined) return null;
+  return `${(epssScore * 100).toFixed(1)}%`;
+}
+
+function isVulnerabilityFixable(v) {
+  return !!(v && v.fixedVersion && typeof v.fixedVersion === 'string' && v.fixedVersion.trim().length > 0);
+}
+
+function determineActionRequired(isKev, epssScore, isFixable, severity) {
+  if (isKev) return true;
+  if (epssScore !== null && epssScore >= 0.10) return true;
+  if (isFixable && (severity === 'CRITICAL' || severity === 'HIGH')) return true;
+  return false;
+}
+
+function getActionReason(isKev, epssScore, isFixable, severity) {
+  if (isKev) return 'Active Exploit (CISA KEV)';
+  if (epssScore !== null && epssScore >= 0.10) return `High Exploit Probability (EPSS ${formatEpssPercentage(epssScore)})`;
+  if (isFixable && severity === 'CRITICAL') return 'Fixable Critical Vulnerability';
+  if (isFixable && severity === 'HIGH') return 'Fixable High Vulnerability';
+  return 'Low Risk / Informational';
+}
+
+function parseContainerReport(item) {
+  const container = item.metadata?.labels?.['trivy-operator.container.name'] || 'unknown';
+  const rawSummary = item.report?.summary || { criticalCount: 0, highCount: 0, mediumCount: 0, lowCount: 0 };
+  const rawVulns = item.report?.vulnerabilities || [];
+
+  const severityRank = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, UNKNOWN: 0 };
+
+  const parsedVulns = rawVulns.map(v => {
+    const isKev = checkIsKev(v);
+    const epssScore = parseEpssScore(v);
+    const epssPercentage = formatEpssPercentage(epssScore);
+    const fixable = isVulnerabilityFixable(v);
+    const severity = (v.severity || 'UNKNOWN').toUpperCase();
+    const actionReq = determineActionRequired(isKev, epssScore, fixable, severity);
+    const actionReason = getActionReason(isKev, epssScore, fixable, severity);
+
+    return {
+      id: v.vulnerabilityID || v.id || 'CVE-UNKNOWN',
+      title: v.title || '',
+      severity: severity,
+      pkg: v.resource || v.pkgName || v.package || 'unknown',
+      installedVersion: v.installedVersion || 'unknown',
+      fixedVersion: v.fixedVersion || null,
+      link: v.primaryLink || (Array.isArray(v.links) ? v.links[0] : null) || null,
+      isKev: isKev,
+      epssScore: epssScore,
+      epssPercentage: epssPercentage,
+      isFixable: fixable,
+      actionRequired: actionReq,
+      actionReason: actionReason
+    };
+  });
+
+  parsedVulns.sort((a, b) => {
+    if (a.actionRequired !== b.actionRequired) return a.actionRequired ? -1 : 1;
+    if (a.isKev !== b.isKev) return a.isKev ? -1 : 1;
+    const aEpss = a.epssScore || 0;
+    const bEpss = b.epssScore || 0;
+    if (Math.abs(aEpss - bEpss) > 0.001) return bEpss - aEpss;
+    const rankDiff = (severityRank[b.severity] || 0) - (severityRank[a.severity] || 0);
+    if (rankDiff !== 0) return rankDiff;
+    return a.id.localeCompare(b.id);
+  });
+
+  const actionRequiredCount = parsedVulns.filter(v => v.actionRequired).length;
+  const kevCount = parsedVulns.filter(v => v.isKev).length;
+  const highEpssCount = parsedVulns.filter(v => v.epssScore !== null && v.epssScore >= 0.10).length;
+  const fixableCount = parsedVulns.filter(v => v.isFixable).length;
+
+  const summary = {
+    criticalCount: rawSummary.criticalCount || 0,
+    highCount: rawSummary.highCount || 0,
+    mediumCount: rawSummary.mediumCount || 0,
+    lowCount: rawSummary.lowCount || 0,
+    unknownCount: rawSummary.unknownCount || 0,
+    totalCount: parsedVulns.length,
+    actionRequiredCount: actionRequiredCount,
+    kevCount: kevCount,
+    highEpssCount: highEpssCount,
+    fixableCount: fixableCount
+  };
+
+  return {
+    container,
+    summary,
+    topVulnerabilities: parsedVulns
+  };
+}
+
 function createApplicationRouter(ctx) {
   const router = express.Router();
 
@@ -290,19 +421,7 @@ async function fetchAppStatus(appName, deploymentContent = null) {
       });
 
       if (appReports.length > 0) {
-        vulnerabilities = appReports.map(item => ({
-          container: item.metadata?.labels?.['trivy-operator.container.name'] || 'unknown',
-          summary: item.report?.summary || { criticalCount: 0, highCount: 0, mediumCount: 0, lowCount: 0 },
-          topVulnerabilities: item.report?.vulnerabilities?.slice(0, 5).map(v => ({
-            id: v.vulnerabilityID,
-            title: v.title,
-            severity: v.severity,
-            pkg: v.resource,
-            installedVersion: v.installedVersion,
-            fixedVersion: v.fixedVersion,
-            link: v.primaryLink
-          })) || []
-        }));
+        vulnerabilities = appReports.map(parseContainerReport);
       }
     } catch (err) {}
   }
@@ -815,4 +934,10 @@ function toLokiTimestamp(dtStr) {
   return router;
 }
 
-module.exports = { createApplicationRouter };
+module.exports = {
+  createApplicationRouter,
+  checkIsKev,
+  parseEpssScore,
+  determineActionRequired,
+  parseContainerReport
+};

@@ -136,6 +136,41 @@ export interface ApplicationYamls {
   ingress?: string;
 }
 
+export interface VulnerabilityDetails {
+  id: string;
+  title?: string;
+  severity: string;
+  pkg: string;
+  installedVersion: string;
+  fixedVersion?: string | null;
+  link?: string | null;
+  isKev?: boolean;
+  epssScore?: number | null;
+  epssPercentage?: string | null;
+  isFixable?: boolean;
+  actionRequired?: boolean;
+  actionReason?: string;
+}
+
+export interface VulnerabilitySummary {
+  criticalCount: number;
+  highCount: number;
+  mediumCount: number;
+  lowCount: number;
+  unknownCount?: number;
+  totalCount?: number;
+  actionRequiredCount?: number;
+  kevCount?: number;
+  highEpssCount?: number;
+  fixableCount?: number;
+}
+
+export interface ContainerVulnerabilityReport {
+  container: string;
+  summary: VulnerabilitySummary;
+  topVulnerabilities?: VulnerabilityDetails[];
+}
+
 export interface ApplicationStatus {
   status: string;
   deployed?: boolean;
@@ -147,7 +182,7 @@ export interface ApplicationStatus {
   ingress?: {
     ready: boolean;
   };
-  vulnerabilities?: any[];
+  vulnerabilities?: ContainerVulnerabilityReport[] | null;
   namespaceWarning?: {
     configured: string;
     expected: string;

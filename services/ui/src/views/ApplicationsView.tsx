@@ -14,7 +14,10 @@ import {
   XMarkIcon,
   EyeIcon,
   ExclamationTriangleIcon,
-  CheckCircleIcon
+  CheckCircleIcon,
+  ShieldExclamationIcon,
+  ShieldCheckIcon,
+  FunnelIcon
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import Editor from "@monaco-editor/react";
@@ -473,6 +476,7 @@ const ApplicationsView: React.FC = () => {
   const [showFormModal, setShowFormModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [showLogModal, setShowLogModal] = useState(false);
+  const [vulnFilterOnlyAction, setVulnFilterOnlyAction] = useState<boolean>(true);
 
   // Selected Application states for modals
   const [selectedAppName, setSelectedAppName] = useState<string>("");
@@ -1279,13 +1283,66 @@ const ApplicationsView: React.FC = () => {
     }
   };
 
-  const getSevereVulnerabilitiesCount = (appName: string) => {
+  const getVulnerabilityActionStats = (appName: string) => {
     const status = statuses[appName];
-    if (!status?.vulnerabilities) return 0;
-    return status.vulnerabilities.reduce((acc, v) => {
-      const s = v.summary;
-      return acc + (s.criticalCount || 0) + (s.highCount || 0);
-    }, 0);
+    if (!status?.vulnerabilities || status.vulnerabilities.length === 0) {
+      return {
+        hasReports: false,
+        totalCount: 0,
+        actionRequiredCount: 0,
+        kevCount: 0,
+        highEpssCount: 0,
+        fixableCount: 0,
+        criticalOrHighCount: 0
+      };
+    }
+
+    let totalCount = 0;
+    let actionRequiredCount = 0;
+    let kevCount = 0;
+    let highEpssCount = 0;
+    let fixableCount = 0;
+    let criticalOrHighCount = 0;
+
+    for (const report of status.vulnerabilities) {
+      const s = report.summary || ({} as any);
+      criticalOrHighCount += (s.criticalCount || 0) + (s.highCount || 0);
+      const vulns = report.topVulnerabilities || [];
+      totalCount +=
+        s.totalCount ||
+        vulns.length ||
+        (s.criticalCount || 0) +
+          (s.highCount || 0) +
+          (s.mediumCount || 0) +
+          (s.lowCount || 0);
+
+      actionRequiredCount +=
+        s.actionRequiredCount ??
+        vulns.filter(
+          (v: any) =>
+            v.actionRequired ||
+            v.isKev ||
+            (v.epssScore && v.epssScore >= 0.1) ||
+            (v.isFixable &&
+              (v.severity === "CRITICAL" || v.severity === "HIGH"))
+        ).length;
+      kevCount += s.kevCount ?? vulns.filter((v: any) => v.isKev).length;
+      highEpssCount +=
+        s.highEpssCount ??
+        vulns.filter((v: any) => v.epssScore && v.epssScore >= 0.1).length;
+      fixableCount +=
+        s.fixableCount ?? vulns.filter((v: any) => v.isFixable).length;
+    }
+
+    return {
+      hasReports: true,
+      totalCount,
+      actionRequiredCount,
+      kevCount,
+      highEpssCount,
+      fixableCount,
+      criticalOrHighCount
+    };
   };
 
   const getOverallStatusBadge = (appName: string) => {
@@ -1524,17 +1581,58 @@ const ApplicationsView: React.FC = () => {
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex flex-col space-y-1">
                       <div>{getOverallStatusBadge(app.name)}</div>
-                      {getSevereVulnerabilitiesCount(app.name) > 0 && (
-                        <span
-                          className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-50 text-red-600 border border-red-200 flex items-center w-max cursor-pointer hover:bg-red-100 transition-colors"
-                          onClick={() => handleOpenStatusModal(app.name)}
-                          title="Critical or High vulnerabilities detected by security audit. Click Manage to view details."
-                        >
-                          <ExclamationTriangleIcon className="h-3.5 w-3.5 mr-1 text-red-500 inline-block animate-pulse" />
-                          Audit Warning (
-                          {getSevereVulnerabilitiesCount(app.name)})
-                        </span>
-                      )}
+                      {(() => {
+                        const stats = getVulnerabilityActionStats(app.name);
+                        if (!stats.hasReports) return null;
+
+                        if (stats.actionRequiredCount > 0) {
+                          if (stats.kevCount > 0) {
+                            return (
+                              <span
+                                className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-900 border border-purple-300 flex items-center w-max cursor-pointer hover:bg-purple-200 transition-colors shadow-sm"
+                                onClick={() => handleOpenStatusModal(app.name)}
+                                title="Active Known Exploitable Vulnerability (KEV) detected! Click Manage to view details."
+                              >
+                                <ShieldExclamationIcon className="h-3.5 w-3.5 mr-1 text-purple-700 animate-pulse inline-block" />
+                                Action Required: KEV ({stats.kevCount})
+                              </span>
+                            );
+                          }
+                          if (stats.highEpssCount > 0) {
+                            return (
+                              <span
+                                className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-900 border border-rose-300 flex items-center w-max cursor-pointer hover:bg-rose-200 transition-colors shadow-sm"
+                                onClick={() => handleOpenStatusModal(app.name)}
+                                title="High exploit probability (EPSS >= 10%) detected. Click Manage to view details."
+                              >
+                                <ExclamationTriangleIcon className="h-3.5 w-3.5 mr-1 text-rose-700 inline-block" />
+                                Action Required: High EPSS ({stats.highEpssCount})
+                              </span>
+                            );
+                          }
+                          return (
+                            <span
+                              className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 flex items-center w-max cursor-pointer hover:bg-amber-200 transition-colors shadow-sm"
+                              onClick={() => handleOpenStatusModal(app.name)}
+                              title="Actionable critical/high vulnerabilities with available fixes. Click Manage to view details."
+                            >
+                              <ExclamationTriangleIcon className="h-3.5 w-3.5 mr-1 text-amber-700 inline-block" />
+                              Action Required ({stats.actionRequiredCount})
+                            </span>
+                          );
+                        }
+
+                        return (
+                          <span
+                            className="px-2 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600 border border-gray-200 flex items-center w-max cursor-pointer hover:bg-gray-200 transition-colors"
+                            onClick={() => handleOpenStatusModal(app.name)}
+                            title="Audit Clean: No active KEV or high EPSS exploit risks found. Click Manage to view details."
+                          >
+                            <ShieldCheckIcon className="h-3.5 w-3.5 mr-1 text-emerald-600 inline-block" />
+                            Audit Clean ({stats.totalCount} Low Risk)
+                          </span>
+                        );
+                      })()}
                       {getAppSecurityWarnings(app.name).length > 0 && (
                         <span
                           className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 flex items-center w-max cursor-pointer hover:bg-amber-100 transition-colors"
@@ -2405,159 +2503,336 @@ const ApplicationsView: React.FC = () => {
 
                 {/* 4. Container Security & Vulnerability Auditing */}
                 <div>
-                  <h4 className="text-sm font-bold text-gray-800 border-b border-gray-100 pb-2 mb-3">
-                    Container Security Audits
-                  </h4>
-                  {statuses[selectedAppName]?.vulnerabilities ? (
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-gray-100 pb-2 mb-3 gap-2">
+                    <h4 className="text-sm font-bold text-gray-800 flex items-center">
+                      <ShieldExclamationIcon className="h-4 w-4 mr-1.5 text-[#004170]" />
+                      Container Security Audit Overview
+                    </h4>
+                    {statuses[selectedAppName]?.vulnerabilities &&
+                      statuses[selectedAppName].vulnerabilities!.length > 0 && (
+                        <div className="flex items-center space-x-1.5 bg-gray-100 p-1 rounded-lg text-xs font-medium text-gray-600">
+                          <button
+                            type="button"
+                            onClick={() => setVulnFilterOnlyAction(true)}
+                            className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                              vulnFilterOnlyAction
+                                ? "bg-white text-indigo-700 shadow-sm"
+                                : "hover:text-gray-900"
+                            }`}
+                          >
+                            Action Required Only (
+                            {
+                              getVulnerabilityActionStats(selectedAppName)
+                                .actionRequiredCount
+                            }
+                            )
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setVulnFilterOnlyAction(false)}
+                            className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                              !vulnFilterOnlyAction
+                                ? "bg-white text-indigo-700 shadow-sm"
+                                : "hover:text-gray-900"
+                            }`}
+                          >
+                            All Audited CVEs (
+                            {
+                              getVulnerabilityActionStats(selectedAppName)
+                                .totalCount
+                            }
+                            )
+                          </button>
+                        </div>
+                      )}
+                  </div>
+
+                  {statuses[selectedAppName]?.vulnerabilities &&
+                  statuses[selectedAppName].vulnerabilities!.length > 0 ? (
                     <div className="space-y-4">
+                      {/* Overview Summary Dashboard Cards */}
+                      {(() => {
+                        const stats =
+                          getVulnerabilityActionStats(selectedAppName);
+                        return (
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            <div
+                              className={`p-3 rounded-lg border flex flex-col justify-between ${
+                                stats.actionRequiredCount > 0
+                                  ? "bg-rose-50/70 border-rose-200 text-rose-900"
+                                  : "bg-emerald-50/70 border-emerald-200 text-emerald-900"
+                              }`}
+                            >
+                              <div className="text-[11px] font-bold uppercase tracking-wider opacity-80">
+                                Action Required
+                              </div>
+                              <div className="text-2xl font-extrabold my-1">
+                                {stats.actionRequiredCount}
+                              </div>
+                              <div className="text-[10px] opacity-75">
+                                {stats.actionRequiredCount > 0
+                                  ? "KEV, EPSS ≥10%, or fixable Critical/High"
+                                  : "No immediate threats flagged"}
+                              </div>
+                            </div>
+
+                            <div
+                              className={`p-3 rounded-lg border flex flex-col justify-between ${
+                                stats.kevCount > 0
+                                  ? "bg-purple-50/80 border-purple-200 text-purple-900"
+                                  : "bg-gray-50 border-gray-200 text-gray-700"
+                              }`}
+                            >
+                              <div className="text-[11px] font-bold uppercase tracking-wider opacity-80 flex items-center">
+                                {stats.kevCount > 0 && (
+                                  <span className="w-2 h-2 rounded-full bg-purple-600 mr-1 animate-ping" />
+                                )}
+                                Active KEV Exploits
+                              </div>
+                              <div className="text-2xl font-extrabold my-1">
+                                {stats.kevCount}
+                              </div>
+                              <div className="text-[10px] opacity-75">
+                                CISA Known Exploitable
+                              </div>
+                            </div>
+
+                            <div
+                              className={`p-3 rounded-lg border flex flex-col justify-between ${
+                                stats.highEpssCount > 0
+                                  ? "bg-amber-50/80 border-amber-200 text-amber-900"
+                                  : "bg-gray-50 border-gray-200 text-gray-700"
+                              }`}
+                            >
+                              <div className="text-[11px] font-bold uppercase tracking-wider opacity-80">
+                                High EPSS Score
+                              </div>
+                              <div className="text-2xl font-extrabold my-1">
+                                {stats.highEpssCount}
+                              </div>
+                              <div className="text-[10px] opacity-75">
+                                Exploit Probability ≥ 10%
+                              </div>
+                            </div>
+
+                            <div
+                              className={`p-3 rounded-lg border flex flex-col justify-between ${
+                                stats.fixableCount > 0
+                                  ? "bg-blue-50/80 border-blue-200 text-blue-900"
+                                  : "bg-gray-50 border-gray-200 text-gray-700"
+                              }`}
+                            >
+                              <div className="text-[11px] font-bold uppercase tracking-wider opacity-80">
+                                Fixable Patches
+                              </div>
+                              <div className="text-2xl font-extrabold my-1">
+                                {stats.fixableCount}
+                              </div>
+                              <div className="text-[10px] opacity-75">
+                                Upstream fix available
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Per-Container Reports */}
                       {statuses[selectedAppName].vulnerabilities!.map(
                         (vuln, idx) => {
-                          const s = vuln.summary;
-                          const total =
-                            (s.criticalCount || 0) +
-                            (s.highCount || 0) +
-                            (s.mediumCount || 0) +
-                            (s.lowCount || 0);
+                          const s = vuln.summary || ({} as any);
+                          const allVulns = vuln.topVulnerabilities || [];
+                          const displayedVulns = vulnFilterOnlyAction
+                            ? allVulns.filter((v: any) => v.actionRequired)
+                            : allVulns;
+
+                          const containerActionCount =
+                            s.actionRequiredCount ??
+                            allVulns.filter((v: any) => v.actionRequired)
+                              .length;
 
                           return (
                             <div
                               key={idx}
-                              className="p-3.5 border border-gray-200 rounded-md bg-white shadow-sm"
+                              className="p-4 border border-gray-200 rounded-lg bg-white shadow-sm"
                             >
-                              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3.5">
+                              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 pb-2 border-b border-gray-100">
                                 <span className="text-sm font-semibold text-gray-900 flex items-center">
-                                  <span className="w-2.5 h-2.5 bg-blue-500 rounded-full mr-2"></span>
+                                  <span className="w-2.5 h-2.5 bg-indigo-600 rounded-full mr-2"></span>
                                   Container:{" "}
-                                  <span className="font-mono ml-1 text-gray-700">
+                                  <span className="font-mono ml-1.5 text-gray-800">
                                     {vuln.container}
                                   </span>
                                 </span>
-                                {total === 0 ? (
-                                  <span className="px-2.5 py-0.5 mt-1 sm:mt-0 rounded-full text-xs font-semibold bg-green-100 text-green-800 border border-green-200 flex items-center w-max">
-                                    <CheckCircleIcon className="h-4 w-4 mr-1 text-green-600" />
-                                    0 Vulnerabilities Detected
+                                {containerActionCount > 0 ? (
+                                  <span className="px-2.5 py-0.5 mt-1 sm:mt-0 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-200 flex items-center w-max">
+                                    <ExclamationTriangleIcon className="h-3.5 w-3.5 mr-1 text-rose-600" />
+                                    {containerActionCount} Action Required
                                   </span>
                                 ) : (
-                                  <span className="px-2.5 py-0.5 mt-1 sm:mt-0 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200 flex items-center w-max">
-                                    {total} Vulnerabilities Found
+                                  <span className="px-2.5 py-0.5 mt-1 sm:mt-0 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center w-max">
+                                    <ShieldCheckIcon className="h-4 w-4 mr-1 text-emerald-600" />
+                                    No Action Required (
+                                    {s.totalCount || allVulns.length} CVEs)
                                   </span>
                                 )}
                               </div>
 
                               {/* Severities grid */}
                               <div className="grid grid-cols-4 gap-2 mb-3 text-center">
-                                <div className="p-2 bg-red-50 rounded border border-red-100">
+                                <div className="p-1.5 bg-red-50 rounded border border-red-100">
                                   <div className="text-xs font-bold text-red-800">
                                     {s.criticalCount || 0}
                                   </div>
-                                  <div className="text-[10px] uppercase font-bold tracking-wider text-red-600 mt-0.5">
+                                  <div className="text-[9px] uppercase font-bold tracking-wider text-red-600">
                                     Critical
                                   </div>
                                 </div>
-                                <div className="p-2 bg-orange-50 rounded border border-orange-100">
+                                <div className="p-1.5 bg-orange-50 rounded border border-orange-100">
                                   <div className="text-xs font-bold text-orange-800">
                                     {s.highCount || 0}
                                   </div>
-                                  <div className="text-[10px] uppercase font-bold tracking-wider text-orange-600 mt-0.5">
+                                  <div className="text-[9px] uppercase font-bold tracking-wider text-orange-600">
                                     High
                                   </div>
                                 </div>
-                                <div className="p-2 bg-yellow-50 rounded border border-yellow-100">
+                                <div className="p-1.5 bg-yellow-50 rounded border border-yellow-100">
                                   <div className="text-xs font-bold text-yellow-800">
                                     {s.mediumCount || 0}
                                   </div>
-                                  <div className="text-[10px] uppercase font-bold tracking-wider text-yellow-600 mt-0.5">
+                                  <div className="text-[9px] uppercase font-bold tracking-wider text-yellow-600">
                                     Medium
                                   </div>
                                 </div>
-                                <div className="p-2 bg-blue-50 rounded border border-blue-100">
+                                <div className="p-1.5 bg-blue-50 rounded border border-blue-100">
                                   <div className="text-xs font-bold text-blue-800">
                                     {s.lowCount || 0}
                                   </div>
-                                  <div className="text-[10px] uppercase font-bold tracking-wider text-blue-600 mt-0.5">
+                                  <div className="text-[9px] uppercase font-bold tracking-wider text-blue-600">
                                     Low
                                   </div>
                                 </div>
                               </div>
 
-                              {/* Critical Vulnerabilities Advisory */}
-                              {s.criticalCount > 0 && (
-                                <div className="mt-3 p-2.5 bg-red-50 border border-red-100 rounded text-xs text-red-700 flex items-start space-x-1.5 font-medium leading-relaxed">
-                                  <ExclamationTriangleIcon className="h-4 w-4 text-red-500 flex-shrink-0 mt-0.5" />
-                                  <span>
-                                    <strong>Security Advisory:</strong> Critical
-                                    vulnerabilities detected. Please make sure
-                                    to use the latest container releases and
-                                    package versions to secure your application.
-                                  </span>
+                              {/* Vulnerability List */}
+                              {displayedVulns.length > 0 ? (
+                                <div className="divide-y divide-gray-100 border border-gray-100 rounded-md bg-gray-50/50 max-h-64 overflow-y-auto px-2">
+                                  {displayedVulns.map(
+                                    (v: any, vIdx: number) => {
+                                      return (
+                                        <div
+                                          key={vIdx}
+                                          className="py-2.5 space-y-1 text-xs"
+                                        >
+                                          <div className="flex items-center justify-between flex-wrap gap-1.5">
+                                            <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
+                                              <span
+                                                className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${
+                                                  v.severity === "CRITICAL"
+                                                    ? "bg-red-100 text-red-800"
+                                                    : v.severity === "HIGH"
+                                                      ? "bg-orange-100 text-orange-800"
+                                                      : v.severity ===
+                                                          "MEDIUM"
+                                                        ? "bg-yellow-100 text-yellow-800"
+                                                        : "bg-blue-100 text-blue-800"
+                                                }`}
+                                              >
+                                                {v.severity}
+                                              </span>
+
+                                              {v.link ? (
+                                                <a
+                                                  href={v.link}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  className="font-bold text-indigo-700 hover:underline"
+                                                >
+                                                  {v.id}
+                                                </a>
+                                              ) : (
+                                                <span className="font-bold text-gray-800">
+                                                  {v.id}
+                                                </span>
+                                              )}
+
+                                              {/* KEV Badge */}
+                                              {v.isKev && (
+                                                <span className="px-1.5 py-0.5 text-[9px] font-bold rounded bg-purple-100 text-purple-800 border border-purple-200 flex items-center">
+                                                  🔥 CISA KEV (Active Exploit)
+                                                </span>
+                                              )}
+
+                                              {/* EPSS Badge */}
+                                              {v.epssScore !== null &&
+                                                v.epssScore !== undefined && (
+                                                  <span
+                                                    className={`px-1.5 py-0.5 text-[9px] font-bold rounded border ${
+                                                      v.epssScore >= 0.1
+                                                        ? "bg-rose-100 text-rose-800 border-rose-200"
+                                                        : "bg-gray-100 text-gray-600 border-gray-200"
+                                                    }`}
+                                                    title={`EPSS prediction score: ${(
+                                                      v.epssScore * 100
+                                                    ).toFixed(
+                                                      1
+                                                    )}% likelihood of exploit`}
+                                                  >
+                                                    📈 EPSS:{" "}
+                                                    {v.epssPercentage ||
+                                                      `${(
+                                                        v.epssScore * 100
+                                                      ).toFixed(1)}%`}
+                                                  </span>
+                                                )}
+
+                                              {/* Fix Badge */}
+                                              {v.isFixable ? (
+                                                <span className="px-1.5 py-0.5 text-[9px] font-bold rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                                  ✓ Fix: {v.fixedVersion}
+                                                </span>
+                                              ) : (
+                                                <span className="px-1.5 py-0.5 text-[9px] font-medium rounded bg-gray-100 text-gray-500">
+                                                  No Fix
+                                                </span>
+                                              )}
+                                            </div>
+
+                                            {/* Action Reason Tag */}
+                                            {v.actionRequired &&
+                                              v.actionReason && (
+                                                <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-amber-50 text-amber-800 border border-amber-200">
+                                                  ⚡ {v.actionReason}
+                                                </span>
+                                              )}
+                                          </div>
+
+                                          <div className="text-gray-600 font-mono text-[11px] flex flex-wrap justify-between">
+                                            <span>
+                                              Package:{" "}
+                                              <strong className="text-gray-900">
+                                                {v.pkg}
+                                              </strong>{" "}
+                                              ({v.installedVersion})
+                                            </span>
+                                            {v.fixedVersion && (
+                                              <span className="text-emerald-700 font-semibold">
+                                                Remediation: Upgrade to{" "}
+                                                {v.fixedVersion}
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    }
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="p-3 bg-gray-50 border border-gray-200 rounded-md text-xs text-gray-500 text-center italic">
+                                  {vulnFilterOnlyAction
+                                    ? "No Action Required items detected in this container image. Toggle 'All Audited CVEs' to view low-risk informational reports."
+                                    : "No vulnerabilities reported for this container."}
                                 </div>
                               )}
-
-                              {/* Top Vulnerabilities (Collapsible) */}
-                              {vuln.topVulnerabilities &&
-                                vuln.topVulnerabilities.length > 0 && (
-                                  <details className="group mt-3.5 border border-gray-100 rounded-md p-2 bg-gray-50/50">
-                                    <summary className="text-[11px] font-bold text-gray-500 uppercase tracking-wider cursor-pointer list-none flex items-center justify-between select-none hover:text-gray-700 transition-colors">
-                                      <span>Top Vulnerabilities Details</span>
-                                      <span className="text-gray-400 group-open:rotate-180 transition-transform text-xs">
-                                        &#9662;
-                                      </span>
-                                    </summary>
-                                    <div className="divide-y divide-gray-100 max-h-48 overflow-y-auto pr-1 mt-2">
-                                      {vuln.topVulnerabilities.map(
-                                        (v: any, vIdx: any) => {
-                                          return (
-                                            <div
-                                              key={vIdx}
-                                              className="py-2 flex items-start justify-between text-xs"
-                                            >
-                                              <div className="space-y-0.5">
-                                                <div className="flex items-center space-x-1.5">
-                                                  <span
-                                                    className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${
-                                                      v.severity === "CRITICAL"
-                                                        ? "bg-red-100 text-red-800"
-                                                        : v.severity === "HIGH"
-                                                          ? "bg-orange-100 text-orange-800"
-                                                          : v.severity ===
-                                                              "MEDIUM"
-                                                            ? "bg-yellow-100 text-yellow-800"
-                                                            : "bg-blue-100 text-blue-800"
-                                                    }`}
-                                                  >
-                                                    {v.severity}
-                                                  </span>
-                                                  {v.link ? (
-                                                    <a
-                                                      href={v.link}
-                                                      target="_blank"
-                                                      rel="noopener noreferrer"
-                                                      className="font-semibold text-indigo-600 hover:text-indigo-900 hover:underline"
-                                                    >
-                                                      {v.id}
-                                                    </a>
-                                                  ) : (
-                                                    <span className="font-semibold text-gray-700">
-                                                      {v.id}
-                                                    </span>
-                                                  )}
-                                                </div>
-                                                <div className="text-gray-500 font-mono text-[11px]">
-                                                  Package: {v.pkg} (Installed:{" "}
-                                                  {v.installedVersion}{" "}
-                                                  {v.fixedVersion
-                                                    ? `| Fixed in: ${v.fixedVersion}`
-                                                    : ""}
-                                                  )
-                                                </div>
-                                              </div>
-                                            </div>
-                                          );
-                                        }
-                                      )}
-                                    </div>
-                                  </details>
-                                )}
                             </div>
                           );
                         }
