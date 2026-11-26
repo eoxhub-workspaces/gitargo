@@ -2,7 +2,10 @@ import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import toast from "react-hot-toast";
 import { formatK8sError } from "../../utils";
-import { validateK8sYaml } from "../../utils/k8sValidation";
+import {
+  validateK8sYaml,
+  stripNullCreationTimestamps
+} from "../../utils/k8sValidation";
 import {
   CloudArrowUpIcon,
   ClockIcon,
@@ -429,8 +432,8 @@ export default function CodeProject() {
             !logicalInitialName.startsWith(`${cleanUsername}-`)
           ) {
             logicalInitialName = `${cleanUsername}-${logicalInitialName}`;
-            setCurrentFilename(`${logicalInitialName}.yaml`);
           }
+          setCurrentFilename(`${logicalInitialName}.yaml`);
 
           const defaultWs = appConfig.defaults?.namespace || "default";
 
@@ -443,7 +446,7 @@ export default function CodeProject() {
             },
             spec: isCron
               ? {
-                  schedule: "0 0 * * *",
+                  schedules: ["@daily"],
                   workflowSpec: {
                     entrypoint: "execute",
                     serviceAccountName: defaultWs,
@@ -519,6 +522,9 @@ export default function CodeProject() {
                 },
                 spec: {
                   accessModes: ["ReadWriteOnce"],
+                  ...(vol.storageClassName
+                    ? { storageClassName: vol.storageClassName }
+                    : {}),
                   resources: {
                     requests: {
                       storage: initialEphemeralSize || vol.storage
@@ -630,15 +636,20 @@ export default function CodeProject() {
       return;
     }
 
+    const sanitizedYaml = stripNullCreationTimestamps(yamlContent);
+    if (sanitizedYaml !== yamlContent) {
+      setYamlContent(sanitizedYaml);
+    }
+
     try {
-      validateK8sYaml(yamlContent);
+      validateK8sYaml(sanitizedYaml);
     } catch (e: any) {
       toast.error(`Validation Error: ${e.message}`, { duration: 5000 });
       return;
     }
 
     try {
-      const parsed = YAML.parse(yamlContent);
+      const parsed = YAML.parse(sanitizedYaml);
       const annotations = parsed.metadata?.annotations || {};
 
       const ignoreWarnings =
@@ -651,9 +662,9 @@ export default function CodeProject() {
         return;
       }
 
-      executeSave(yamlContent, runAfterSave);
+      executeSave(sanitizedYaml, runAfterSave);
     } catch {
-      executeSave(yamlContent, runAfterSave);
+      executeSave(sanitizedYaml, runAfterSave);
     }
   };
 

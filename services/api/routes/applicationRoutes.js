@@ -330,6 +330,7 @@ async function fetchAppStatus(appName, deploymentContent = null) {
           return dName === targetK8sName || dName.includes(appName) || dName.includes(folder) || appLabel === appName || appLabel === targetK8sName || appLabel === folder;
         });
         if (matchedDep) {
+          targetK8sName = matchedDep.metadata?.name || targetK8sName;
           deploymentMatchLabels = matchedDep.spec?.selector?.matchLabels || null;
           deploymentStatus = {
             replicas: matchedDep.status?.replicas || 0,
@@ -372,6 +373,9 @@ async function fetchAppStatus(appName, deploymentContent = null) {
   }
 
   let pods = [];
+  const podNames = new Set();
+  const podOwnerNames = new Set();
+
   if (coreV1Api) {
     try {
       let labelSelector = "";
@@ -385,6 +389,13 @@ async function fetchAppStatus(appName, deploymentContent = null) {
 
       const res = await coreV1Api.listNamespacedPod({ namespace: expectedNamespace, labelSelector });
       const rawPods = res.body?.items || res.items || [];
+      rawPods.forEach(p => {
+        if (p.metadata?.name) podNames.add(p.metadata.name);
+        (p.metadata?.ownerReferences || []).forEach(o => {
+          if (o.name) podOwnerNames.add(o.name);
+        });
+      });
+
       pods = rawPods.map(p => ({
         name: p.metadata?.name,
         phase: p.status?.phase,
@@ -403,21 +414,43 @@ async function fetchAppStatus(appName, deploymentContent = null) {
   if (customObjectsApi) {
     try {
       const items = await getCachedTrivyReports(expectedNamespace);
+      const workloadNames = new Set([targetK8sName, appName, folder].filter(Boolean));
+
       const appReports = items.filter(item => {
         const rName = item.metadata?.labels?.['trivy-operator.resource.name'] || '';
         const cName = item.metadata?.labels?.['trivy-operator.container.name'] || '';
         const repName = item.metadata?.name || '';
-        return rName === targetK8sName || 
-               rName === appName ||
-               rName === folder ||
-               rName.startsWith(`${targetK8sName}-`) || 
-               rName.startsWith(`${appName}-`) ||
-               cName === targetK8sName ||
-               cName === appName ||
-               repName.startsWith(`replicaset-${targetK8sName}-`) ||
-               repName.startsWith(`deployment-${targetK8sName}-`) ||
-               repName.startsWith(`replicaset-${appName}-`) ||
-               repName.startsWith(`deployment-${appName}-`);
+
+        // Direct pod name or replica set owner match
+        if (rName && (podNames.has(rName) || podOwnerNames.has(rName))) return true;
+
+        for (const podName of podNames) {
+          if (repName.startsWith(`pod-${podName}-`) || rName === podName) return true;
+        }
+
+        for (const ownerName of podOwnerNames) {
+          if (repName.startsWith(`replicaset-${ownerName}-`) || rName === ownerName) return true;
+        }
+
+        // Workload names match against labels and report names
+        for (const name of workloadNames) {
+          if (!name) continue;
+          if (rName === name || rName.startsWith(`${name}-`) || name.startsWith(`${rName}-`)) return true;
+          if (cName === name) return true;
+          if (
+            repName.startsWith(`deployment-${name}-`) ||
+            repName.startsWith(`replicaset-${name}-`) ||
+            repName.startsWith(`statefulset-${name}-`) ||
+            repName.startsWith(`daemonset-${name}-`) ||
+            repName.startsWith(`pod-${name}-`) ||
+            repName.startsWith(`cronjob-${name}-`) ||
+            repName.includes(`-${name}-`)
+          ) {
+            return true;
+          }
+        }
+
+        return false;
       });
 
       if (appReports.length > 0) {

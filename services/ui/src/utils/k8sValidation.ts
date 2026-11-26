@@ -6,6 +6,11 @@ export interface SecurityWarning {
   category: "podSecurity" | "containerSecurity" | "resources" | "image";
 }
 
+export const stripNullCreationTimestamps = (yamlContent: string): string => {
+  if (!yamlContent) return yamlContent;
+  return yamlContent.replace(/^[ \t]*creationTimestamp:\s*null[ \t]*$\r?\n?/gm, "");
+};
+
 export const validateK8sYaml = (yamlContent: string): void => {
   let parsed;
   try {
@@ -42,6 +47,78 @@ export const validateK8sYaml = (yamlContent: string): void => {
     throw new Error(
       "Missing 'metadata.name'. This is explicitly required for Kustomize compatibility."
     );
+  }
+
+  // Argo v4 validation checks
+  const targetSpec =
+    parsed.kind === "CronWorkflow"
+      ? parsed.spec?.workflowSpec
+      : parsed.spec;
+
+  if (parsed.kind === "CronWorkflow") {
+    if (
+      parsed.spec?.schedule &&
+      (!parsed.spec?.schedules || parsed.spec.schedules.length === 0)
+    ) {
+      throw new Error(
+        "In Argo v4, 'spec.schedule' has been removed for CronWorkflow. Please use 'spec.schedules' (list of strings) instead."
+      );
+    }
+  }
+
+  // Synchronization deprecations
+  const syncObj = targetSpec?.synchronization || parsed.spec?.synchronization;
+  if (syncObj) {
+    if (syncObj.mutex && !syncObj.mutexes) {
+      throw new Error(
+        "In Argo v4, 'spec.synchronization.mutex' has been removed. Please use 'spec.synchronization.mutexes' (list) instead."
+      );
+    }
+    if (syncObj.semaphore && !syncObj.semaphores) {
+      throw new Error(
+        "In Argo v4, 'spec.synchronization.semaphore' has been removed. Please use 'spec.synchronization.semaphores' (list) instead."
+      );
+    }
+  }
+
+  // podPriority deprecation
+  if (
+    targetSpec?.podPriority !== undefined ||
+    parsed.spec?.podPriority !== undefined
+  ) {
+    throw new Error(
+      "In Argo v4, 'spec.podPriority' has been removed. Please use 'spec.podPriorityClassName' instead."
+    );
+  }
+
+  // memoize deprecation
+  const templates = targetSpec?.templates || parsed.spec?.templates;
+  if (Array.isArray(templates)) {
+    for (const t of templates) {
+      if (t?.memoize?.cache?.configMap?.key !== undefined) {
+        throw new Error(
+          `In Argo v4, 'memoize.cache.configMap.key' has been removed (in template '${t.name || "unnamed"}').`
+        );
+      }
+    }
+  }
+
+  // creationTimestamp: null check
+  if (parsed.metadata?.creationTimestamp === null) {
+    throw new Error(
+      "Argo v4 strict schema validation rejects 'creationTimestamp: null'. Please remove 'creationTimestamp' from metadata."
+    );
+  }
+  const vctList =
+    targetSpec?.volumeClaimTemplates || parsed.spec?.volumeClaimTemplates;
+  if (Array.isArray(vctList)) {
+    for (const vct of vctList) {
+      if (vct?.metadata && vct.metadata.creationTimestamp === null) {
+        throw new Error(
+          "Argo v4 strict schema validation rejects 'creationTimestamp: null' in volumeClaimTemplates. Please remove 'creationTimestamp' from volumeClaimTemplates metadata."
+        );
+      }
+    }
   }
 };
 

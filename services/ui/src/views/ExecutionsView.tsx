@@ -432,6 +432,11 @@ const ExecutionsView: React.FC = () => {
               workflowFilter ||
               exe.metadata.labels[
                 "workflows.argoproj.io/workflow-template"
+              ]?.endsWith(`-${workflowFilter}`) ||
+              exe.metadata.labels["workflows.argoproj.io/cron-workflow"] ===
+                workflowFilter ||
+              exe.metadata.labels[
+                "workflows.argoproj.io/cron-workflow"
               ]?.endsWith(`-${workflowFilter}`))) ||
           exe.metadata.name.startsWith(`${workflowFilter}-`) ||
           exe.metadata.name.includes(`-${workflowFilter}-`)
@@ -440,7 +445,8 @@ const ExecutionsView: React.FC = () => {
     if (uiWorkflowFilter) {
       result = result.filter((exe) => {
         const templateName =
-          exe.metadata.labels?.["workflows.argoproj.io/workflow-template"];
+          exe.metadata.labels?.["workflows.argoproj.io/workflow-template"] ||
+          exe.metadata.labels?.["workflows.argoproj.io/cron-workflow"];
         if (
           templateName === uiWorkflowFilter ||
           templateName?.endsWith(`-${uiWorkflowFilter}`)
@@ -472,7 +478,8 @@ const ExecutionsView: React.FC = () => {
     const names = new Set<string>();
     executions.forEach((exe) => {
       const templateName =
-        exe.metadata.labels?.["workflows.argoproj.io/workflow-template"];
+        exe.metadata.labels?.["workflows.argoproj.io/workflow-template"] ||
+        exe.metadata.labels?.["workflows.argoproj.io/cron-workflow"];
       if (templateName) {
         names.add(templateName);
       } else {

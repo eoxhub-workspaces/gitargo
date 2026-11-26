@@ -306,8 +306,26 @@ router.post("/executions", async (req, res, next) => {
     // Inject JupyterHub PVC volume if enabled/present
     injectUserWorkspaceVolume(workflow, username);
     
-    delete workflow.metadata.resourceVersion;
-    delete workflow.metadata.uid;
+    // Strip creationTimestamp, resourceVersion, uid, and generation to avoid Argo v4 strict schema errors
+    const sanitizeMetadata = (obj) => {
+      if (!obj || typeof obj !== "object") return;
+      if (obj.metadata && typeof obj.metadata === "object") {
+        delete obj.metadata.creationTimestamp;
+        delete obj.metadata.resourceVersion;
+        delete obj.metadata.uid;
+        delete obj.metadata.generation;
+      }
+      if (Array.isArray(obj.volumeClaimTemplates)) {
+        obj.volumeClaimTemplates.forEach(sanitizeMetadata);
+      }
+      if (obj.spec && typeof obj.spec === "object") {
+        sanitizeMetadata(obj.spec);
+      }
+      if (Array.isArray(obj.templates)) {
+        obj.templates.forEach(sanitizeMetadata);
+      }
+    };
+    sanitizeMetadata(workflow);
     
     // To allow multiple executions of the same template, we must use generateName
     // and remove the exact name, so Kubernetes appends a unique ID.

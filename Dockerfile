@@ -1,5 +1,6 @@
 # --- Stage 1: Build Frontend ---
 FROM node:26-alpine AS build-frontend
+RUN apk update && apk upgrade --no-cache
 WORKDIR /app/ui
 COPY services/ui/package*.json ./
 RUN npm install
@@ -10,7 +11,10 @@ RUN npm run build
 # Keeps npm, npx, and dev tools fully intact for rapid development workflows
 FROM node:26-alpine AS development
 ENV NODE_ENV=development
-RUN apk update && apk upgrade --no-cache
+# Upgrade OS packages (libcrypto3, libssl3) and global npm to latest (undici, brace-expansion, minimatch, glob, ip-address), purge corepack
+RUN apk update && apk upgrade --no-cache && \
+    npm install -g npm@latest && \
+    rm -rf /usr/local/lib/node_modules/corepack /usr/local/bin/corepack
 WORKDIR /app
 COPY package.json ./root-package.json
 COPY services/api/package*.json ./

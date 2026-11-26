@@ -188,7 +188,11 @@ const ListView: React.FC = () => {
             let hasExecute = false;
 
             if (kind === "CronWorkflow") {
-              schedule = parsed?.spec?.schedule;
+              if (Array.isArray(parsed?.spec?.schedules)) {
+                schedule = parsed.spec.schedules.join(", ");
+              } else if (parsed?.spec?.schedule) {
+                schedule = parsed.spec.schedule;
+              }
               entrypoint = parsed?.spec?.workflowSpec?.entrypoint;
             } else if (kind === "WorkflowTemplate") {
               entrypoint = parsed?.spec?.templates?.[0]?.name;

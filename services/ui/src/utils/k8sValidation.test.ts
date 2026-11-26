@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   validateK8sYaml,
+  stripNullCreationTimestamps,
   validateDeploymentSecurity,
   applySecurityFix,
   autoFixDeploymentSecurity
@@ -30,6 +31,166 @@ metadata:
       expect(() => validateK8sYaml(invalidKind)).toThrow(
         "Invalid kind 'Deployment'"
       );
+    });
+
+    it("should pass for valid Argo v4 CronWorkflow with schedules array", () => {
+      const validCronYaml = `
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: test-cron
+spec:
+  schedules:
+    - "@daily"
+  workflowSpec:
+    entrypoint: execute
+    templates: []
+`;
+      expect(() => validateK8sYaml(validCronYaml)).not.toThrow();
+    });
+
+    it("should reject CronWorkflow with deprecated spec.schedule in Argo v4", () => {
+      const deprecatedCronYaml = `
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: test-cron
+spec:
+  schedule: "0 0 * * *"
+  workflowSpec:
+    entrypoint: execute
+`;
+      expect(() => validateK8sYaml(deprecatedCronYaml)).toThrow(
+        "In Argo v4, 'spec.schedule' has been removed for CronWorkflow. Please use 'spec.schedules' (list of strings) instead."
+      );
+    });
+
+    it("should reject spec.synchronization.mutex in Argo v4", () => {
+      const mutexYaml = `
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: test-mutex
+spec:
+  synchronization:
+    mutex:
+      name: test-lock
+`;
+      expect(() => validateK8sYaml(mutexYaml)).toThrow(
+        "In Argo v4, 'spec.synchronization.mutex' has been removed. Please use 'spec.synchronization.mutexes' (list) instead."
+      );
+    });
+
+    it("should reject spec.synchronization.semaphore in Argo v4", () => {
+      const semYaml = `
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: test-sem
+spec:
+  synchronization:
+    semaphore:
+      configMapKeyRef:
+        name: my-config
+        key: lock
+`;
+      expect(() => validateK8sYaml(semYaml)).toThrow(
+        "In Argo v4, 'spec.synchronization.semaphore' has been removed. Please use 'spec.synchronization.semaphores' (list) instead."
+      );
+    });
+
+    it("should reject spec.podPriority in Argo v4", () => {
+      const priorityYaml = `
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: test-priority
+spec:
+  podPriority: 10
+`;
+      expect(() => validateK8sYaml(priorityYaml)).toThrow(
+        "In Argo v4, 'spec.podPriority' has been removed. Please use 'spec.podPriorityClassName' instead."
+      );
+    });
+
+    it("should reject memoize.cache.configMap.key in Argo v4", () => {
+      const memoizeYaml = `
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: test-memoize
+spec:
+  templates:
+    - name: step1
+      memoize:
+        key: "{{inputs.parameters.val}}"
+        cache:
+          configMap:
+            name: my-cache
+            key: my-key
+`;
+      expect(() => validateK8sYaml(memoizeYaml)).toThrow(
+        "In Argo v4, 'memoize.cache.configMap.key' has been removed (in template 'step1')."
+      );
+    });
+
+    it("should reject creationTimestamp: null in metadata", () => {
+      const nullMetaYaml = `
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: test-null
+  creationTimestamp: null
+spec:
+  entrypoint: main
+`;
+      expect(() => validateK8sYaml(nullMetaYaml)).toThrow(
+        "Argo v4 strict schema validation rejects 'creationTimestamp: null'. Please remove 'creationTimestamp' from metadata."
+      );
+    });
+
+    it("should reject creationTimestamp: null in volumeClaimTemplates", () => {
+      const nullVctYaml = `
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: test-vct
+spec:
+  entrypoint: main
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+        creationTimestamp: null
+      spec:
+        accessModes: ["ReadWriteOnce"]
+`;
+      expect(() => validateK8sYaml(nullVctYaml)).toThrow(
+        "Argo v4 strict schema validation rejects 'creationTimestamp: null' in volumeClaimTemplates. Please remove 'creationTimestamp' from volumeClaimTemplates metadata."
+      );
+    });
+  });
+
+  describe("stripNullCreationTimestamps", () => {
+    it("should remove creationTimestamp: null lines without modifying other content", () => {
+      const inputYaml = `apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: test-vct
+  creationTimestamp: null
+spec:
+  entrypoint: main
+  volumeClaimTemplates:
+    - metadata:
+        name: workdir
+        creationTimestamp: null
+      spec:
+        accessModes: ["ReadWriteOnce"]
+`;
+      const cleaned = stripNullCreationTimestamps(inputYaml);
+      expect(cleaned).not.toContain("creationTimestamp: null");
+      expect(cleaned).toContain("name: test-vct");
+      expect(cleaned).toContain("name: workdir");
+      expect(() => validateK8sYaml(cleaned)).not.toThrow();
     });
   });
 

@@ -17,7 +17,8 @@ import {
   CheckCircleIcon,
   ShieldExclamationIcon,
   ShieldCheckIcon,
-  FunnelIcon
+  FunnelIcon,
+  ClockIcon
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import Editor from "@monaco-editor/react";
@@ -1583,7 +1584,23 @@ const ApplicationsView: React.FC = () => {
                       <div>{getOverallStatusBadge(app.name)}</div>
                       {(() => {
                         const stats = getVulnerabilityActionStats(app.name);
-                        if (!stats.hasReports) return null;
+                        const isDeployed = statuses[app.name]?.deployed;
+
+                        if (!stats.hasReports) {
+                          if (isDeployed) {
+                            return (
+                              <span
+                                className="px-2 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-500 border border-gray-200 flex items-center w-max cursor-pointer hover:bg-gray-200 transition-colors"
+                                onClick={() => handleOpenStatusModal(app.name)}
+                                title="No Trivy vulnerability reports found yet. Scan may be pending or image has not been scanned. Click Manage to view details."
+                              >
+                                <ClockIcon className="h-3.5 w-3.5 mr-1 text-gray-400 inline-block" />
+                                No Audit Report
+                              </span>
+                            );
+                          }
+                          return null;
+                        }
 
                         if (stats.actionRequiredCount > 0) {
                           if (stats.kevCount > 0) {

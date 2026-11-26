@@ -161,6 +161,16 @@ export interface IWorkflowSpec {
   tolerations?: any[];
   volumeClaimTemplates?: any[];
   workflowSpec?: any; // For CronWorkflow support
+  schedules?: string[]; // Argo v4 CronWorkflow schedules
+  schedule?: string; // Legacy CronWorkflow schedule
+  synchronization?: {
+    mutexes?: any[];
+    semaphores?: any[];
+    mutex?: any; // deprecated in v4
+    semaphore?: any; // deprecated in v4
+  };
+  podPriorityClassName?: string;
+  podPriority?: number; // deprecated in v4
 }
 
 // https://argoproj.github.io/argo-workflows/fields/#resourcetemplate

@@ -4,6 +4,41 @@ const path = require('path');
 const fs = require('fs');
 const k8s = require('@kubernetes/client-node');
 
+const workflowMetadataCache = new Map();
+
+function parseWorkflowMetadata(content) {
+  try {
+    const parsed = YAML.parse(content);
+    if (!parsed || typeof parsed !== "object") return null;
+    const kind = parsed.kind || "Unknown";
+    let schedule = null;
+    let entrypoint = null;
+    let hasExecute = false;
+
+    if (kind === "CronWorkflow") {
+      if (Array.isArray(parsed?.spec?.schedules)) {
+        schedule = parsed.spec.schedules.join(", ");
+      } else if (parsed?.spec?.schedule) {
+        schedule = parsed.spec.schedule;
+      }
+      entrypoint = parsed?.spec?.workflowSpec?.entrypoint || null;
+    } else if (kind === "WorkflowTemplate") {
+      entrypoint = parsed?.spec?.templates?.[0]?.name || null;
+      const specEntrypoint = parsed?.spec?.entrypoint;
+      const templates = parsed?.spec?.templates || [];
+      hasExecute =
+        specEntrypoint === "execute" ||
+        templates.some((t) => t && t.name === "execute");
+    } else {
+      entrypoint = parsed?.spec?.entrypoint || null;
+    }
+
+    return { kind, schedule, entrypoint, hasExecute };
+  } catch (e) {
+    return null;
+  }
+}
+
 function createWorkflowRouter(ctx) {
   const router = express.Router();
 
@@ -227,37 +262,6 @@ router.get(/^\/workflows\/(.+)\/sync-status$/, async (req, res, next) => {
   }
 });
 
-const workflowMetadataCache = new Map();
-
-function parseWorkflowMetadata(content) {
-  try {
-    const parsed = YAML.parse(content);
-    if (!parsed || typeof parsed !== "object") return null;
-    const kind = parsed.kind || "Unknown";
-    let schedule = null;
-    let entrypoint = null;
-    let hasExecute = false;
-
-    if (kind === "CronWorkflow") {
-      schedule = parsed?.spec?.schedule || null;
-      entrypoint = parsed?.spec?.workflowSpec?.entrypoint || null;
-    } else if (kind === "WorkflowTemplate") {
-      entrypoint = parsed?.spec?.templates?.[0]?.name || null;
-      const specEntrypoint = parsed?.spec?.entrypoint;
-      const templates = parsed?.spec?.templates || [];
-      hasExecute =
-        specEntrypoint === "execute" ||
-        templates.some((t) => t && t.name === "execute");
-    } else {
-      entrypoint = parsed?.spec?.entrypoint || null;
-    }
-
-    return { kind, schedule, entrypoint, hasExecute };
-  } catch (e) {
-    return null;
-  }
-}
-
 /**
  * GET /api/workflows
  * List files ending in .yaml, .yml, or .deleted in the GITLAB_WORKFLOWS_PATH.
@@ -273,20 +277,38 @@ router.get("/workflows", async (req, res, next) => {
       }
     }
 
-    const response = await gitlabApi.get(
-      `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
-      {
-        params: {
-          path: searchPath,
-          ref: GITLAB_BRANCH,
-          recursive: true
+    let allTreeFiles = [];
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      const response = await gitlabApi.get(
+        `/projects/${GITLAB_PROJECT_ID}/repository/tree`,
+        {
+          params: {
+            path: searchPath,
+            ref: GITLAB_BRANCH,
+            recursive: true,
+            per_page: 100,
+            page: page
+          }
         }
+      );
+
+      const items = Array.isArray(response.data) ? response.data : [];
+      allTreeFiles = allTreeFiles.concat(items);
+
+      const nextPage = response.headers?.['x-next-page'];
+      if (nextPage && items.length >= 100) {
+        page = parseInt(nextPage, 10);
+      } else {
+        hasMore = false;
       }
-    );
+    }
 
     const prefix = searchPath ? `${searchPath.replace(/\/$/, "")}/` : "";
 
-    const rawFiles = response.data.filter((file) => {
+    const rawFiles = allTreeFiles.filter((file) => {
       if (file.type !== "blob") return false;
       if (!file.name.endsWith(".yaml") && !file.name.endsWith(".yml") && !file.name.endsWith(".deleted")) return false;
 
@@ -621,6 +643,16 @@ function ensureMultiTenantMetadataName(content, req = null) {
       parsed.metadata.generateName = `${prefix}${parsed.metadata.generateName}`;
     }
 
+    if (!parsed.metadata.labels) parsed.metadata.labels = {};
+    parsed.metadata.labels['workflows.argoproj.io/creator-preferred-username'] = user;
+
+    if (parsed.kind === "CronWorkflow") {
+      if (!parsed.spec) parsed.spec = {};
+      if (!parsed.spec.workflowMetadata) parsed.spec.workflowMetadata = {};
+      if (!parsed.spec.workflowMetadata.labels) parsed.spec.workflowMetadata.labels = {};
+      parsed.spec.workflowMetadata.labels['workflows.argoproj.io/creator-preferred-username'] = user;
+    }
+
     return YAML.stringify(parsed);
   } catch (e) {
     return content;
@@ -859,4 +891,4 @@ function injectUserWorkspaceVolume(workflow, username) {
   return router;
 }
 
-module.exports = { createWorkflowRouter };
+module.exports = { createWorkflowRouter, parseWorkflowMetadata };
